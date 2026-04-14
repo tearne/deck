@@ -6,15 +6,15 @@ Controls are split into two groups. The **mixer** — level, gain, and filter �
 
 ### Keyboard Layout
 
-The layout below matches the in-app unified help overlay (`?`). Left block = deck controls (selected deck); right block = mixer (addressed directly). Keys `6`, `Y`, `H`, and `N` are intentionally unbound.
+The layout below matches the in-app unified help overlay (`?`). Left block = deck controls (selected deck); right block = mixer (addressed directly).
 
 ```
-╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭ +Slp    ╭ +Slp    ╭ +Slp
-1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7 HPF     8 HPF     9 HPF
-╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=
-  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭ -Slp    ╭ -Slp    ╭ -Slp
-  Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U LPF     I LPF     O LPF
-  ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=
+╭         ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ┆   ╭ +Slp    ╭ +Slp    ╭ +Slp
+1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6          ┆   7 HPF     8 HPF     9 HPF
+╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ╰          ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=
+  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ┆   ╭ -Slp    ╭ -Slp    ╭ -Slp
+  Q -1bt    W -1b     E -4b     R -8b     T -16b    Y          ┆   U LPF     I LPF     O LPF
+  ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ╰          ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=
     ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭         ┆   ╭ +Gain   ╭ +Gain   ╭ +Gain
     A +Ptch   S +PFL    D +Ndge   F -BPM    G         ┆   J +Lvl    K +Lvl    L +Lvl
     ╰ =Ptch   ╰ Rst     ╰ Brows   ╰ Play    ╰ PFLTog  ┆   ╰ 100%    ╰ 100%    ╰ 100%
@@ -29,6 +29,7 @@ Global keys (shown in the `?` overlay footer):
 - `` ` `` vinyl mode, `¬` nudge mode toggle
 - `-` / `=` zoom in/out, `{` / `}` waveform height
 - `[` / `]` latency ±10ms
+- `^` / `Y` FPS cap increase/decrease (steps through `[15, 20, 24, 30, 45, 60, 90, 120, 240]`)
 - `/` album art, `~` palette cycle
 - `Space+=` swap decks 1↔2, `Space+-` swap decks 2↔3
 - `?` unified help overlay, `Esc` quit
@@ -49,6 +50,7 @@ Global keys (shown in the `?` overlay footer):
   HPF/LPF      filter toward HPF/LPF  Flt=         filter flat
   +/-Slp       filter slope +/-
   SwpD1D2      swap decks 1↔2        SwpD2D3      swap decks 2↔3
+  +/-FPS       FPS cap increase/decrease
 ```
 
 ## Config Loading

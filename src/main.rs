@@ -35,7 +35,7 @@ mod tags;
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
 use browser::{BrowserResult, BrowserState, handle_browser_key, render_browser};
 use cache::{cache_path, hash_mono, Cache, detect_bpm};
-use config::{load_config, Action, KeyBinding};
+use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
     anchor_beat_grid_to_cue, apply_offset_step, cache_entry_for_deck, compute_spectrum,
@@ -322,6 +322,7 @@ fn tui_loop(
         warn_beat_on:     bool,
     }
     let (keymap, display_cfg, config_notice) = load_config();
+    let mut target_fps: u32 = display_cfg.target_fps;
     let mut global_notification: Option<Notification> = None;
     if let Some(msg) = config_notice {
         global_notification = Some(Notification {
@@ -345,10 +346,14 @@ fn tui_loop(
     let mut art_bright_idx: u8 = cache.get_art_bright_idx();
     let mut zoom_idx: usize = DEFAULT_ZOOM_IDX;
     let mut vinyl_mode: bool = cache.get_vinyl_mode();
+
     let shared_renderer = SharedDetailRenderer::new(zoom_idx);
     let mut detail_height: usize = display_cfg.detail_height.max(DET_MIN as usize);
     let mut frame_count: usize = 0;
     let mut last_render = Instant::now();
+    let mut fps_sample_start = Instant::now();
+    let mut fps_sample_frames: u32 = 0;
+    let mut fps_display: (u32, u32, u32) = (0, 0, target_fps); // (current, budget, cap)
     let mut help_open = false;
     let mut browser_state: Option<(BrowserState, usize)> = None; // (state, target deck slot)
     let mut preview_output: Option<PreviewOutput> = None;
@@ -395,12 +400,24 @@ fn tui_loop(
         let frame_dur = if tag_editor_open {
             Duration::from_millis(16)
         } else {
+            let floor = Duration::from_secs_f64(1.0 / target_fps as f64);
             Duration::from_secs_f64(col_secs / 2.0)
-                .max(Duration::from_millis(8))
+                .max(floor)
                 .min(Duration::from_millis(50))
         };
 
         let frame_start = Instant::now();
+        fps_sample_frames += 1;
+        let window_secs = frame_start.duration_since(fps_sample_start).as_secs_f64();
+        if window_secs >= 1.0 {
+            fps_display = (
+                (fps_sample_frames as f64 / window_secs).round() as u32,
+                (1.0 / frame_dur.as_secs_f64()).round() as u32,
+                target_fps,
+            );
+            fps_sample_start = frame_start;
+            fps_sample_frames = 0;
+        }
         let elapsed = frame_start.duration_since(last_render).as_secs_f64()
             // Cap at 4 columns per frame. Must exceed the minimum frame_dur (8ms) at every zoom
             // level — a tighter cap causes systematic drift and periodic large-drift snapping.
@@ -440,7 +457,7 @@ fn tui_loop(
 
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, frame_dur, elapsed, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
+            service_deck_frame(slot, &mut decks, col_secs, elapsed, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
         }
 
         // Compute render state for all three decks.
@@ -624,7 +641,10 @@ fn tui_loop(
                 let vinyl_label = if vinyl_mode { "  [VINYL]" } else { "  [BEAT]" };
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
-                        format!("  zoom:{}s  lat:{}ms{}{}{}", zoom_secs, audio_latency_ms, nudge_label, vinyl_label, spc_label),
+                        format!("  zoom:{}s  lat:{}ms  fps:{}/{}/{}{}{}{}",
+                            zoom_secs, audio_latency_ms,
+                            fps_display.0, fps_display.1, fps_display.2,
+                            nudge_label, vinyl_label, spc_label),
                         Style::default().fg(Color::DarkGray),
                     ))),
                     area_detail_info,
@@ -1289,6 +1309,9 @@ fn tui_loop(
                     }
                     // Quit confirmation intercept — y/Enter confirms, anything else cancels.
                     if pending_quit.is_some() {
+                        if suppress_quit_until.take().map_or(false, |until| Instant::now() < until) {
+                            continue 'tui;
+                        }
                         pending_quit = None;
                         if matches!(key.code, KeyCode::Char('y') | KeyCode::Enter) {
                             for slot in 0..3 {
@@ -1394,6 +1417,7 @@ fn tui_loop(
                         let any_playing = decks.iter().flatten().any(|d| !d.audio.player.is_paused());
                         if any_playing && pending_quit.is_none() {
                             pending_quit = Some(Instant::now() + Duration::from_secs(5));
+                            suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                             continue 'tui;
                         }
                         for slot in 0..3 {
@@ -1670,6 +1694,22 @@ fn tui_loop(
                         cache.set_latency(audio_latency_ms);
                         cache.save();
                     }
+                    Some(Action::FpsIncrease) => {
+                        if let Some(pos) = FPS_LEVELS.iter().position(|&l| l == target_fps) {
+                            if pos + 1 < FPS_LEVELS.len() { target_fps = FPS_LEVELS[pos + 1]; }
+                        } else {
+                            target_fps = snap_to_fps_level(target_fps);
+                        }
+                        fps_display.2 = target_fps;
+                    }
+                    Some(Action::FpsDecrease) => {
+                        if let Some(pos) = FPS_LEVELS.iter().position(|&l| l == target_fps) {
+                            if pos > 0 { target_fps = FPS_LEVELS[pos - 1]; }
+                        } else {
+                            target_fps = snap_to_fps_level(target_fps);
+                        }
+                        fps_display.2 = target_fps;
+                    }
                     Some(Action::Deck1FilterIncrease) => { if let Some(ref mut d) = decks[0] { d.mixer.filter_offset = (d.mixer.filter_offset + 1).min(16);  d.audio.filter_offset_shared.store(d.mixer.filter_offset, Ordering::Relaxed); } }
                     Some(Action::Deck1FilterDecrease) => { if let Some(ref mut d) = decks[0] { d.mixer.filter_offset = (d.mixer.filter_offset - 1).max(-16); d.audio.filter_offset_shared.store(d.mixer.filter_offset, Ordering::Relaxed); } }
                     Some(Action::Deck1FilterReset)    => { if let Some(ref mut d) = decks[0] { d.mixer.filter_offset = 0; d.audio.filter_offset_shared.store(0, Ordering::Relaxed); } }
@@ -1837,7 +1877,6 @@ fn service_deck_frame(
     slot: usize,
     decks: &mut [Option<Deck>; 3],
     col_secs: f64,
-    frame_dur: Duration,
     elapsed: f64,
     mixer: &rodio::mixer::Mixer,
     shared_renderer: &SharedDetailRenderer,
@@ -1917,12 +1956,13 @@ fn service_deck_frame(
         // Include warp-nudge speed factor so the display tracks the audio speed exactly.
         let base_speed = if vinyl_mode { d.tempo.vinyl_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
         let speed = base_speed * (1.0 + d.nudge as f64 * 0.1);
-        // Use measured elapsed rather than nominal frame_dur: frame_dur creates a systematic lag
-        // because thread::sleep consistently overshoots, causing output_position to run ahead and
-        // the drift correction to fight it continuously. Elapsed tracks the real frame rate so the
-        // correction term is near-zero in steady state. Cap at 2× frame_dur to absorb load spikes.
-        let advance_secs = elapsed.min(frame_dur.as_secs_f64() * 2.0);
-        d.display.smooth_display_samp += advance_secs * d.audio.sample_rate as f64 * speed;
+        // Derive position from a fixed (time, sample) anchor rather than accumulating per-frame
+        // increments. Eliminates the anti-correlated overshoot oscillation that results from
+        // thread::sleep jitter in the accumulated path.
+        let (anchor_time, anchor_sample) = d.display.smooth_ref
+            .get_or_insert_with(|| (Instant::now(), d.display.smooth_display_samp));
+        d.display.smooth_display_samp = *anchor_sample
+            + anchor_time.elapsed().as_secs_f64() * d.audio.sample_rate as f64 * speed;
     } else if d.nudge != 0 {
         // Paused with warp nudge: drift display and sync actual audio position for scrubbing.
         d.display.smooth_display_samp = (d.display.smooth_display_samp
@@ -1964,6 +2004,8 @@ fn service_deck_frame(
         } else {
             display_pos_samp as f64
         };
+        // Re-anchor so the absolute-reference path continues from the corrected position.
+        d.display.smooth_ref = Some((Instant::now(), d.display.smooth_display_samp));
     } else if !d.audio.player.is_paused() {
         // With elapsed-advance removing steady-state lag, residual drift is sub-ppm system-clock
         // vs. audio-clock skew — far below the 0.3s snap threshold. A large correction factor

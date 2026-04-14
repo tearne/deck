@@ -116,7 +116,7 @@ Layout constraints are based on the loaded deck's `detail_height` (defaulting to
 - The strip is 16 braille characters wide (32 frequency bins) and 1 braille row tall (4 dot rows). Each character encodes two adjacent bins as a bottom-up bar chart. Thin `▕` / `▏` block characters flank the strip as bounds indicators. The bars are rendered in amber (yellow foreground on a dark amber background). When sub-threshold activity is detected in a bin (energy exceeds ¼ of the single-dot threshold), the character cell background is lit even if no dots are drawn, giving a background glow effect. The glow resets on a 2-bar accumulation window: it lights on any activity within the window and can only go dark at window boundaries.
 - When a filter is active, the attenuated region of the spectrum is shaded with a grey background: LPF shades from the right, HPF from the left. Each of the 16 filter steps corresponds to exactly one spectrum character. At flat (offset 0) no shading is applied.
 - Bins are logarithmically spaced from 20 Hz to 20 kHz. Amplitude is mapped on a dB scale (floor ~10 dB, ceiling ~60 dB, ~12.5 dB per dot row) using the Goertzel algorithm over a 4096-sample Hann-windowed window at the current playback position.
-- The spectrum updates twice per beat period (every half beat). During BPM analysis the update interval falls back to 500 ms. The display holds its last value between updates. Both decks' spectra update at this cadence regardless of which deck is active.
+- The spectrum updates twice per beat period (every half beat). During BPM analysis the update interval falls back to 500 ms. The display holds its last value between updates. Both decks' spectra update at this cadence regardless of which deck is active. The spectrum update cadence is driven by BPM and is independent of the main frame rate.
 
 ---
 
@@ -161,7 +161,18 @@ The following invariants must be maintained to achieve smooth, stable rendering:
 
 All three detail waveforms are rendered by a single shared background thread in the same pass at identical `samples_per_col`, ensuring their column grids are byte-for-byte compatible and all viewports advance at the same rate each frame.
 
-The render frame period adapts to the current zoom level and detail panel width, targeting one dot-column advance per frame. At very tight zoom it is capped at ~120 fps; at very wide zoom it is capped at ~5 fps to keep input responsive.
+The render frame period adapts to the current zoom level and detail panel width, targeting one half-column advance per frame. The period is clamped between `1/target_fps` (default 120 fps) and 50 ms (20 fps minimum). Representative values at a 200-column screen:
+
+| Zoom (s) | Natural FPS | Effective FPS (cap 120) |
+|----------|-------------|------------------------|
+| 1        | 400         | 120                    |
+| 2        | 200         | 120                    |
+| 4        | 100         | 100                    |
+| 8        | 50          | 50                     |
+| 16       | 25          | 25                     |
+| 32       | 13          | 20 (minimum)           |
+
+The cap is adjustable at runtime via `fps_increase` / `fps_decrease` (default bindings `^` / `Y`), stepping through the discrete level set `[15, 20, 24, 30, 45, 60, 90, 120, 240]`.
 
 ### Half-Column Scrolling
 

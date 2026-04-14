@@ -66,6 +66,7 @@ pub(crate) struct TapState {
 
 pub(crate) struct DisplayState {
     pub(crate) smooth_display_samp: f64,
+    pub(crate) smooth_ref: Option<(Instant, f64)>,
     pub(crate) last_scrub_samp: f64,
     pub(crate) last_viewport_start: usize,
     pub(crate) overview_rect: Rect,
@@ -208,6 +209,7 @@ impl Deck {
             },
             display: DisplayState {
                 smooth_display_samp: 0.0,
+                smooth_ref: None,
                 last_scrub_samp: -1.0,
                 last_viewport_start: 0,
                 overview_rect: Rect::default(),

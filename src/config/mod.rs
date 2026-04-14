@@ -9,6 +9,7 @@ pub(crate) enum Action {
     Quit, Help, VinylModeToggle,
     ZoomIn, ZoomOut, HeightIncrease, HeightDecrease,
     LatencyIncrease, LatencyDecrease,
+    FpsIncrease, FpsDecrease,
     PaletteCycle,
     NudgeModeToggle,
     ArtCycle,
@@ -52,13 +53,15 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("quit",              Action::Quit),
     ("help",              Action::Help),
 
-    ("vinyl_mode_toggle", Action::VinylModeToggle),
+    ("vinyl_mode_toggle",   Action::VinylModeToggle),
     ("zoom_in",           Action::ZoomIn),
     ("zoom_out",          Action::ZoomOut),
     ("height_increase",   Action::HeightIncrease),
     ("height_decrease",   Action::HeightDecrease),
     ("latency_increase",  Action::LatencyIncrease),
     ("latency_decrease",  Action::LatencyDecrease),
+    ("fps_increase",      Action::FpsIncrease),
+    ("fps_decrease",      Action::FpsDecrease),
     ("palette_cycle",     Action::PaletteCycle),
     ("nudge_mode_toggle",  Action::NudgeModeToggle),
     ("art_cycle",          Action::ArtCycle),
@@ -174,14 +177,17 @@ pub(crate) fn parse_bare_key(s: &str) -> Option<KeyCode> {
 
 pub(crate) const DEFAULT_CONFIG: &str = include_str!("../../resources/config.toml");
 
+pub(crate) const FPS_LEVELS: &[u32] = &[15, 20, 24, 30, 45, 60, 90, 120, 240];
+
 pub(crate) struct DisplayConfig {
     pub(crate) playhead_position: u8,      // 0–100, clamped
     pub(crate) warning_threshold_secs: f32, // seconds before end to activate warning flash
     pub(crate) detail_height: usize,       // total rows per detail waveform (including 2-row tick area)
+    pub(crate) target_fps: u32,
 }
 
 impl Default for DisplayConfig {
-    fn default() -> Self { Self { playhead_position: 20, warning_threshold_secs: 30.0, detail_height: 5 } }
+    fn default() -> Self { Self { playhead_position: 20, warning_threshold_secs: 30.0, detail_height: 5, target_fps: 120 } }
 }
 
 /// Finds or creates the config file and returns its text plus an optional notice.
@@ -223,6 +229,12 @@ pub(crate) fn load_config() -> (std::collections::HashMap<KeyBinding, Action>, D
     (keymap, display, notice)
 }
 
+pub(crate) fn snap_to_fps_level(fps: u32) -> u32 {
+    *FPS_LEVELS.iter()
+        .min_by_key(|&&level| (level as i64 - fps as i64).unsigned_abs())
+        .unwrap_or(&120)
+}
+
 pub(crate) fn parse_display_config(text: &str) -> DisplayConfig {
     let parsed: toml::Value = match toml::from_str(text) {
         Ok(v) => v,
@@ -244,7 +256,12 @@ pub(crate) fn parse_display_config(text: &str) -> DisplayConfig {
         .and_then(|v| v.as_integer())
         .unwrap_or(5)
         .max(3) as usize;
-    DisplayConfig { playhead_position: pos, warning_threshold_secs, detail_height }
+    let target_fps = display
+        .and_then(|v| v.get("target_fps"))
+        .and_then(|v| v.as_integer())
+        .map(|v| snap_to_fps_level(v.clamp(1, 500) as u32))
+        .unwrap_or(120);
+    DisplayConfig { playhead_position: pos, warning_threshold_secs, detail_height, target_fps }
 }
 
 pub(crate) fn parse_keymap(text: &str, map: &mut std::collections::HashMap<KeyBinding, Action>)
