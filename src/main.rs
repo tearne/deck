@@ -1206,8 +1206,14 @@ fn tui_loop(
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     let target = (current - 0.010).max(0.0);
+                                    let bump = (target - current) * d.audio.sample_rate as f64;
                                     d.audio.seek_handle.set_position(target);
-                                    d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
+                                    d.display.smooth_display_samp += bump;
+                                    // Shift the anchor sample by the same bump so the next frame's
+                                    // `anchor_sample + elapsed × sr × speed` preserves the jump
+                                    // without forfeiting the wall-time gap between the event and
+                                    // the next frame — 27% drift at 30 Hz key-repeat.
+                                    d.display.smooth_ref.1 += bump;
                                     if d.audio.player.is_paused() {
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
@@ -1216,6 +1222,7 @@ fn tui_loop(
                                 NudgeMode::Warp => {
                                     d.nudge = -1;
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 0.9);
+                                    d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                                 }
                             }
                         }
@@ -1229,8 +1236,10 @@ fn tui_loop(
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     let target = (current + 0.010).min(d.total_duration);
+                                    let bump = (target - current) * d.audio.sample_rate as f64;
                                     d.audio.seek_handle.set_position(target);
-                                    d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
+                                    d.display.smooth_display_samp += bump;
+                                    d.display.smooth_ref.1 += bump;
                                     if d.audio.player.is_paused() {
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
@@ -1239,6 +1248,7 @@ fn tui_loop(
                                 NudgeMode::Warp => {
                                     d.nudge = 1;
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 1.1);
+                                    d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                                 }
                             }
                         }
@@ -1251,6 +1261,7 @@ fn tui_loop(
                             if d.nudge_mode == NudgeMode::Warp {
                                 d.nudge = 0;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+                                d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                             }
                         }
                     }
@@ -1959,9 +1970,8 @@ fn service_deck_frame(
         // Derive position from a fixed (time, sample) anchor rather than accumulating per-frame
         // increments. Eliminates the anti-correlated overshoot oscillation that results from
         // thread::sleep jitter in the accumulated path.
-        let (anchor_time, anchor_sample) = d.display.smooth_ref
-            .get_or_insert_with(|| (Instant::now(), d.display.smooth_display_samp));
-        d.display.smooth_display_samp = *anchor_sample
+        let (anchor_time, anchor_sample) = d.display.smooth_ref;
+        d.display.smooth_display_samp = anchor_sample
             + anchor_time.elapsed().as_secs_f64() * d.audio.sample_rate as f64 * speed;
     } else if d.nudge != 0 {
         // Paused with warp nudge: drift display and sync actual audio position for scrubbing.
@@ -2005,7 +2015,7 @@ fn service_deck_frame(
             display_pos_samp as f64
         };
         // Re-anchor so the absolute-reference path continues from the corrected position.
-        d.display.smooth_ref = Some((Instant::now(), d.display.smooth_display_samp));
+        d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
     } else if !d.audio.player.is_paused() {
         // With elapsed-advance removing steady-state lag, residual drift is sub-ppm system-clock
         // vs. audio-clock skew — far below the 0.3s snap threshold. A large correction factor
@@ -2072,3 +2082,4 @@ fn service_deck_frame(
         }
     }
 }
+

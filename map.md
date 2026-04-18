@@ -29,6 +29,8 @@ Application
 │ │ ├ Zoom
 │ │ ├ Wide Buffer
 │ │ ├ Sliding Viewport
+│ │ │ ├ Drift Snap
+│ │ │ └ Partial Drift Correction
 │ │ └ Sub-Column Smoothing
 │ ├ Transport
 │ │ ├ Mode
@@ -143,15 +145,55 @@ A pre-rendered waveform image, much wider than the screen, computed in the backg
 # Sliding Viewport
 
 [Up](#detail-waveform)
+[Down](#drift-snap)
+[Down](#partial-drift-correction)
 
-Each UI frame: read the playhead position (atomic, lock-free), locate it in the buffer, extract a screen-width slice. Per-frame cost is negligible.
+Advancing the displayed position each frame at an expected rate would let timer jitter compound into drift. Instead, we take a different approach which uses an **anchor** — a remembered *(playhead-sample, wall-clock-time)* pair held by each deck and kept up to date as the track plays.
+
+Each UI frame takes the time elapsed since the anchor was set, multiplies by *sample_rate × speed*, and adds the result to the anchor's playhead_sample to get the current display position. That sample is then located in the buffer and a screen-width slice extracted.
+
+The anchor is refreshed in two situations:
+
+- **Position jump** (seek, jump-nudge): shift the anchor's sample by the jump amount and keep its time intact.
+- **Speed change** (warp press or release): set the anchor's time to now and its sample to the current playhead, so the next frame's trajectory starts fresh at the new speed.
+
+Alignment with the audio's true position is maintained by two separate mechanisms: [Drift Snap](#drift-snap) for large divergence, and [Partial Drift Correction](#partial-drift-correction) for continuous small corrections that smooth audio-batch noise.
 
 **Detail**
 
-- Playhead position read via atomic load (Relaxed ordering) from the audio thread's output position counter.
-- Viewport offset calculated as sample-space delta from buffer anchor, converted to column + half-column.
-- Display position is time-anchored (wall clock from a fixed sample/time pair) rather than accumulated per-frame, to avoid drift and snap oscillations.
-- Drift correction: factor of 0.002 when display and audio positions diverge, snapping at 0.3s divergence.
+- The audio thread's sample counter — read via atomic load (Relaxed ordering) — is the reference point for drift detection. It counts samples emitted to the OS, so it leads what the user hears by the hardware buffer depth.
+- Viewport offset — the column at which the playhead should appear — is calculated as *(current playhead sample − wide buffer start sample)*, converted to a column position plus half-column for sub-character precision.
+
+**See also**
+
+- [Wide Buffer](#wide-buffer) — the buffer the screen-width slice is extracted from
+
+
+# Drift Snap
+
+[Up](#sliding-viewport)
+
+When the displayed position diverges too far from the audio's true output position, a snap immediately re-aligns the display and re-anchors from the corrected point. This prevents accumulated lag between the cursor and what the user hears.
+
+**Detail**
+
+- While playing, the threshold is 0.3 s — above typical steady-state drift but below a single beat at any practical BPM.
+- While paused and not nudging, the threshold tightens to a single sample — without motion to mask it, any gap is obvious.
+- After the snap, the display position is rounded to the nearest half-column and the anchor is refreshed to *(now, corrected sample)*.
+
+
+# Partial Drift Correction
+
+[Up](#sliding-viewport)
+
+Between snaps, each frame's rendered position is pulled a small fraction of the way toward the audio's true position. This absorbs the step noise from the audio thread's batched position reads, which would otherwise show up as flicker if the display fully tracked the audio sample-by-sample.
+
+The correction only affects the rendered position for this frame — the anchor itself is not modified, so next frame's projection starts fresh from the anchor.
+
+**Detail**
+
+- Factor: 0.002 per frame. Effect: rendered position = 0.998 × anchor projection + 0.002 × audio position.
+- Applies only while playing and below the snap threshold.
 
 
 # Sub-Column Smoothing

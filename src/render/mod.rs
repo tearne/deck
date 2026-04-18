@@ -156,8 +156,8 @@ impl SharedDetailRenderer {
             Arc::new(Mutex::new(Arc::new(BrailleBuffer::empty())));
         let shared_c: Arc<Mutex<Arc<BrailleBuffer>>> =
             Arc::new(Mutex::new(Arc::new(BrailleBuffer::empty())));
-        let stop       = Arc::new(AtomicBool::new(false));
-        let stop_guard = StopOnDrop(Arc::clone(&stop));
+        let stop          = Arc::new(AtomicBool::new(false));
+        let stop_guard    = StopOnDrop(Arc::clone(&stop));
 
         {
             let cols_bg      = Arc::clone(&cols);
@@ -197,7 +197,6 @@ impl SharedDetailRenderer {
             let shared_b_bg  = Arc::clone(&shared_b);
             let shared_c_bg  = Arc::clone(&shared_c);
             let stop_bg      = Arc::clone(&stop);
-
             thread::spawn(move || {
                 let mut last_cols       = 0usize;
                 let mut last_rows       = 0usize;
