@@ -71,7 +71,7 @@ A loaded track with waveform visualisation and transport controls. One deck is a
 
 The waveforms are the primary visual feedback — the DJ reads track structure, position, and phase from them. Three layers: a colour encoding representing frequency content, an overview showing the full track, and a detail view showing the area around the playhead at high zoom.
 
-> [!DECISION] Three deck instances share one conceptual model. The map describes the deck, not each instance.
+Three deck instances share one conceptual model. The map describes the deck, not each instance.
 
 
 # Spectral Colour
@@ -131,7 +131,7 @@ Zoom levels: 1.0, 2.0, 4.0, 8.0, 16.0, 32.0 seconds per screen width. Samples pe
 
 A pre-rendered waveform image, much wider than the screen, computed in the background, before the UI needs it. A dedicated background thread maintains the buffer. It polls for changes and recomputes only when needed. Most iterations are no-ops. The buffer is a grid of braille characters, anchored at a sample position at a specific zoom level.
 
-> [!DECISION] Pre-render rather than render each frame to avoid distracting waveform "wiggle" in motion due to fractional rounding.
+> [!IMPORTANT] Pre-render rather than render each frame to avoid distracting waveform "wiggle" in motion due to fractional rounding.
 
 **Detail**
 
@@ -202,7 +202,7 @@ The correction only affects the rendered position for this frame — the anchor 
 
 When the playhead falls between character boundaries, braille bit manipulation shifts the display by half a character width, giving sub-character precision without re-rendering.
 
-> [!ASSUMPTION] Char colour on half-col shift — since braille can move by half a column but colour characters can't, we assume that colour changes are gradual enough to avoid obvious misalignment.
+> [!IMPORTANT] Char colour on half-col shift — since braille can move by half a column but colour characters can't, we assume that colour changes are gradual enough to avoid obvious misalignment.
 
 **Detail**
 
@@ -240,7 +240,7 @@ A global toggle that applies to all decks simultaneously. The mode determines ho
 
 Switching modes preserves audio speed — no audible change on toggle. Beat-to-vinyl converts the current BPM ratio to `vinyl_speed`; vinyl-to-beat converts `vinyl_speed` back to a BPM.
 
-> [!DECISION] Session persistence — the active mode is stored in cache and restored on startup. Default is beat mode.
+The active mode is stored in cache and restored on startup. Default is beat mode.
 
 
 # Nudge
@@ -385,8 +385,6 @@ Per-deck signal chain on the audio thread. Stages run in order — each transfor
 3. **Pitch shift** — key adjustment without changing tempo
 
 The metronome injects click tones into the mixer output rather than sitting in the signal chain, but is grouped here as an audio-output concern.
-
-> [!DECISION] Never block the audio thread — all parameter changes via lock-free atomics. No allocations on the audio path.
 
 
 # Filter

@@ -35,4 +35,3 @@ Review cadence: at the end.
 - [ ] ADD `README.md` at project root with all sections: name/one-liner, screenshot placeholder, rationale, design, key bindings (prose + verbatim diagram and legend from `SPEC/config.md`), installation, attribution
 - [ ] ADD screenshot of a running instance (both decks loaded, waveforms visible) saved as `screenshot.png` at repo root; replace placeholder link
 
-## Conclusion
