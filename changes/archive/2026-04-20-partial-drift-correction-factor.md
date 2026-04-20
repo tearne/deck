@@ -40,3 +40,7 @@ Version: patch bump per testable build (scaffold, any mid-experiment rebuilds, f
 **Notes:** across the candidate range `[0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02]`, the user could not see a visible difference in scrolling smoothness. A new hypothesis emerged during the experiment: the partial drift correction is currently absolute (applied to sample-count drift directly), but should likely be relative to the zoom level — expressed as a percentage of the samples represented by a single column character. The same rethink may apply to the drift-snap threshold. Scaffold reverted; code back to pre-change state at v0.9.29.
 
 **Documentation impact:** if the correction is reworked to be zoom-relative, the Partial Drift Correction and (possibly) Drift Snap nodes in `map.md` will need their Detail sections updated.
+
+## Conclusion
+
+Closed without code change. The zoom-relative follow-up (`changes/archive/2026-04-20-zoom-relative-drift-handling.md`) tested three correction forms across their candidate ranges and also produced no visible difference, so the 0.002 baseline is twice-confirmed. The source comment on the 0.002 line was extended in that follow-up to record both findings, sparing future readers from repeating either experiment. Map unchanged.

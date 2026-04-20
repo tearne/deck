@@ -1337,6 +1337,10 @@ fn tui_loop(
                             cache.save();
                             return Ok(());
                         }
+                        // Absorb a paired Press event for the same dismiss keystroke (crossterm
+                        // + Kitty can decode key-repeats as additional Press events) so the
+                        // followup doesn't re-enter Action::Quit and re-arm the warning.
+                        suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                         continue 'tui;
                     }
                     // Esc dismisses any active global notification.
@@ -2020,6 +2024,8 @@ fn service_deck_frame(
         // With elapsed-advance removing steady-state lag, residual drift is sub-ppm system-clock
         // vs. audio-clock skew — far below the 0.3s snap threshold. A large correction factor
         // amplifies audio-device step noise into visible rounding flicker; 0.002 damps it away.
+        // Both absolute-factor tuning and zoom-relative reframings have been tested across
+        // log-spaced ranges and produced no visible difference — 0.002 is effectively optimal.
         d.display.smooth_display_samp -= drift * 0.002;
     }
 
