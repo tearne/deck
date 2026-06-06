@@ -131,6 +131,18 @@ pub(crate) struct TrackingSource {
     pub(crate) pending_target: Arc<AtomicUsize>,
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
+    /// Loop mode: when active, position wraps from loop_end back to loop_start
+    /// via the standard fade-on-seek mechanism. Stored as interleaved-sample indices.
+    pub(crate) loop_active: Arc<AtomicBool>,
+    pub(crate) loop_start: Arc<AtomicUsize>,
+    pub(crate) loop_end: Arc<AtomicUsize>,
+    /// Shared with PitchSource. Set on loop wrap so the pitch buffer flushes
+    /// across the seam (matches the seek-with-fade pipeline-flush behaviour).
+    pub(crate) flush_pitch: Arc<AtomicBool>,
+    /// Shared with PitchSource. Snapped to loop_start on loop wrap so the display
+    /// follows the wrap without waiting for the fade to complete — matches the
+    /// behaviour of SeekHandle.seek_to().
+    pub(crate) output_position: Arc<AtomicUsize>,
 }
 
 impl TrackingSource {
@@ -142,8 +154,17 @@ impl TrackingSource {
         pending_target: Arc<AtomicUsize>,
         sample_rate: u32,
         channels: u16,
+        loop_active: Arc<AtomicBool>,
+        loop_start: Arc<AtomicUsize>,
+        loop_end: Arc<AtomicUsize>,
+        flush_pitch: Arc<AtomicBool>,
+        output_position: Arc<AtomicUsize>,
     ) -> Self {
-        Self { samples, position, fade_remaining, fade_len, pending_target, sample_rate, channels }
+        Self {
+            samples, position, fade_remaining, fade_len, pending_target,
+            sample_rate, channels,
+            loop_active, loop_start, loop_end, flush_pitch, output_position,
+        }
     }
 }
 
@@ -164,6 +185,10 @@ impl Iterator for TrackingSource {
                 let target = self.pending_target.swap(usize::MAX, Ordering::SeqCst);
                 if target != usize::MAX {
                     self.position.store(target, Ordering::SeqCst);
+                    // Snap the display reference in lockstep with position so
+                    // PitchSource's per-sample output_position increments through
+                    // the fade don't leave display leading the playhead.
+                    self.output_position.store(target, Ordering::SeqCst);
                 }
                 self.fade_remaining.store(fl, Ordering::Relaxed);
             }
@@ -180,7 +205,23 @@ impl Iterator for TrackingSource {
             // Normal playback. Return silence past end so the source stays alive in the
             // player queue — allows seeking and replaying after end-of-track.
             let pos = self.position.fetch_add(1, Ordering::Relaxed);
-            Some(self.samples.get(pos).copied().unwrap_or(0.0))
+            let sample = self.samples.get(pos).copied().unwrap_or(0.0);
+            // Loop wrap: when the playhead reaches loop_end, queue a seek to loop_start
+            // via the same fade-on-seek path used for manual seeks. Only trigger if no
+            // seek is already in flight (avoids races with manual seeks).
+            if self.loop_active.load(Ordering::Relaxed)
+                && self.pending_target.load(Ordering::Relaxed) == usize::MAX
+            {
+                let loop_end = self.loop_end.load(Ordering::Relaxed);
+                if pos + 1 >= loop_end {
+                    let loop_start = self.loop_start.load(Ordering::Relaxed);
+                    let fl = self.fade_len.load(Ordering::Relaxed);
+                    self.flush_pitch.store(true, Ordering::Relaxed);
+                    self.pending_target.store(loop_start, Ordering::SeqCst);
+                    self.fade_remaining.store(-fl, Ordering::SeqCst);
+                }
+            }
+            Some(sample)
         }
     }
 }
@@ -466,9 +507,6 @@ impl SeekHandle {
         self.fade_len.store(FADE_SAMPLES, Ordering::SeqCst);
         self.pending_target.store(target_sample, Ordering::SeqCst);
         self.fade_remaining.store(-FADE_SAMPLES, Ordering::SeqCst);
-        // Update output_position immediately so the display snaps to the new position
-        // without waiting for the fade to complete.
-        self.output_position.store(target_sample, Ordering::SeqCst);
     }
 
     /// Seek to `target_secs` directly, without a fade. Used when paused — the audio

@@ -104,6 +104,12 @@ pub(crate) struct SharedDetailRenderer {
     pub(crate) gain_a:         Arc<AtomicU32>,
     pub(crate) gain_b:         Arc<AtomicU32>,
     pub(crate) gain_c:         Arc<AtomicU32>,
+    /// Loop mode (deck 3 PoC). When `loop_active_c` is true, the deck-C detail
+    /// waveform tiles the loop content infinitely via `peaks_for_slot` wrapping.
+    /// Sample fields are in mono frames.
+    pub(crate) loop_active_c:  Arc<AtomicBool>,
+    pub(crate) loop_start_c:   Arc<AtomicUsize>,
+    pub(crate) loop_end_c:     Arc<AtomicUsize>,
     pub(crate) shared_a:       Arc<Mutex<Arc<BrailleBuffer>>>,
     pub(crate) shared_b:       Arc<Mutex<Arc<BrailleBuffer>>>,
     pub(crate) shared_c:       Arc<Mutex<Arc<BrailleBuffer>>>,
@@ -150,6 +156,9 @@ impl SharedDetailRenderer {
         let gain_a         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let gain_b         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let gain_c         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
+        let loop_active_c  = Arc::new(AtomicBool::new(false));
+        let loop_start_c   = Arc::new(AtomicUsize::new(0));
+        let loop_end_c     = Arc::new(AtomicUsize::new(0));
         let shared_a: Arc<Mutex<Arc<BrailleBuffer>>> =
             Arc::new(Mutex::new(Arc::new(BrailleBuffer::empty())));
         let shared_b: Arc<Mutex<Arc<BrailleBuffer>>> =
@@ -193,6 +202,9 @@ impl SharedDetailRenderer {
             let gain_a_bg    = Arc::clone(&gain_a);
             let gain_b_bg    = Arc::clone(&gain_b);
             let gain_c_bg    = Arc::clone(&gain_c);
+            let loop_active_c_bg = Arc::clone(&loop_active_c);
+            let loop_start_c_bg  = Arc::clone(&loop_start_c);
+            let loop_end_c_bg    = Arc::clone(&loop_end_c);
             let shared_a_bg  = Arc::clone(&shared_a);
             let shared_b_bg  = Arc::clone(&shared_b);
             let shared_c_bg  = Arc::clone(&shared_c);
@@ -222,6 +234,9 @@ impl SharedDetailRenderer {
                 let mut last_gain_a: u32 = 1.0f32.to_bits();
                 let mut last_gain_b: u32 = 1.0f32.to_bits();
                 let mut last_gain_c: u32 = 1.0f32.to_bits();
+                let mut last_loop_active_c = false;
+                let mut last_loop_start_c: usize = 0;
+                let mut last_loop_end_c:   usize = 0;
 
                 loop {
                     if stop_bg.load(Ordering::Relaxed) { break; }
@@ -278,6 +293,9 @@ impl SharedDetailRenderer {
                     let gain_raw_a = gain_a_bg.load(Ordering::Relaxed);
                     let gain_raw_b = gain_b_bg.load(Ordering::Relaxed);
                     let gain_raw_c = gain_c_bg.load(Ordering::Relaxed);
+                    let loop_active_c_now = loop_active_c_bg.load(Ordering::Relaxed);
+                    let loop_start_c_now  = loop_start_c_bg.load(Ordering::Relaxed);
+                    let loop_end_c_now    = loop_end_c_bg.load(Ordering::Relaxed);
                     let must_recompute = cols != last_cols
                         || rows != last_rows
                         || zoom != last_zoom
@@ -301,7 +319,10 @@ impl SharedDetailRenderer {
                         || cue_raw_c != last_cue_c
                         || gain_raw_a != last_gain_a
                         || gain_raw_b != last_gain_b
-                        || gain_raw_c != last_gain_c;
+                        || gain_raw_c != last_gain_c
+                        || loop_active_c_now != last_loop_active_c
+                        || loop_start_c_now  != last_loop_start_c
+                        || loop_end_c_now    != last_loop_end_c;
 
                     if must_recompute {
                         let buf_cols = cols * 5;
@@ -331,7 +352,7 @@ impl SharedDetailRenderer {
                         };
                         let buf_a = Arc::new(BrailleBuffer {
                             grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_a, anchor_a, col_samp_a, buf_cols), gain_a),
+                                &scale_peaks(peaks_for_slot(&wf_a, anchor_a, col_samp_a, buf_cols, None), gain_a),
                                 rows, buf_cols,
                             ),
                             bass_ratio:      spectral_for_slot(&wf_a, anchor_a, col_samp_a, buf_cols, sr_a as u32),
@@ -344,7 +365,7 @@ impl SharedDetailRenderer {
                         });
                         let buf_b = Arc::new(BrailleBuffer {
                             grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_b, anchor_b, col_samp_b, buf_cols), gain_b),
+                                &scale_peaks(peaks_for_slot(&wf_b, anchor_b, col_samp_b, buf_cols, None), gain_b),
                                 rows, buf_cols,
                             ),
                             bass_ratio:      spectral_for_slot(&wf_b, anchor_b, col_samp_b, buf_cols, sr_b as u32),
@@ -355,9 +376,12 @@ impl SharedDetailRenderer {
                             anchor_sample:   anchor_b,
                             samples_per_col: col_samp_b,
                         });
+                        let loop_bounds_c = if loop_active_c_now && loop_end_c_now > loop_start_c_now {
+                            Some((loop_start_c_now, loop_end_c_now))
+                        } else { None };
                         let buf_c = Arc::new(BrailleBuffer {
                             grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_c, anchor_c, col_samp_c, buf_cols), gain_c),
+                                &scale_peaks(peaks_for_slot(&wf_c, anchor_c, col_samp_c, buf_cols, loop_bounds_c), gain_c),
                                 rows, buf_cols,
                             ),
                             bass_ratio:      spectral_for_slot(&wf_c, anchor_c, col_samp_c, buf_cols, sr_c as u32),
@@ -397,6 +421,9 @@ impl SharedDetailRenderer {
                         last_gain_a     = gain_raw_a;
                         last_gain_b     = gain_raw_b;
                         last_gain_c     = gain_raw_c;
+                        last_loop_active_c = loop_active_c_now;
+                        last_loop_start_c  = loop_start_c_now;
+                        last_loop_end_c    = loop_end_c_now;
                     }
 
                     thread::sleep(Duration::from_millis(8));
@@ -416,6 +443,7 @@ impl SharedDetailRenderer {
             offset_ms_a, offset_ms_b, offset_ms_c,
             cue_sample_a, cue_sample_b, cue_sample_c,
             gain_a, gain_b, gain_c,
+            loop_active_c, loop_start_c, loop_end_c,
             shared_a, shared_b, shared_c,
             _stop_guard: stop_guard,
         }
@@ -444,6 +472,16 @@ impl SharedDetailRenderer {
                 self.speed_ratio_c.store(65536, Ordering::Relaxed);
                 self.load_gen_c.fetch_add(1, Ordering::Relaxed);
             }
+        }
+    }
+
+    /// Push loop mode state for deck C (the PoC deck). `start_mono` / `end_mono`
+    /// are in mono frames. Ignored for other slots.
+    pub(crate) fn store_loop(&self, slot: usize, active: bool, start_mono: usize, end_mono: usize) {
+        if slot == 2 {
+            self.loop_start_c.store(start_mono, Ordering::Relaxed);
+            self.loop_end_c.store(end_mono, Ordering::Relaxed);
+            self.loop_active_c.store(active, Ordering::Relaxed);
         }
     }
 
@@ -1285,14 +1323,32 @@ pub(crate) fn peaks_for_slot(
     anchor: usize,
     col_samp: usize,
     buf_cols: usize,
+    loop_bounds: Option<(usize, usize)>,
 ) -> Vec<(f32, f32)> {
     let Some(wf) = wf else {
         return vec![(0.0, 0.0); buf_cols];
     };
     let mono = &wf.mono;
+    // When loop_bounds is set, each per-column sample lookup wraps modulo loop length —
+    // so the detail waveform tiles the loop infinitely in both directions around the playhead.
+    let wrap = loop_bounds.filter(|&(s, e)| e > s && e <= mono.len());
     (0..buf_cols).map(|c| {
         let offset    = c as i64 - (buf_cols / 2) as i64;
         let raw_start = anchor as i64 + offset * col_samp as i64;
+        if let Some((loop_start, loop_end)) = wrap {
+            let loop_len = (loop_end - loop_start) as i64;
+            let mut mn = f32::INFINITY;
+            let mut mx = f32::NEG_INFINITY;
+            for k in 0..col_samp as i64 {
+                let s_wrapped = loop_start as i64
+                    + (raw_start + k - loop_start as i64).rem_euclid(loop_len);
+                let v = mono[s_wrapped as usize];
+                if v < mn { mn = v; }
+                if v > mx { mx = v; }
+            }
+            if mn == f32::INFINITY { return (0.0, 0.0); }
+            return (mn.max(-1.0), mx.min(1.0));
+        }
         if raw_start < 0 {
             return (1.0, -1.0);
         }
@@ -1360,6 +1416,54 @@ pub(crate) fn shift_braille_half(a: u8, b: u8) -> u8 {
     let left  = ((a >> 3) & 0x07) | ((a >> 1) & 0x40);
     let right = ((b & 0x07) << 3) | ((b & 0x40) << 1);
     left | right
+}
+
+/// Same as `render_braille` but renders the left and right halves of each braille cell
+/// from independent sub-column peaks — so each character carries two waveform columns
+/// side by side. `peaks` must be at `2 * cols` resolution; index `2c` fills the left
+/// dots of character `c`, `2c + 1` fills the right dots. Used for the loop trio panels.
+pub(crate) fn render_braille_single_dot(peaks: &[(f32, f32)], rows: usize, cols: usize) -> Vec<Vec<u8>> {
+    // Left dots (rows 0-3): bits 0x01, 0x02, 0x04, 0x40.
+    // Right dots (rows 0-3): bits 0x08, 0x10, 0x20, 0x80.
+    const LEFT_BITS:  [u8; 4] = [0x01, 0x02, 0x04, 0x40];
+    const RIGHT_BITS: [u8; 4] = [0x08, 0x10, 0x20, 0x80];
+
+    let mut grid = vec![vec![0u8; cols]; rows];
+    if rows == 0 || cols == 0 {
+        return grid;
+    }
+    let total_dots = rows * 4;
+
+    let mut set_dot = |c: usize, d: usize, bits: &[u8; 4]| {
+        let br = d / 4;
+        let dr = d % 4;
+        if br < rows && c < cols {
+            grid[br][c] |= bits[dr];
+        }
+    };
+
+    let fill_one_side = |c: usize, peak: (f32, f32), bits: &[u8; 4], set: &mut dyn FnMut(usize, usize, &[u8; 4])| {
+        let (min_val, max_val) = peak;
+        let clamped_max = max_val.min(1.0);
+        let clamped_min = min_val.max(-1.0);
+        if clamped_min > clamped_max { return; }
+        let top_dot = ((1.0 - clamped_max) / 2.0 * total_dots as f32) as usize;
+        let bot_dot = {
+            let raw = (((1.0 - clamped_min) / 2.0 * total_dots as f32) as usize).min(total_dots - 1);
+            if raw > top_dot && raw + top_dot >= total_dots { raw - 1 } else { raw }
+        };
+        for d in top_dot..=bot_dot { set(c, d, bits); }
+    };
+
+    for c in 0..cols {
+        if let Some(&left) = peaks.get(2 * c) {
+            fill_one_side(c, left, &LEFT_BITS, &mut set_dot);
+        }
+        if let Some(&right) = peaks.get(2 * c + 1) {
+            fill_one_side(c, right, &RIGHT_BITS, &mut set_dot);
+        }
+    }
+    grid
 }
 
 pub(crate) fn render_braille(peaks: &[(f32, f32)], rows: usize, cols: usize) -> Vec<Vec<u8>> {
@@ -1431,6 +1535,123 @@ pub(crate) fn bar_tick_cols(bpm: f64, offset_ms: i64, total_secs: f64, cols: usi
         }
         bars *= 2;
     }
+}
+
+/// Compute per-column (min, max) peaks for `cols` columns covering the
+/// half-open sample range `[start, end)`. Out-of-range samples contribute
+/// nothing; a column whose entire range falls outside the buffer is silent.
+pub(crate) fn peaks_for_range(mono: &[f32], start: i64, end: i64, cols: usize) -> Vec<(f32, f32)> {
+    if cols == 0 || end <= start {
+        return vec![(0.0, 0.0); cols];
+    }
+    let total = (end - start) as f64;
+    let mut peaks = Vec::with_capacity(cols);
+    for c in 0..cols {
+        let s0 = start as f64 + (c as f64 / cols as f64) * total;
+        let s1 = start as f64 + ((c + 1) as f64 / cols as f64) * total;
+        let i0 = s0.floor() as i64;
+        let i1 = (s1.ceil() as i64).max(i0 + 1);
+        let mut mn = 0.0f32;
+        let mut mx = 0.0f32;
+        let mut any = false;
+        for i in i0..i1 {
+            if i < 0 || (i as usize) >= mono.len() { continue; }
+            let v = mono[i as usize];
+            if !any { mn = v; mx = v; any = true; }
+            else { mn = mn.min(v); mx = mx.max(v); }
+        }
+        peaks.push((mn, mx));
+    }
+    peaks
+}
+
+/// Three-panel render used while loop mode is active. Left panel: ±50 ms either
+/// side of loop_start with a boundary marker at the centre column. Middle panel:
+/// the entire loop, zoom-to-fit, with a moving playhead. Right panel: ±50 ms
+/// either side of loop_end with a boundary marker at the centre column. The
+/// playhead is also drawn into the side panels when it falls inside their window.
+pub(crate) fn render_loop_panels(
+    frame: &mut ratatui::Frame,
+    deck: &Deck,
+    area: ratatui::layout::Rect,
+    playhead_samp: usize,
+    palette: SpecPalette,
+) {
+    let area_w = area.width as usize;
+    let area_h = area.height as usize;
+    if area_w < 7 || area_h == 0 { return; }
+
+    let panel_w = (area_w.saturating_sub(2)) / 3;
+    if panel_w == 0 { return; }
+
+    let sample_rate = deck.audio.sample_rate as i64;
+    let half_window = ((sample_rate as f64) * 0.050) as i64;
+    let win_total = (2 * half_window).max(1);
+
+    let mono = &deck.audio.mono;
+    let loop_start = deck.loop_state.start_sample as i64;
+    let loop_end   = deck.loop_state.end_sample as i64;
+    let playhead   = playhead_samp as i64;
+
+    let left_start  = loop_start - half_window;
+    let left_end    = loop_start + half_window;
+    let right_start = loop_end   - half_window;
+    let right_end   = loop_end   + half_window;
+
+    // Single-dot precision: compute peaks at 2× character columns so each braille
+    // cell encodes two waveform sub-columns side by side.
+    let sub_cols = panel_w * 2;
+    let left_peaks   = peaks_for_range(mono, left_start,  left_end,  sub_cols);
+    let middle_peaks = peaks_for_range(mono, loop_start,  loop_end,  sub_cols);
+    let right_peaks  = peaks_for_range(mono, right_start, right_end, sub_cols);
+
+    let left_grid   = render_braille_single_dot(&left_peaks,   area_h, panel_w);
+    let middle_grid = render_braille_single_dot(&middle_peaks, area_h, panel_w);
+    let right_grid  = render_braille_single_dot(&right_peaks,  area_h, panel_w);
+
+    let column_for = |playhead: i64, win_start: i64, total: i64| -> Option<usize> {
+        if playhead < win_start || playhead >= win_start + total { return None; }
+        let col = ((playhead - win_start) as f64 / total as f64 * panel_w as f64) as usize;
+        Some(col.min(panel_w.saturating_sub(1)))
+    };
+
+    let left_playhead_col   = column_for(playhead, left_start,  win_total);
+    let middle_playhead_col = column_for(playhead, loop_start,  (loop_end - loop_start).max(1));
+    let right_playhead_col  = column_for(playhead, right_start, win_total);
+
+    let boundary_col = panel_w / 2;
+    let waveform_color = spectral_color(palette, 0.5, 1.0);
+    let boundary_color = Color::Rgb(220, 40, 40);
+    let playhead_color = Color::Rgb(255, 255, 255);
+    let sep_color      = Color::Rgb(60, 60, 60);
+
+    let render_row = |grid: &Vec<Vec<u8>>, r: usize, boundary: Option<usize>, playhead: Option<usize>, spans: &mut Vec<Span<'static>>| {
+        let row = &grid[r];
+        for (c, &byte) in row.iter().enumerate() {
+            let is_boundary = boundary == Some(c);
+            let is_playhead = playhead == Some(c);
+            let (color, ch) = if is_boundary {
+                (boundary_color, '\u{28FF}')
+            } else if is_playhead {
+                (playhead_color, '\u{28FF}')
+            } else {
+                (waveform_color, char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
+            };
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+        }
+    };
+
+    let lines: Vec<Line<'static>> = (0..area_h).map(|r| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        render_row(&left_grid,   r, Some(boundary_col), left_playhead_col,   &mut spans);
+        spans.push(Span::styled("│".to_string(), Style::default().fg(sep_color)));
+        render_row(&middle_grid, r, None,                middle_playhead_col, &mut spans);
+        spans.push(Span::styled("│".to_string(), Style::default().fg(sep_color)));
+        render_row(&right_grid,  r, Some(boundary_col), right_playhead_col,  &mut spans);
+        Line::from(spans)
+    }).collect();
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 pub(crate) fn render_detail_waveform(

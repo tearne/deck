@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32, AtomicUsize};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -39,6 +39,11 @@ pub(crate) struct DeckAudio {
     pub(crate) filter_poles: Arc<AtomicU8>,
     /// Pitch shift in semitones (±6); shared with PitchSource on the audio thread.
     pub(crate) pitch_semitones: Arc<AtomicI8>,
+    /// Loop mode atomics, shared with TrackingSource. start/end are interleaved-sample
+    /// indices (already multiplied by channels), matching the units used by `position`.
+    pub(crate) loop_active: Arc<AtomicBool>,
+    pub(crate) loop_start: Arc<AtomicUsize>,
+    pub(crate) loop_end: Arc<AtomicUsize>,
 }
 
 pub(crate) struct TempoState {
@@ -62,6 +67,15 @@ pub(crate) struct TapState {
     pub(crate) tap_times: Vec<f64>,
     pub(crate) last_tap_wall: Option<Instant>,
     pub(crate) was_tap_active: bool,
+}
+
+/// Per-deck loop mode state. Sample fields are in mono frames (not interleaved samples),
+/// to match how the rest of the deck reasons about playhead position. The atomics on
+/// DeckAudio carry the interleaved equivalents for the audio thread.
+pub(crate) struct LoopState {
+    pub(crate) active: bool,
+    pub(crate) start_sample: usize,
+    pub(crate) end_sample: usize,
 }
 
 pub(crate) struct DisplayState {
@@ -154,6 +168,10 @@ pub(crate) struct Deck {
     pub(crate) mixer: Mixer,
     pub(crate) tempo: TempoState,
     pub(crate) tap: TapState,
+    /// Separate tap session for loop entry; lives alongside `tap` so the two gestures
+    /// don't interfere when both keys are bound on the same deck.
+    pub(crate) loop_tap: TapState,
+    pub(crate) loop_state: LoopState,
     pub(crate) display: DisplayState,
     pub(crate) spectrum: SpectrumState,
 }
@@ -206,6 +224,16 @@ impl Deck {
                 tap_times: Vec::new(),
                 last_tap_wall: None,
                 was_tap_active: false,
+            },
+            loop_tap: TapState {
+                tap_times: Vec::new(),
+                last_tap_wall: None,
+                was_tap_active: false,
+            },
+            loop_state: LoopState {
+                active: false,
+                start_sample: 0,
+                end_sample: 0,
             },
             display: DisplayState {
                 smooth_display_samp: 0.0,

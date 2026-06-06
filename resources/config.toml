@@ -34,6 +34,10 @@ pitch_reset = ["space+a", "space+z"]
 bpm_tap          = "b"
 redetect_bpm     = "space+b"
 metronome_toggle = "space+v"
+
+# Loop mode (PoC: deck 3 only)
+loop_tap   = "g"
+loop_exit  = "space+g"
 bpm_increase     = "v"
 bpm_decrease     = "f"
 base_bpm_increase = "V"
@@ -55,7 +59,7 @@ cue_play = "space+r"
 pfl_up     = "s"
 pfl_down   = "x"
 pfl_reset  = ["space+s", "space+x"]
-pfl_on_off = "space+g"
+pfl_on_off = "G"
 
 # Beat jumps (selected deck)
 jump_forward_1bt  = "1"
