@@ -4,7 +4,7 @@
 [Down](#browser)
 [Down](#mixer)
 [Down](#keymap)
-[Down](#settings)
+[Down](#cache)
 [Down](#album-art)
 [Down](#audio-latency)
 
@@ -20,9 +20,15 @@ Designed to perform well on slow hardware. Three recurring constraints:
 
 - **Recompute only on change** — dirty flags, drift thresholds, adaptive frame timing. Most iterations are no-ops.
 
+These hold across several threads: decode runs in the background so the UI stays live and shows progress, then hashing and BPM detection follow on another pass; waveform rasterisation has its own thread (see Wide Buffer), and audio playback its own. State crosses threads through lock-free or low-contention primitives, so the audio thread never stalls.
+
 ```
 Application
 ├ Deck
+│ ├ Deck Selection
+│ ├ Track Loading
+│ ├ Renaming
+│ │ └ Metadata Editor
 │ ├ Spectral Colour
 │ ├ Overview Waveform (TODO)
 │ ├ Detail Waveform
@@ -36,6 +42,7 @@ Application
 │ │ ├ Mode
 │ │ ├ Nudge
 │ │ ├ Beat Jump
+│ │ ├ Needle Drop
 │ │ ├ Speed Control
 │ │ └ Click-free Seek
 │ │   ├ Quiet-Frame Search
@@ -48,18 +55,24 @@ Application
 │   ├ Level & Gain
 │   ├ Pitch Shift
 │   └ Metronome
-├ Browser (TODO)
+├ Browser
+│ ├ Search
+│ └ Preview
 ├ Mixer
+│ └ PFL Monitor
 ├ Keymap (TODO)
-├ Settings (TODO)
+├ Cache
 ├ Album Art (TODO)
-└ Audio Latency (TODO)
+└ Audio Latency
 ```
 
 
 # Deck
 
 [Up](#application)
+[Down](#deck-selection)
+[Down](#track-loading)
+[Down](#renaming)
 [Down](#spectral-colour)
 [Down](#overview-waveform)
 [Down](#detail-waveform)
@@ -67,11 +80,58 @@ Application
 [Down](#beat-grid)
 [Down](#audio-pipeline)
 
-A loaded track with waveform visualisation and transport controls. One deck is active at a time (receives input). Each deck has its own track, playback state, BPM, and audio output.
+A loaded track with waveform visualisation and transport controls. Each deck has its own track, playback state, BPM, and audio output.
 
 The waveforms are the primary visual feedback — the DJ reads track structure, position, and phase from them. Three layers: a colour encoding representing frequency content, an overview showing the full track, and a detail view showing the area around the playhead at high zoom.
 
 Three deck instances share one conceptual model. The map describes the deck, not each instance.
+
+
+# Deck Selection
+
+[Up](#deck)
+
+Each deck is independent, one selected at a time. The selected deck receives all deck-specific input — transport, BPM, cue, nudge, pitch. The mixer controls — level, gain, and filter — are the exception: they address each deck directly, whichever is selected.
+
+Two decks can be swapped wholesale — their entire state trades places, and selection follows the content so the operator keeps controlling the same track. The others start empty, loaded by selecting them and opening the browser. Audio latency is a single global value shared across all decks.
+
+
+# Track Loading
+
+[Up](#deck)
+
+Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and BPM analysis follow on a further background pass (see Beat Grid).
+
+Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
+
+
+# Renaming
+
+[Up](#deck)
+[Down](#metadata-editor)
+
+Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's notification row — accept it to open the metadata editor, or carry on and the offer fades but lingers. The editor is reachable only through this offer: the feature exists to fix names that don't conform, not as a general metadata editor.
+
+**See also**
+
+- [Track Loading](#track-loading) — the offer fires at load
+- [Keymap](#keymap) — fixed rename/editor keys
+
+
+# Metadata Editor
+
+[Up](#renaming)
+
+The modal that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. Confirming writes the edited metadata back to the file and renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. While open it captures all input.
+
+**Detail**
+
+- Tags read via symphonia (ID3v2 preferred over container tags), written via `lofty` (symphonia is read-only).
+- Filename-illegal characters `/ \ : * ? " < > |` become `-`; renamed only when the proposed stem differs.
+
+**See also**
+
+- [Keymap](#keymap) — editor keys (fixed, not configurable)
 
 
 # Spectral Colour
@@ -216,10 +276,11 @@ When the playhead falls between character boundaries, braille bit manipulation s
 [Down](#mode)
 [Down](#nudge)
 [Down](#beat-jump)
+[Down](#needle-drop)
 [Down](#speed-control)
 [Down](#click-free-seek)
 
-Play, pause, seek, and position control. Two top-level modes shape behaviour:
+Play, pause, seek, and position control. Reaching the end of the track pauses the transport and returns the playhead to the start, the view staying interactive. Two top-level modes shape behaviour:
 
 - **Beat mode** — BPM-relative operations: beat jump by N beats, speed as BPM ratio
 - **Vinyl mode** — hides BPM machinery, speed as percentage, beat jumps remapped to fixed time intervals
@@ -236,7 +297,7 @@ Play, pause, seek, and position control. Two top-level modes shape behaviour:
 A global toggle that applies to all decks simultaneously. The mode determines how speed is represented and how beat jumps behave.
 
 - **Beat mode** — speed is a BPM ratio (`bpm / base_bpm`), beat grid and tick marks visible, beat jumps land on beat boundaries
-- **Vinyl mode** — speed is a percentage of nominal (`vinyl_speed`, 1.0 = nominal), beat grid hidden, beat jumps remapped to fixed time intervals (N × 0.5s)
+- **Vinyl mode** — speed is a percentage of nominal (`vinyl_speed`, 1.0 = nominal), beat grid hidden, beat jumps remapped to fixed time intervals (N × 0.5s); BPM analysis and re-detection are suppressed
 
 Switching modes preserves audio speed — no audible change on toggle. Beat-to-vinyl converts the current BPM ratio to `vinyl_speed`; vinyl-to-beat converts `vinyl_speed` back to a BPM.
 
@@ -271,6 +332,17 @@ Backward past the start clamps to position 0. Forward past the end is a no-op.
 **See also**
 
 - [Click-free Seek](#click-free-seek) — fade/search/flush mechanism that prevents audible clicks during jumps
+
+
+# Needle Drop
+
+[Up](#transport)
+
+A left-click on the overview waveform seeks to the start of the nearest bar at or left of the click, preserving play/pause state.
+
+**See also**
+
+- [Click-free Seek](#click-free-seek) — the fade/search/flush mechanism the seek uses
 
 
 # Speed Control
@@ -340,7 +412,7 @@ The pitch shifter and filter carry internal state (buffered samples, filter hist
 [Up](#deck)
 [Down](#cue-point)
 
-The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values.
+The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values. Detection assumes a single constant tempo across the track.
 
 **BPM** is established by one of:
 
@@ -352,6 +424,10 @@ The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a 
 **Offset** positions the grid relative to the audio. Adjusted in 10ms steps, snapped to multiples of 10ms, wrapped into `[0, beat_period_ms)`. The cue point acts as the grid's zero datum — when `base_bpm` changes, `offset_ms` is recalculated to keep a tick on the cue.
 
 Cache is keyed by audio hash, making it invariant of filename, tags, and container format.
+
+**See also**
+
+- [Keymap](#keymap) — keys bound to BPM tap, re-detect, and manual adjust
 
 
 # Cue Point
@@ -395,7 +471,7 @@ A single `filter_offset` parameter (−16 to +16, default 0) controls a second-o
 
 Cutoff frequencies are logarithmically spaced from ~40 Hz to ~18 kHz. Filter position is indicated by shading out characters of the spectrum analyser, with each step corresponding to one character.
 
-Filter slope is also adjustable per deck.
+Filter slope is switchable per deck between 12 dB/oct (2-pole) and 24 dB/oct (4-pole).
 
 **Detail**
 
@@ -404,6 +480,7 @@ Config actions: `deckN_filter_increase`, `deckN_filter_decrease`, `deckN_filter_
 **See also**
 
 - [Spectrum Analyser](#spectrum-analyser) — displays filter position as shaded region
+- [Keymap](#keymap) — keys bound to the filter and slope actions
 
 
 # Level & Gain
@@ -415,13 +492,16 @@ Two independent volume controls per deck:
 - **Level** — playback volume in 5% steps (0–100%). Not persisted.
 - **Gain** — trim in 1 dB steps (±12 dB) for matching track loudness. A soft-knee limiter engages near 0 dBFS to prevent clipping when gain is raised. Persisted to cache.
 
-PFL (Pre-Fader Listen) signal is taken from this stage — before level and filter are applied — and routed to the left channel when active.
-
 **Detail**
 
 Config actions: `deckN_level_up`, `deckN_level_down`, `deckN_gain_increase`, `deckN_gain_decrease`.
 
 The limiter is a soft-knee curve (cubic Hermite) over the zone [1.0 − 0.3, 1.0]: slope 1 at entry, slope 0 at the ceiling. Hard clip above 1.0. Applied per sample after gain scaling.
+
+**See also**
+
+- [PFL Monitor](#pfl-monitor) — the pre-fader monitor tap, taken raw ahead of this stage
+- [Keymap](#keymap) — keys bound to level and gain actions
 
 
 # Pitch Shift
@@ -439,33 +519,88 @@ Time-domain pitch shifting via SoundTouch. Processes in 512-frame chunks; output
 **See also**
 
 - [Speed Control](#speed-control) — turntable-style speed change that affects both tempo and pitch
+- [Keymap](#keymap) — keys bound to pitch up/down
 
 
 # Metronome
 
 [Up](#audio-pipeline)
 
-A click tone on every beat, synced to `base_bpm` and `offset_ms`. Only fires during playback. The click is timed against the audio buffer write position (ahead of the speaker by `audio_latency_ms`), so it arrives at the speaker on the beat when latency is correctly calibrated.
+A click tone on every beat, synced to `base_bpm` and `offset_ms`. Only fires during playback; no click sounds on the beat where it is switched on, clicks beginning from the next. The click is timed against the audio buffer write position (ahead of the speaker by `audio_latency_ms`), so it arrives at the speaker on the beat when latency is correctly calibrated.
 
 Config: `metronome_toggle`. Resets to off on each new track load.
 
 **See also**
 
 - [Audio Latency](#audio-latency) — metronome timing depends on correct latency calibration
+- [Keymap](#keymap) — the key bound to `metronome_toggle`
 
 
 # Browser
 
 [Up](#application)
+[Down](#search)
+[Down](#preview)
 
-*TODO — file navigation, track selection, preview playback.*
+A file navigator for loading tracks. It opens over the player at any time (`open_browser`) with audio still playing; choosing an audio file loads it into the selected deck and returns to the player. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
+
+The last-visited directory is remembered between sessions, so the browser reopens where you left off (a path on the command line wins for the first open only). If the target deck is already playing, opening asks for confirmation first, so a stray key can't interrupt a mix.
+
+**See also**
+
+- [Cache](#cache) — where the last-visited directory and workspace persist
+- [Keymap](#keymap) — navigation and action keys
+
+
+# Search
+
+[Up](#browser)
+
+Fuzzy track-finding across a whole library, not just the current directory. Searching needs a **workspace** — a directory nominated as the search root (`@` sets the current directory, `'` clears it). The workspace persists between sessions and is silently dropped if it no longer exists, prompting for a new one.
+
+With a workspace set, typing builds a search term and the listing is replaced by audio files found recursively beneath the root, each shown relative to it and ordered best-match-first. Clearing the term restores the directory listing.
+
+**See also**
+
+- [Cache](#cache) — where the workspace persists
+- [Keymap](#keymap) — workspace and search keys
+
+
+# Preview
+
+[Up](#browser)
+
+A quick listen to the highlighted track without loading it. `#` plays it from 20% of the way in (or 30 s if the duration isn't known) through the main output, independent of the decks, so it doesn't disturb what's loaded. `#` again restarts; any other key stops it and then does its normal job; closing the browser stops it too.
+
+**See also**
+
+- [Keymap](#keymap) — the preview key
 
 
 # Mixer
 
 [Up](#application)
+[Down](#pfl-monitor)
 
 Sums the three deck audio pipeline outputs into a single stereo stream for the audio device. PFL routing splits the output: right channel always carries the main mix, left channel carries the PFL deck's pre-fader signal when active.
+
+
+# PFL Monitor
+
+[Up](#mixer)
+
+Pre-fader listen: routes one deck's raw audio to the left output channel for headphone cueing, so the operator can preview a deck before mixing it in. Exclusive — only one deck is cued at a time, and cueing another releases the first.
+
+Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap is raw — before filter and fader — so the cue reflects the source regardless of how the deck is EQ'd or faded. Stereo only; mono tracks are unaffected.
+
+**Detail**
+
+- Level 0–100 in steps of 20 (`pfl_up` / `pfl_down`); `pfl_on_off` toggles on (100) / off (0); `pfl_reset` zeroes it. Dropping the level to 0 releases the monitor.
+- Left channel carries the cued deck at PFL level and drops the main mix; the right always carries the full main mix.
+
+**See also**
+
+- [Keymap](#keymap) — keys bound to the PFL actions
 
 
 # Keymap
@@ -475,11 +610,19 @@ Sums the three deck audio pipeline outputs into a single stereo stream for the a
 *TODO — keyboard layout design, ergonomic rationale, modifier system.*
 
 
-# Settings
+# Cache
 
 [Up](#application)
 
-*TODO — user configuration and track cache.*
+A single JSON file (`~/.config/deck/cache.json`) that lets the player do expensive work once and remember user state between runs. Two kinds of content live in it.
+
+**Per-track memory**, keyed by a Blake3 hash of the decoded audio — so it follows the music, not the file. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset has been deliberately placed, and the filename as a human-readable hint). Because the key is the audio itself, renaming, retagging, or re-containering a track keeps its analysis.
+
+**Global state** — last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
+
+**Detail**
+
+- Per-track entries are saved immediately on change; global state on change and on quit. Keys the app didn't touch are never rewritten.
 
 
 # Album Art
@@ -493,4 +636,14 @@ Sums the three deck audio pipeline outputs into a single stereo stream for the a
 
 [Up](#application)
 
-*TODO — global latency calibration, visual compensation, metronome timing.*
+A single global calibration (0–250 ms) compensating for the delay between audio leaving the program and reaching the speaker. The visual playback position is shifted back by this amount so the waveform and beat markers line up with what's heard. Applied only during playback — paused, there's no output to compensate for, so the display sits at the true position.
+
+**Detail**
+
+- Adjusted in 10 ms steps (`latency_increase` / `latency_decrease`), clamped 0–250 ms; one global value in the cache, loaded at startup.
+- Cue-play adds the latency to its target so the cued point is heard, not just displayed, on the beat.
+
+**See also**
+
+- [Metronome](#metronome) — click timing depends on this calibration
+- [Keymap](#keymap) — keys bound to the latency actions

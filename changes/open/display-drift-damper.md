@@ -11,19 +11,27 @@ The waveform display drifts visibly out of sync with the audio over long playbac
 
 Root cause: `src/main.rs:2082` recomputes `smooth_display_samp` from `smooth_ref` (anchor + elapsed) every frame, overwriting any damping. The damper at `:2133` runs but its effect is wiped on the next frame. `smooth_ref` only advances on nudge events or the 0.3s snap (which at typical 10–50 ppm skew takes hours to fire), so the display follows the wall clock unbounded.
 
-### Re-anchor `smooth_ref` after each damp
+### Drop `smooth_ref` entirely; integrate per-frame
 
-Right after `smooth_display_samp -= drift * 0.002` at `:2133`, set `smooth_ref = (Instant::now(), smooth_display_samp)`. The next frame's integration starts from a near-zero elapsed window, so the damper's correction persists. Steady-state offset under continuous drift becomes `rate × ε / (k × fps)` ≈ 7 samples (0.17 ms) at 20 ppm with k = 0.002, 60 fps.
+`service_deck_frame` already receives `elapsed` (the frame interval) at `:468`. Replace the anchor-based integration at `:2081–2083` with `smooth_display_samp += elapsed * rate * speed`. The damper at `:2133` then accumulates frame-to-frame because no one overwrites the running value. Steady-state offset under continuous drift becomes `rate × ε / (k × fps)` ≈ 7 samples (0.17 ms) at 20 ppm with k = 0.002, 60 fps — sub-perceptible.
 
-### Keep the damper factor at 0.002
+Risk: per-frame accumulation exposes `thread::sleep` jitter in `elapsed`, which the anchor approach was originally chosen to avoid (per the comment at `:2078–2080`). With k = 0.002 the damper barely reacts within a frame, so jitter amplification should be negligible — but if it shows up visibly, fallback is a one-line re-anchor of an anchor we'd keep around.
 
-With re-anchoring, 0.002 yields a low-pass time constant of ~8 s — long enough to swallow per-sample audio-device step noise (the original concern in the existing comment) and short enough to keep steady-state drift sub-perceptible. No retune needed.
+### Cascading deletions
 
-### Update the stale comment
+`smooth_ref` becomes unused. Remove:
 
-The "elapsed-advance removing steady-state lag" claim at `:2128–2132` predates the realisation that the damper was being wiped. Rewrite to describe the re-anchored low-pass behaviour.
+- The field on `DisplayState` and its initializer (`src/deck/mod.rs:83`, `:240`).
+- Jump-nudge anchor bumps (`src/main.rs:1228`, `:1254`) — the next frame's `+= elapsed × rate × speed` picks up from the bumped `smooth_display_samp` automatically.
+- Warp-nudge anchor resets (`:1237`, `:1263`, `:1276`) — speed change is reflected via `elapsed × rate × new_speed` next frame.
+- Snap-path re-anchor (`:2126`).
+- The stale comment at `:2128–2132`.
 
 
-## Unresolved
+## Plan
 
-- Whether to also strip the explicit `smooth_ref` re-anchors in the nudge handlers (`:1237`, `:1263`, `:1276`). With per-frame re-anchoring they're redundant but harmless. Leaning leave-in-place for now to keep this change tightly scoped.
+- [ ] Replace anchor-based integration at `src/main.rs:2081–2083` with `smooth_display_samp += elapsed * rate * speed`.
+- [ ] Delete all `smooth_ref` usage sites: jump-nudge bumps (`:1228`, `:1254`), warp-nudge resets (`:1237`, `:1263`, `:1276`), snap-path re-anchor (`:2126`).
+- [ ] Remove `smooth_ref` from `DisplayState` and its initializer (`src/deck/mod.rs:83`, `:240`).
+- [ ] Rewrite the comment at `src/main.rs:2128–2132` to describe the per-frame integrate + damp behaviour.
+- [ ] Bump `Cargo.toml` patch.
