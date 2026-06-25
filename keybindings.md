@@ -8,10 +8,10 @@ Action-to-key reference for deck. Map nodes reference actions by their config na
 The spatial layout below matches the in-app help overlay (`?`). Left block = selected-deck controls; right block = per-deck mixer.
 
 ```
-  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slp
+  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope
   1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF
   ╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=
-    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slp
+    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
     Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
     ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰  ╰  ╰ Flt=
       ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭         ┆   ╭  ╭  ╭ +Gain
@@ -19,9 +19,9 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
       ╰ =Ptch   ╰ Rst     ╰ Brows   ╰ Play    ╰ PFLTog  ┆   ╰  ╰  ╰ 100%
         ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭  ╭  ╭ -Gain
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
-        ╰ =Ptch   ╰ Rst     ╰         ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
+        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
-` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit    │ [Bare]
+` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
 / art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3                     ╰ [Space]
 ```
 
@@ -80,7 +80,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `bpm_decrease` | `f` | Playback BPM −0.1 |
 | `base_bpm_increase` | `V` | Native BPM +0.01 |
 | `base_bpm_decrease` | `F` | Native BPM −0.01 |
-| `tempo_reset` | *(unbound)* | Reset tempo to detected |
+| `speed_reset` | `space+c` | Reset playback speed to nominal |
 | `offset_increase` | `D` | Phase offset +10 ms |
 | `offset_decrease` | `C` | Phase offset −10 ms |
 | `metronome_toggle` | `space+v` | Toggle metronome |

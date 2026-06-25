@@ -1873,7 +1873,7 @@ fn tui_loop(
                     Some(Action::JumpBackward32b) => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -128); } } }
                     Some(Action::JumpForward64b)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  256); } } }
                     Some(Action::JumpBackward64b) => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -256); } } }
-                    Some(Action::TempoReset) => {
+                    Some(Action::SpeedReset) => {
                         if let Some(ref mut d) = decks[selected_deck] {
                             d.tempo.vinyl_speed = 1.0;
                             d.tempo.bpm = d.tempo.base_bpm;

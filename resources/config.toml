@@ -42,6 +42,7 @@ bpm_increase     = "v"
 bpm_decrease     = "f"
 base_bpm_increase = "V"
 base_bpm_decrease = "F"
+speed_reset      = "space+c"
 
 # Nudge (selected deck)
 nudge_forward  = "d"

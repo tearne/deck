@@ -1778,7 +1778,7 @@ pub(crate) fn render_shared_tick_row(
 }
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-    const TEXT_W: u16 = 87;
+    const TEXT_W: u16 = 78;
     const TEXT_H: u16 = 15;
     const H_PAD:  u16 = 2;
     const V_PAD:  u16 = 1;
@@ -1816,59 +1816,59 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     let row7 = Line::from(vec![
         Span::styled("    ╭         ╭         ╭ +Tick   ", sh),
         Span::styled("╭", wh),
-        Span::styled(" -BsBPM  ╭         ┆   ╭ +Gain   ╭ +Gain   ╭ +Gain", sh),
+        Span::styled(" -BsBPM  ╭         ┆   ╭  ╭  ╭ +Gain", sh),
     ]);
     // Row 8: Bare — F key name stays white; +Ndge / -BPM use muted sage
     let row8 = Line::from(vec![
-        Span::styled("    A -Ptch   S +PFL    D ", ba),
+        Span::styled("    A +Ptch   S +PFL    D ", ba),
         Span::styled("+Ndge", gr),
         Span::styled("   ", ba),
         Span::styled("F", wh),
         Span::styled(" ", ba),
         Span::styled("-BPM", gr),
-        Span::styled("    G         ┆   J +Lvl    K +Lvl    L +Lvl", ba),
+        Span::styled("    G         ┆   J  K  L +Lvl", ba),
     ]);
     // Row 9: Space — F's ╰ bracket stays white
     let row9 = Line::from(vec![
-        Span::styled("    ╰ -Ptch   ╰ Rst     ╰ Brows   ", sp),
+        Span::styled("    ╰ =Ptch   ╰ Rst     ╰ Brows   ", sp),
         Span::styled("╰", wh),
-        Span::styled(" Play    ╰ PFLTog  ┆   ╰ 100%    ╰ 100%    ╰ 100%", sp),
+        Span::styled(" Play    ╰ PFLTog  ┆   ╰  ╰  ╰ 100%", sp),
     ]);
     // Row 11: Bare — -Ndge / +BPM use muted sage
     let row11 = Line::from(vec![
-        Span::styled("      Z +Ptch   X -PFL    C ", ba),
+        Span::styled("      Z -Ptch   X -PFL    C ", ba),
         Span::styled("-Ndge", gr),
         Span::styled("   V ", ba),
         Span::styled("+BPM", gr),
-        Span::styled("    B Tap     ┆   M -Lvl    , -Lvl    . -Lvl", ba),
+        Span::styled("    B Tap     ┆   M  ,  . -Lvl", ba),
     ]);
-    // Row 13: separator with modifier legend flush-right
+    // Row 13: separator — modifier legend as vertical ╭│╰ box flush-right
     let row13 = Line::from(vec![
-        Span::styled("──────────────────────────────────────────────────────────────  [", ba),
-        Span::styled("Shift", sh),
-        Span::styled("]  [", ba),
-        Span::styled("Bare", ba),
-        Span::styled("]  [", ba),
-        Span::styled("Space", sp),
-        Span::styled("]", ba),
+        Span::styled("──────────────────────────────────────────────────────────────────── ", ba),
+        Span::styled("╭ [Shift]", sh),
+    ]);
+    // Row 15: second footer line — ╰ [Space] flush-right
+    let row15 = Line::from(vec![
+        Span::styled("/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3                    ", ba),
+        Span::styled("╰ [Space]", sp),
     ]);
 
     let lines: Vec<Line<'static>> = vec![
-        Line::styled("╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭ +Slp    ╭ +Slp    ╭ +Slp", sh),
-        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7 HPF     8 HPF     9 HPF", ba),
-        Line::styled("╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=", sp),
-        Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭ -Slp    ╭ -Slp    ╭ -Slp", sh),
-        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U LPF     I LPF     O LPF", ba),
-        Line::styled("  ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰ Flt=    ╰ Flt=    ╰ Flt=", sp),
+        Line::styled("╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope", sh),
+        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF", ba),
+        Line::styled("╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=", sp),
+        Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope", sh),
+        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF", ba),
+        Line::styled("  ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰  ╰  ╰ Flt=", sp),
         row7,
         row8,
         row9,
-        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭ -Gain   ╭ -Gain   ╭ -Gain", sh),
+        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭  ╭  ╭ -Gain", sh),
         row11,
-        Line::styled("      ╰ +Ptch   ╰ Rst     ╰         ╰ Metro   ╰ BDtct   ┆   ╰ 0%      ╰ 0%      ╰ 0%", sp),
+        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%", sp),
         row13,
-        Line::styled("` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit", ba),
-        Line::styled("/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3", ba),
+        Line::styled("` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]", ba),
+        row15,
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),
