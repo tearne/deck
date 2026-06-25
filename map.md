@@ -30,7 +30,8 @@ Application
 │ ├ Renaming
 │ │ └ Metadata Editor
 │ ├ Spectral Colour
-│ ├ Overview Waveform (TODO)
+│ ├ Overview Waveform
+│ ├ Spectrum Analyser
 │ ├ Detail Waveform
 │ │ ├ Zoom
 │ │ ├ Wide Buffer
@@ -60,7 +61,7 @@ Application
 │ └ Preview
 ├ Mixer
 │ └ PFL Monitor
-├ Keymap (TODO)
+├ Keymap
 ├ Cache
 ├ Album Art (TODO)
 └ Audio Latency
@@ -75,6 +76,7 @@ Application
 [Down](#renaming)
 [Down](#spectral-colour)
 [Down](#overview-waveform)
+[Down](#spectrum-analyser)
 [Down](#detail-waveform)
 [Down](#transport)
 [Down](#beat-grid)
@@ -156,7 +158,37 @@ Interpolation is linear between adjacent stops, with brightness scaling that nor
 
 [Up](#deck)
 
-*TODO — full-track view, position indicator, beat grid overlay, click-to-seek.*
+The full-track waveform — a miniature map of the whole song. Playhead and cue point shown as vertical lines; spectral colour is shared with the detail view.
+
+Rendered at half-column braille resolution: each character encodes two adjacent audio columns, doubling horizontal detail within the terminal width.
+
+In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. A legend in the top-right corner shows the current interval. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In vinyl mode, bar markers and the warning flash are suppressed.
+
+**See also**
+
+- [Spectral Colour](#spectral-colour) — the colour encoding both views share
+- [Needle Drop](#needle-drop) — seeking via the overview
+- [Beat Grid](#beat-grid) — the BPM and offset that position the bar markers
+
+
+# Spectrum Analyser
+
+[Up](#deck)
+
+A compact real-time frequency display in the info bar — 16 braille characters wide (32 logarithmically spaced bins, 20 Hz to 20 kHz), one braille row tall. Each character encodes two adjacent bins as a bottom-up bar chart. Active whenever a track is loaded.
+
+The display is beat-synced: it updates 4 times per beat, falling back to 250 ms intervals during BPM analysis. A background glow lights character cells with sub-threshold activity and resets on a 2-bar accumulation window.
+
+When a filter is active, the attenuated region is shaded with a grey background — LPF from the right, HPF from the left — with each of the 16 filter steps corresponding to one character.
+
+**Detail**
+
+Goertzel algorithm over a 4096-sample Hann-windowed window at the current playback position. Amplitude mapped on a dB scale (~10 dB floor, ~60 dB ceiling, ~12.5 dB per dot row) with a +3 dB/octave perceptual tilt to equalise bass and treble visibility.
+
+**See also**
+
+- [Filter](#filter) — the shaded region tracks filter position
+- [Keymap](#keymap) — no config actions; the analyser is always on
 
 
 # Detail Waveform
@@ -303,6 +335,10 @@ Switching modes preserves audio speed — no audible change on toggle. Beat-to-v
 
 The active mode is stored in cache and restored on startup. Default is beat mode.
 
+**See also**
+
+- [Cache](#cache) — stores and restores the active mode
+
 
 # Nudge
 
@@ -359,6 +395,7 @@ Clamped to 40.0–240.0 BPM in beat mode. All underlying values retain full prec
 **See also**
 
 - [Pitch Shift](#pitch-shift) — independent key adjustment without changing tempo
+- [Keymap](#keymap) — keys bound to the speed adjustment actions
 
 
 # Click-free Seek
@@ -428,6 +465,7 @@ Cache is keyed by audio hash, making it invariant of filename, tags, and contain
 **See also**
 
 - [Keymap](#keymap) — keys bound to BPM tap, re-detect, and manual adjust
+- [Cache](#cache) — BPM and offset persisted per track by audio hash
 
 
 # Cue Point
@@ -444,6 +482,8 @@ Persisted to cache alongside BPM and offset.
 **See also**
 
 - [Click-free Seek](#click-free-seek) — cue play uses the same seek mechanism
+- [Cache](#cache) — cue position persisted per track
+- [Keymap](#keymap) — keys bound to `cue` and `cue_play`
 
 
 # Audio Pipeline
@@ -502,6 +542,7 @@ The limiter is a soft-knee curve (cubic Hermite) over the zone [1.0 − 0.3, 1.0
 
 - [PFL Monitor](#pfl-monitor) — the pre-fader monitor tap, taken raw ahead of this stage
 - [Keymap](#keymap) — keys bound to level and gain actions
+- [Cache](#cache) — gain persisted per track; level is session-only
 
 
 # Pitch Shift
@@ -607,7 +648,15 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 [Up](#application)
 
-*TODO — keyboard layout design, ergonomic rationale, modifier system.*
+Three input layers on a split keyboard: plain keys, Shift-modified, and Space-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
+
+Space acts as a modifier: holding it and pressing another key fires a chord action. Released alone it has no effect. Space-chord bindings are reserved for one-time actions (set cue, open browser, select deck) because terminals cannot reliably detect Space being held, so continuous actions like nudge or fader movement use plain or Shift layers. Ctrl-C always quits unconditionally.
+
+Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser navigation, tag editor input, and confirmation prompts.
+
+**See also**
+
+- [keybindings.md](keybindings.md) — full action table, keyboard layout, fixed keys, config format
 
 
 # Cache
@@ -647,3 +696,4 @@ A single global calibration (0–250 ms) compensating for the delay between audi
 
 - [Metronome](#metronome) — click timing depends on this calibration
 - [Keymap](#keymap) — keys bound to the latency actions
+- [Cache](#cache) — latency persisted as a global value
