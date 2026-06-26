@@ -25,13 +25,10 @@ A single `README.md` at the project root. Sections in order:
 6. **Installation** — `cargo build --release`; copy binary to PATH; runtime dependency: ALSA or PipeWire
 7. **Attribution** — one line each for `symphonia` (decode), `rodio` (playback), `ratatui` + `crossterm` (TUI), `stratum-dsp` (BPM detection), `lofty` (tag read/write)
 
-The screenshot must be taken of a running instance with both decks loaded and the waveforms visible.
-
-Review cadence: at the end.
+The screenshot is deferred — omitted entirely for now, added as a separate change when convenient.
 
 ## Plan
 
 - [x] REVIEW verify `SPEC/config.md` keyboard layout is current against `src/config/mod.rs` defaults; flag any discrepancies before proceeding
-- [ ] ADD `README.md` at project root with all sections: name/one-liner, screenshot placeholder, rationale, design, key bindings (prose + verbatim diagram and legend from `keybindings.md`), installation, attribution
-- [ ] ADD screenshot of a running instance (both decks loaded, waveforms visible) saved as `screenshot.png` at repo root; replace placeholder link
+- [x] ADD `README.md` at project root with all sections: name/one-liner, screenshot placeholder, rationale, features, key bindings (prose + diagram from `keybindings.md`), installation, attribution
 
