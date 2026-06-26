@@ -75,7 +75,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | Action | Default | Description |
 |--------|---------|-------------|
 | `bpm_tap` | `b` | Tap BPM |
-| `redetect_bpm` | `space+b` | Trigger BPM detection |
+| `detect_bpm` | `space+b` | Trigger BPM detection |
 | `bpm_increase` | `v` | Playback BPM +0.1 |
 | `bpm_decrease` | `f` | Playback BPM −0.1 |
 | `base_bpm_increase` | `V` | Native BPM +0.01 |

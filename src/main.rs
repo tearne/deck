@@ -1651,7 +1651,7 @@ fn tui_loop(
                             }
                         }
                     }
-                    Some(Action::RedetectBpm) => {
+                    Some(Action::DetectBpm) => {
                         if !vinyl_mode {
                         if let Some(ref mut d) = decks[selected_deck] {
                             if d.tempo.pending_bpm.is_some() {

@@ -32,7 +32,7 @@ pitch_reset = ["space+a", "space+z"]
 
 # BPM (selected deck)
 bpm_tap          = "b"
-redetect_bpm     = "space+b"
+detect_bpm       = "space+b"
 metronome_toggle = "space+v"
 
 # Loop mode (PoC: deck 3 only)

@@ -358,7 +358,7 @@ Fine position adjustment with two sub-modes (jump and warp):
 
 [Up](#transport)
 
-Discrete position jumps in four sizes (1, 4, 16, 64 beats) in each direction. Each jump lands exactly N beat periods ahead or behind.
+Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction. Each jump lands exactly N beat periods ahead or behind.
 
 - **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds, landing precisely on the next tick mark
 - **Vinyl mode** — remapped to fixed time intervals: N × 0.5s (the beat period at 120 BPM)
@@ -455,7 +455,7 @@ The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a 
 
 - **Cache lookup** — on load, the audio is hashed (Blake3 over decoded mono samples) and looked up in cache. If found, BPM and offset are applied immediately. If not, a 120 BPM placeholder is used.
 - **Tap** (`bpm_tap`) — press in time with the beat. After 8 taps, `base_bpm` and `offset_ms` are set via linear regression. Outlier taps (residual > half a beat period) are excluded.
-- **Detection** (`redetect_bpm`) — manually triggers BPM analysis on the decoded audio. Result goes through a confirmation step if a BPM is already established.
+- **Detection** (`detect_bpm`) — manually triggers BPM analysis on the decoded audio. Result goes through a confirmation step if a BPM is already established.
 - **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps
 
 **Offset** positions the grid relative to the audio. Adjusted in 10ms steps, snapped to multiples of 10ms, wrapped into `[0, beat_period_ms)`. The cue point acts as the grid's zero datum — when `base_bpm` changes, `offset_ms` is recalculated to keep a tick on the cue.
