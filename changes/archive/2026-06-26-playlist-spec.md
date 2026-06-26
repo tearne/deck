@@ -13,9 +13,9 @@ This change delivers only the **specification** — a portable format definition
 
 ## Approach
 
-### The deliverable is a portable specification
+### The deliverable is a standalone map-style specification
 
-A new `SPEC/playlist.md` fixing the file format and the algorithms an implementation must follow. It pins formats and behaviour, not Deck UI — anything Deck-specific (browser, key bindings, decks) is named only as "the implementation" and deferred.
+A new `playlist.md` at the project root — a map document using the same node/navigation format as `map.md`, so it reads consistently with the application map and can serve as a portable spec for other implementations. The main `map.md` gains a `Playlist` entry in the Application tree with a cross-file link. The spec pins formats and behaviour, not Deck UI — anything Deck-specific (browser, key bindings, decks) is named only as "the implementation" and deferred.
 
 ### File format
 
@@ -60,6 +60,32 @@ The format mandates the on-disk conventions every implementation must honour: re
 Browser listing/opening/searching of `.rpl` files; create-and-name UX (location within the current browser directory, name prompt); the library root being Deck's `@` workspace and the prompt-to-set-one when absent; playback and auto-advance; playlist editing; embedded undo-history.
 
 
-## Unresolved
+## Plan
 
-_None — the design is settled. Remaining values (probe byte count, fallback duration tolerance, sibling-backup count) are spec constants to be proposed while writing it, not open design questions._
+**Topics**
+
+- Root node — playlist concept, `.rpl` format (JSON, version field, filename-as-name, may live anywhere)
+- Entry structure — identity / description / hints separation, reserved slot for future per-entry settings
+- Track Identity — Blake3 hash of encoded audio payload, probe hash, per-container byte-range table (flac, mp3, ogg, wav, aac, opus, m4a)
+- Resolution — 5-step algorithm, descriptive fallback, confirmation requirement, mutation rules
+- Tags Refresh — when description is refreshed and what triggers it
+- Resilient Writes — backup scheme (rotating hidden siblings), write procedure, load fallback
+- Cross-reference — add `Playlist` to the Application tree in `map.md` with a cross-file link
+
+**Done when:** `playlist.md` is a complete, self-contained map document covering all seven topics above, constants (probe byte count, duration tolerance, backup count) are pinned to specific values, and `map.md` references it in the Application tree.
+
+
+## Conclusion
+
+Completed. `playlist.md` delivered as a standalone map-style specification at the project root. The Log captures all deviations from the Approach; the `map.md` cross-reference deferral is intentional, not a gap — it follows the sync rule and will be added when Deck supports playlists.
+
+
+## Log
+
+- Probe hash dropped during build — duration + file-size pre-filter judged sufficiently selective; complexity not justified, especially on embedded devices. Resolution steps simplified accordingly.
+- `hash_algorithm` field added per-entry to future-proof against algorithm changes; single hash per entry retained (multi-hash approach ruled out as over-engineering).
+- `settings` added as a fourth entry role (alongside identity, description, hints); crossfade/continuous playback noted as future `transition_out` in settings rather than a separate transition object.
+- Root node renamed "Resilient Playlists"; "Resolution" renamed "File Resolution" for clarity.
+- Entry structure split into four child nodes (Identity, Description, Hints, Settings); File Resolution split into Descriptive Fallback and Tags Refresh; Resilient Writes split into Write Procedure and Backup Scheme.
+- Write procedure steps corrected — original order was logically wrong (renamed over primary before promoting it to backup); fixed to rotate backups first, then rename temp into place.
+- `map.md` cross-reference deferred — map sync rule prohibits adding Playlist to the application map until Deck actually supports playlists.
