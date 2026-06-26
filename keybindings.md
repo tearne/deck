@@ -122,8 +122,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `jump_forward_1bt` | `1` | Jump +1 beat |
 | `jump_backward_1bt` | `q` | Jump −1 beat |
-| `jump_forward_4bt` | `2` | Jump +4 beats |
-| `jump_backward_4bt` | `w` | Jump −4 beats |
+| `jump_forward_1b` | `2` | Jump +1 bar |
+| `jump_backward_1b` | `w` | Jump −1 bar |
 | `jump_forward_4b` | `3` | Jump +4 bars |
 | `jump_backward_4b` | `e` | Jump −4 bars |
 | `jump_forward_8b` | `4` | Jump +8 bars |
