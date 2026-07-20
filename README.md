@@ -41,7 +41,14 @@ Press `?` in-app for the full overlay. Full action reference: [keybindings.md](k
 
 ## Installation
 
+Build dependencies (Linux):
+
+- `pkg-config`
+- ALSA development headers — `libasound2-dev` on Debian/Ubuntu; the plain `alsa` package doesn't include these
+- A C++ compiler (`g++` or `clang++`) — used to build the bundled `soundtouch` library
+
 ```sh
+sudo apt install pkg-config libasound2-dev g++   # Debian/Ubuntu
 cargo build --release
 cp target/release/deck ~/.local/bin/
 ```
