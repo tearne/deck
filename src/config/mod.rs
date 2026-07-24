@@ -194,7 +194,11 @@ impl Default for DisplayConfig {
 }
 
 /// Finds or creates the config file and returns its text plus an optional notice.
-pub(crate) fn resolve_config() -> (String, Option<String>) {
+pub(crate) fn resolve_config(use_local_config: bool) -> (String, Option<String>) {
+    if use_local_config {
+        let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        return resolve_or_create(dir.join("config.toml"));
+    }
     // Check next to the binary first, then ~/.config/tj/config.toml, then auto-create.
     let adjacent = std::env::current_exe()
         .ok()
@@ -207,15 +211,19 @@ pub(crate) fn resolve_config() -> (String, Option<String>) {
         Some(h) => h.join(".config/deck/config.toml"),
         None => return (DEFAULT_CONFIG.to_string(), None),
     };
-    if user_path.exists() {
-        (std::fs::read_to_string(&user_path).unwrap_or_default(), None)
+    resolve_or_create(user_path)
+}
+
+/// Reads `path` if it exists, otherwise creates it from the embedded default.
+fn resolve_or_create(path: std::path::PathBuf) -> (String, Option<String>) {
+    if path.exists() {
+        (std::fs::read_to_string(&path).unwrap_or_default(), None)
     } else {
-        // Auto-create from embedded default.
-        if let Some(dir) = user_path.parent() {
+        if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let notice = if std::fs::write(&user_path, DEFAULT_CONFIG).is_ok() {
-            Some(format!("config created: {}", user_path.display()))
+        let notice = if std::fs::write(&path, DEFAULT_CONFIG).is_ok() {
+            Some(format!("config created: {}", path.display()))
         } else {
             None
         };
@@ -223,8 +231,8 @@ pub(crate) fn resolve_config() -> (String, Option<String>) {
     }
 }
 
-pub(crate) fn load_config() -> (std::collections::HashMap<KeyBinding, Action>, DisplayConfig, Option<String>) {
-    let (text, notice) = resolve_config();
+pub(crate) fn load_config(use_local_config: bool) -> (std::collections::HashMap<KeyBinding, Action>, DisplayConfig, Option<String>) {
+    let (text, notice) = resolve_config(use_local_config);
     // Seed with defaults so any keys absent from the user config still work.
     let mut map = parse_keymap(DEFAULT_CONFIG, &mut std::collections::HashMap::new());
     let keymap = parse_keymap(&text, &mut map);

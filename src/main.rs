@@ -5,6 +5,8 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use clap::Parser;
+
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     DisableMouseCapture, EnableMouseCapture,
@@ -63,6 +65,18 @@ fn panic_log_path() -> std::path::PathBuf {
         .join(".config/deck/panic.log")
 }
 
+/// A minimal terminal DJ player.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    /// File or directory to open
+    path: Option<PathBuf>,
+
+    /// Resolve config from the current directory instead of ~/.config/deck
+    #[arg(long)]
+    local_config: bool,
+}
+
 fn main() {
     color_eyre::install().expect("color_eyre initialisation should succeed at startup");
 
@@ -88,9 +102,10 @@ fn main() {
         prev_hook(info);
     }));
 
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
+    let use_local_config = cli.local_config;
 
-    let arg = args.get(1).map(std::path::PathBuf::from);
+    let arg = cli.path;
     let start = arg.clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
@@ -145,7 +160,7 @@ fn main() {
     } else {
         None
     };
-    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer) {
+    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config) {
         cleanup_terminal();
         eprintln!("TUI error: {e}");
         std::process::exit(1);
@@ -318,6 +333,7 @@ fn tui_loop(
     cache: &mut Cache,
     browser_dir: &mut std::path::PathBuf,
     mixer: &rodio::mixer::Mixer,
+    use_local_config: bool,
 ) -> io::Result<()> {
     // Per-deck display values computed each frame from current deck state.
     struct DeckRenderState {
@@ -329,7 +345,7 @@ fn tui_loop(
         warning_active:   bool,
         warn_beat_on:     bool,
     }
-    let (keymap, display_cfg, config_notice) = load_config();
+    let (keymap, display_cfg, config_notice) = load_config(use_local_config);
     let mut target_fps: u32 = display_cfg.target_fps;
     let mut global_notification: Option<Notification> = None;
     if let Some(msg) = config_notice {
