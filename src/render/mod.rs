@@ -1816,7 +1816,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     let row7 = Line::from(vec![
         Span::styled("    ╭         ╭         ╭ +Tick   ", sh),
         Span::styled("╭", wh),
-        Span::styled(" -BsBPM  ╭         ┆   ╭  ╭  ╭ +Gain", sh),
+        Span::styled(" -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain", sh),
     ]);
     // Row 8: Bare — F key name stays white; +Ndge / -BPM use muted sage
     let row8 = Line::from(vec![
@@ -1830,9 +1830,9 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
     // Row 9: Space — F's ╰ bracket stays white
     let row9 = Line::from(vec![
-        Span::styled("    ╰ =Ptch   ╰ Rst     ╰ Brows   ", sp),
+        Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
         Span::styled("╰", wh),
-        Span::styled(" Play    ╰ PFLTog  ┆   ╰  ╰  ╰ 100%", sp),
+        Span::styled(" Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%", sp),
     ]);
     // Row 11: Bare — -Ndge / +BPM use muted sage
     let row11 = Line::from(vec![
@@ -1859,11 +1859,11 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Line::styled("╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=", sp),
         Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope", sh),
         Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF", ba),
-        Line::styled("  ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰  ╰  ╰ Flt=", sp),
+        Line::styled("  ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=", sp),
         row7,
         row8,
         row9,
-        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭  ╭  ╭ -Gain", sh),
+        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain", sh),
         row11,
         Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%", sp),
         row13,

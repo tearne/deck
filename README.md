@@ -25,11 +25,11 @@ Three input layers: plain keys, **Shift** (uppercase), and **Space-chord** (hold
   ╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=
     ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
     Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
-    ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰  ╰  ╰ Flt=
-      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭         ┆   ╭  ╭  ╭ +Gain
+    ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
+      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain
       A +Ptch   S +PFL    D +Ndge   F -BPM    G         ┆   J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ Brows   ╰ Play    ╰ PFLTog  ┆   ╰  ╰  ╰ 100%
-        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭  ╭  ╭ -Gain
+      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%
+        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]

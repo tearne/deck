@@ -13,11 +13,11 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
   ╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=
     ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
     Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
-    ╰         ╰         ╰ CueSt   ╰ CueJp   ╰         ┆   ╰  ╰  ╰ Flt=
-      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭         ┆   ╭  ╭  ╭ +Gain
+    ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
+      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain
       A +Ptch   S +PFL    D +Ndge   F -BPM    G         ┆   J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ Brows   ╰ Play    ╰ PFLTog  ┆   ╰  ╰  ╰ 100%
-        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭         ┆   ╭  ╭  ╭ -Gain
+      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%
+        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
@@ -67,8 +67,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `play_pause` | `space+f` | Play/pause |
-| `open_browser` | `space+d` | Open file browser |
+| `play_pause` | `space+g` | Play/pause |
+| `open_browser` | `space+f` | Open file browser |
 
 ### BPM & Beat Grid
 
@@ -96,8 +96,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `cue` | `space+e` | Set cue point (paused only) |
-| `cue_play` | `space+r` | Jump to cue point |
+| `cue` | `B` | Set cue point (paused only) |
+| `cue_play` | `G` | Jump to cue point |
 
 ### Pitch
 
@@ -114,7 +114,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `pfl_up` | `s` | PFL level +20 |
 | `pfl_down` | `x` | PFL level −20 |
 | `pfl_reset` | `space+s`, `space+x` | PFL level to 0 |
-| `pfl_on_off` | `G` | Toggle PFL on (100) / off (0) |
+| `pfl_on_off` | `space+d` | Toggle PFL on (100) / off (0) |
 
 ### Beat Jump
 
@@ -158,7 +158,7 @@ Actions are prefixed `deck1_`, `deck2_`, `deck3_`. Default keys are shown left t
 | Action | Default | Description |
 |--------|---------|-------------|
 | `loop_tap` | `g` | Tap loop entry |
-| `loop_exit` | `space+g` | Exit loop |
+| `loop_exit` | `H` | Exit loop |
 
 
 ## Fixed Keys

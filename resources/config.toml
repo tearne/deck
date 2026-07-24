@@ -22,8 +22,8 @@ select_deck2 = "space+2"
 select_deck3 = "space+3"
 
 # Transport / browse (selected deck)
-play_pause   = "space+f"
-open_browser = "space+d"
+play_pause   = "space+g"
+open_browser = "space+f"
 
 # Pitch (selected deck)
 pitch_up    = "a"
@@ -37,7 +37,7 @@ metronome_toggle = "space+v"
 
 # Loop mode (PoC: deck 3 only)
 loop_tap   = "g"
-loop_exit  = "space+g"
+loop_exit  = "H"
 bpm_increase     = "v"
 bpm_decrease     = "f"
 base_bpm_increase = "V"
@@ -53,14 +53,14 @@ offset_increase = "D"
 offset_decrease = "C"
 
 # Cue (selected deck)
-cue      = "space+e"
-cue_play = "space+r"
+cue      = "B"
+cue_play = "G"
 
 # PFL (selected deck)
 pfl_up     = "s"
 pfl_down   = "x"
 pfl_reset  = ["space+s", "space+x"]
-pfl_on_off = "G"
+pfl_on_off = "space+d"
 
 # Beat jumps (selected deck)
 jump_forward_1bt  = "1"
