@@ -240,14 +240,9 @@ A pre-rendered waveform image, much wider than the screen, computed in the backg
 [Down](#drift-snap)
 [Down](#partial-drift-correction)
 
-Advancing the displayed position each frame at an expected rate would let timer jitter compound into drift. Instead, we take a different approach which uses an **anchor** — a remembered *(playhead-sample, wall-clock-time)* pair held by each deck and kept up to date as the track plays.
+Each UI frame advances the displayed position by the **measured** frame interval × *sample_rate × speed*, accumulated into a running value. Measured intervals telescope to exact wall time, so timer jitter cannot compound into drift — advancing at an *expected* rate would.
 
-Each UI frame takes the time elapsed since the anchor was set, multiplies by *sample_rate × speed*, and adds the result to the anchor's playhead_sample to get the current display position. That sample is then located in the buffer and a screen-width slice extracted.
-
-The anchor is refreshed in two situations:
-
-- **Position jump** (seek, jump-nudge): shift the anchor's sample by the jump amount and keep its time intact.
-- **Speed change** (warp press or release): set the anchor's time to now and its sample to the current playhead, so the next frame's trajectory starts fresh at the new speed.
+Position jumps (seek, jump-nudge) shift the running value directly; speed changes simply take effect in the next frame's multiplication. The current position is then located in the buffer and a screen-width slice extracted.
 
 Alignment with the audio's true position is maintained by two separate mechanisms: [Drift Snap](#drift-snap) for large divergence, and [Partial Drift Correction](#partial-drift-correction) for continuous small corrections that smooth audio-batch noise.
 
@@ -265,26 +260,27 @@ Alignment with the audio's true position is maintained by two separate mechanism
 
 [Up](#sliding-viewport)
 
-When the displayed position diverges too far from the audio's true output position, a snap immediately re-aligns the display and re-anchors from the corrected point. This prevents accumulated lag between the cursor and what the user hears.
+When the displayed position diverges too far from the audio's true output position, a snap immediately re-aligns the display. This prevents accumulated lag between the cursor and what the user hears.
 
 **Detail**
 
 - While playing, the threshold is 0.3 s — above typical steady-state drift but below a single beat at any practical BPM.
 - While paused and not nudging, the threshold tightens to a single sample — without motion to mask it, any gap is obvious.
-- After the snap, the display position is rounded to the nearest half-column and the anchor is refreshed to *(now, corrected sample)*.
+- After the snap, the display position is rounded to the nearest half-column.
 
 
 # Partial Drift Correction
 
 [Up](#sliding-viewport)
 
-Between snaps, each frame's rendered position is pulled a small fraction of the way toward the audio's true position. This absorbs the step noise from the audio thread's batched position reads, which would otherwise show up as flicker if the display fully tracked the audio sample-by-sample.
+Between snaps, each frame pulls the running display position a small fraction of the way toward the audio's true position. This absorbs the step noise from the audio thread's batched position reads, which would otherwise show up as flicker if the display fully tracked the audio sample-by-sample.
 
-The correction only affects the rendered position for this frame — the anchor itself is not modified, so next frame's projection starts fresh from the anchor.
+The correction is applied to the running value itself, so it accumulates frame to frame — continuous clock skew between the system and audio clocks settles at a small constant offset instead of growing until a snap fires.
 
 **Detail**
 
-- Factor: 0.002 per frame. Effect: rendered position = 0.998 × anchor projection + 0.002 × audio position.
+- Factor: 0.002 per frame — position −= 0.002 × (position − audio position).
+- Steady-state offset under clock skew ≈ rate × skew / (0.002 × fps): sub-millisecond at typical ppm-level crystal skew.
 - Applies only while playing and below the snap threshold.
 
 

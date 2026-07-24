@@ -442,10 +442,11 @@ fn tui_loop(
             fps_sample_start = frame_start;
             fps_sample_frames = 0;
         }
-        let elapsed = frame_start.duration_since(last_render).as_secs_f64()
-            // Cap at 4 columns per frame. Must exceed the minimum frame_dur (8ms) at every zoom
-            // level — a tighter cap causes systematic drift and periodic large-drift snapping.
-            .min(col_secs * 4.0);
+        let elapsed_uncapped = frame_start.duration_since(last_render).as_secs_f64();
+        // The cap (4 columns per frame) bounds the scrub jump after a stall on the paused-warp
+        // path. The playing path integrates the uncapped interval — the cap can sit below
+        // frame_dur at low target_fps and narrow zoom, which would systematically lose time.
+        let elapsed = elapsed_uncapped.min(col_secs * 4.0);
         last_render = frame_start;
 
         // Expire global notification.
@@ -481,7 +482,7 @@ fn tui_loop(
 
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, elapsed, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
+            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
         }
 
         // Compute render state for all three decks.
@@ -1237,11 +1238,6 @@ fn tui_loop(
                                     let bump = (target - current) * d.audio.sample_rate as f64;
                                     d.audio.seek_handle.set_position(target);
                                     d.display.smooth_display_samp += bump;
-                                    // Shift the anchor sample by the same bump so the next frame's
-                                    // `anchor_sample + elapsed × sr × speed` preserves the jump
-                                    // without forfeiting the wall-time gap between the event and
-                                    // the next frame — 27% drift at 30 Hz key-repeat.
-                                    d.display.smooth_ref.1 += bump;
                                     if d.audio.player.is_paused() {
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
@@ -1250,7 +1246,6 @@ fn tui_loop(
                                 NudgeMode::Warp => {
                                     d.nudge = -1;
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 0.9);
-                                    d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                                 }
                             }
                         }
@@ -1267,7 +1262,6 @@ fn tui_loop(
                                     let bump = (target - current) * d.audio.sample_rate as f64;
                                     d.audio.seek_handle.set_position(target);
                                     d.display.smooth_display_samp += bump;
-                                    d.display.smooth_ref.1 += bump;
                                     if d.audio.player.is_paused() {
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
@@ -1276,7 +1270,6 @@ fn tui_loop(
                                 NudgeMode::Warp => {
                                     d.nudge = 1;
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 1.1);
-                                    d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                                 }
                             }
                         }
@@ -1289,7 +1282,6 @@ fn tui_loop(
                             if d.nudge_mode == NudgeMode::Warp {
                                 d.nudge = 0;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
-                                d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
                             }
                         }
                     }
@@ -2013,6 +2005,7 @@ fn service_deck_frame(
     decks: &mut [Option<Deck>; 3],
     col_secs: f64,
     elapsed: f64,
+    elapsed_uncapped: f64,
     mixer: &rodio::mixer::Mixer,
     shared_renderer: &SharedDetailRenderer,
     cache: &mut Cache,
@@ -2091,12 +2084,11 @@ fn service_deck_frame(
         // Include warp-nudge speed factor so the display tracks the audio speed exactly.
         let base_speed = if vinyl_mode { d.tempo.vinyl_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
         let speed = base_speed * (1.0 + d.nudge as f64 * 0.1);
-        // Derive position from a fixed (time, sample) anchor rather than accumulating per-frame
-        // increments. Eliminates the anti-correlated overshoot oscillation that results from
-        // thread::sleep jitter in the accumulated path.
-        let (anchor_time, anchor_sample) = d.display.smooth_ref;
-        d.display.smooth_display_samp = anchor_sample
-            + anchor_time.elapsed().as_secs_f64() * d.audio.sample_rate as f64 * speed;
+        // Integrate the measured frame interval. Each interval is frame_start minus the
+        // previous frame_start, so the sum telescopes to exact wall time — sleep jitter
+        // cannot compound. Adding to the running value (rather than recomputing from an
+        // anchor) lets the drift damper below accumulate frame to frame.
+        d.display.smooth_display_samp += elapsed_uncapped * d.audio.sample_rate as f64 * speed;
     } else if d.nudge != 0 {
         // Paused with warp nudge: drift display and sync actual audio position for scrubbing.
         d.display.smooth_display_samp = (d.display.smooth_display_samp
@@ -2138,14 +2130,11 @@ fn service_deck_frame(
         } else {
             display_pos_samp as f64
         };
-        // Re-anchor so the absolute-reference path continues from the corrected position.
-        d.display.smooth_ref = (Instant::now(), d.display.smooth_display_samp);
     } else if !d.audio.player.is_paused() {
-        // With elapsed-advance removing steady-state lag, residual drift is sub-ppm system-clock
-        // vs. audio-clock skew — far below the 0.3s snap threshold. A large correction factor
-        // amplifies audio-device step noise into visible rounding flicker; 0.002 damps it away.
-        // Both absolute-factor tuning and zoom-relative reframings have been tested across
-        // log-spaced ranges and produced no visible difference — 0.002 is effectively optimal.
+        // The correction persists: the integration above adds to the running value rather than
+        // recomputing it, so damping accumulates and system-clock vs audio-clock skew settles
+        // at rate × skew / (0.002 × fps) — well under a millisecond at typical ppm-level skew.
+        // A larger factor would amplify audio-device batch-read noise into visible flicker.
         d.display.smooth_display_samp -= drift * 0.002;
     }
 
