@@ -13,7 +13,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 PROJECT_NAME = "deck"
 
 _console = Console()
@@ -32,6 +32,7 @@ def main() -> None:
     remote_path = discover_remote_path(args.container, PROJECT_NAME)
     build_in_container(args.container, remote_path)
     binary = pull_binary(args.container, remote_path, PROJECT_NAME)
+    discard_local_config()
     launch(binary, args.app_args)
 
 
@@ -80,6 +81,12 @@ def pull_binary(container: str, remote_path: str, project_name: str) -> Path:
         sys.exit(result.returncode)
     local_binary.chmod(0o755)
     return local_binary
+
+
+def discard_local_config() -> None:
+    # A stale config.toml silently overlays old keybindings onto a new build's
+    # defaults; the launched binary recreates the file from its embedded config.
+    Path("config.toml").unlink(missing_ok=True)
 
 
 def launch(binary: Path, app_args: list[str]) -> None:

@@ -47,7 +47,7 @@ use deck::{
 use render::{
     extract_tick_viewport, halfblock_art, info_line_empty, DEFAULT_ZOOM_IDX,
     info_line_for_deck, notification_line_empty, notification_line_for_deck,
-    overview_empty, overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
+    overview_empty, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
     render_keyboard_help, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
@@ -453,6 +453,7 @@ fn tui_loop(
         if global_notification.as_ref().map_or(false, |n| frame_start >= n.expires) {
             global_notification = None;
         }
+        cache.flush_if_idle();
         // Complete any pending loads.
         for slot in 0..3 {
             if pending_loads[slot].is_none() { continue; }
@@ -701,11 +702,11 @@ fn tui_loop(
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_a);
                 let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_a.width, vinyl_mode);
                 frame.render_widget(Paragraph::new(info), area_info_a);
-                let (ov, bar_cols, bar_times) = overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                deck.display.overview_rect  = area_overview_a;
-                deck.display.last_bar_cols  = bar_cols;
-                deck.display.last_bar_times = bar_times;
-                frame.render_widget(Paragraph::new(ov), area_overview_a);
+                deck.display.overview_rect = area_overview_a;
+                refresh_overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                if let Some(ref cached) = deck.display.overview_cache {
+                    frame.render_widget(&cached.paragraph, area_overview_a);
+                }
                 render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
                 let num1_style = if selected_deck == 0 { Style::default().fg(Color::Yellow) } else { label_style };
@@ -730,11 +731,11 @@ fn tui_loop(
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_b);
                 let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_b.width, vinyl_mode);
                 frame.render_widget(Paragraph::new(info), area_info_b);
-                let (ov, bar_cols, bar_times) = overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                deck.display.overview_rect  = area_overview_b;
-                deck.display.last_bar_cols  = bar_cols;
-                deck.display.last_bar_times = bar_times;
-                frame.render_widget(Paragraph::new(ov), area_overview_b);
+                deck.display.overview_rect = area_overview_b;
+                refresh_overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                if let Some(ref cached) = deck.display.overview_cache {
+                    frame.render_widget(&cached.paragraph, area_overview_b);
+                }
                 render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
                 let num2_style = if selected_deck == 1 { Style::default().fg(Color::Yellow) } else { label_style };
@@ -763,10 +764,10 @@ fn tui_loop(
                 if deck.loop_state.active {
                     render_loop_panels(frame, deck, area_overview_c, rs.display_pos_samp, deck.display.palette);
                 } else {
-                    let (ov, bar_cols, bar_times) = overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                    deck.display.last_bar_cols  = bar_cols;
-                    deck.display.last_bar_times = bar_times;
-                    frame.render_widget(Paragraph::new(ov), area_overview_c);
+                    refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    if let Some(ref cached) = deck.display.overview_cache {
+                        frame.render_widget(&cached.paragraph, area_overview_c);
+                    }
                 }
                 render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
@@ -863,13 +864,13 @@ fn tui_loop(
                             let a = art_areas[panel_idx];
                             let cached = deck.cover_art_cache.get_or_insert_with(|| {
                                 (a.width, a.height, art_bright_idx,
-                                 halfblock_art(bytes, a.width, a.height, brightness))
+                                 Paragraph::new(halfblock_art(bytes, a.width, a.height, brightness)))
                             });
                             if cached.0 != a.width || cached.1 != a.height || cached.2 != art_bright_idx {
                                 *cached = (a.width, a.height, art_bright_idx,
-                                           halfblock_art(bytes, a.width, a.height, brightness));
+                                           Paragraph::new(halfblock_art(bytes, a.width, a.height, brightness)));
                             }
-                            frame.render_widget(Paragraph::new(cached.3.clone()), a);
+                            frame.render_widget(&cached.3, a);
                         }
                     }
                 }
@@ -1135,14 +1136,12 @@ fn tui_loop(
                         Some(BrowserResult::ReturnToPlayer) => {
                             *browser_dir = bs.cwd.clone();
                             cache.set_last_browser_path(browser_dir);
-                            cache.save();
                             browser_state = None;
                             preview_output = None;
                         }
                         Some(BrowserResult::Selected(path)) => {
                             *browser_dir = bs.cwd.clone();
                             cache.set_last_browser_path(browser_dir);
-                            cache.save();
                             if let Some(ref d) = decks[target] { d.audio.player.stop(); }
                             decks[target] = None;
                             pending_loads[target] = Some(start_load(&path));
@@ -1151,11 +1150,9 @@ fn tui_loop(
                         }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             cache.set_workspace(&path);
-                            cache.save();
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
-                            cache.browser_workspace = None;
-                            cache.save();
+                            cache.clear_workspace();
                         }
                         Some(BrowserResult::Quit) => {
                             *browser_dir = bs.cwd.clone();
@@ -1312,7 +1309,6 @@ fn tui_loop(
                         anchor_beat_grid_to_cue(d);
                         if let Some(ref hash) = d.tempo.analysis_hash {
                             cache.set(hash.clone(), cache_entry_for_deck(d));
-                            cache.save();
                         }
                     }
                 }
@@ -1383,7 +1379,6 @@ fn tui_loop(
                                     shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
                                     d.tempo.offset_established = true;
                                     cache.set(hash.clone(), cache_entry_for_deck(d));
-                                    cache.save();
                                     d.tempo.analysis_hash = Some(hash);
                                 }
                                 // Any key dismisses the confirmation.
@@ -1564,7 +1559,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1574,7 +1568,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1584,7 +1577,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1594,7 +1586,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1604,7 +1595,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1614,7 +1604,6 @@ fn tui_loop(
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                 cache.set(hash.clone(), cache_entry_for_deck(d));
-                                cache.save();
                             }
                         }
                     }
@@ -1717,17 +1706,14 @@ fn tui_loop(
                             }
                         }
                         cache.set_vinyl_mode(vinyl_mode);
-                        cache.save();
                     }
                     Some(Action::LatencyDecrease)  => {
                         audio_latency_ms = (audio_latency_ms - 10).max(0);
                         cache.set_latency(audio_latency_ms);
-                        cache.save();
                     }
                     Some(Action::LatencyIncrease)  => {
                         audio_latency_ms = (audio_latency_ms + 10).min(250);
                         cache.set_latency(audio_latency_ms);
-                        cache.save();
                     }
                     Some(Action::FpsIncrease) => {
                         if let Some(pos) = FPS_LEVELS.iter().position(|&l| l == target_fps) {
@@ -1771,7 +1757,6 @@ fn tui_loop(
                     Some(Action::ArtCycle) => {
                         art_bright_idx = [2u8, 0, 1][art_bright_idx as usize]; // dim→bright→off→dim
                         cache.set_art_bright_idx(art_bright_idx);
-                        cache.save();
                     }
                     Some(Action::OffsetIncrease) => {
                         if !vinyl_mode { if let Some(ref mut d) = decks[selected_deck] { apply_offset_step(d, 5); } }
@@ -1928,7 +1913,6 @@ fn tui_loop(
                                 anchor_beat_grid_to_cue(d);
                                 if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                     cache.set(hash.clone(), cache_entry_for_deck(d));
-                                    cache.save();
                                 }
                             }
                         }
@@ -2047,7 +2031,6 @@ fn service_deck_frame(
                 }
             }
             cache.set(hash.clone(), cache_entry_for_deck(d));
-            cache.save();
             d.tempo.analysis_hash      = Some(hash);
             if !is_fresh || d.tempo.redetecting { d.tempo.bpm_established = true; }
             d.tempo.redetecting        = false;
@@ -2096,10 +2079,10 @@ fn service_deck_frame(
             .clamp(0.0, total_mono_samps as f64);
         d.audio.seek_handle.set_position(d.display.smooth_display_samp / d.audio.sample_rate as f64);
         // Fire a scrub snippet once per half-column advance.
-        let scrub_spc = if slot == 0 {
-            shared_renderer.shared_a.lock().unwrap().samples_per_col
-        } else {
-            shared_renderer.shared_b.lock().unwrap().samples_per_col
+        let scrub_spc = match slot {
+            0 => shared_renderer.shared_a.lock().unwrap().samples_per_col,
+            1 => shared_renderer.shared_b.lock().unwrap().samples_per_col,
+            _ => shared_renderer.shared_c.lock().unwrap().samples_per_col,
         };
         let half_samples_per_col = (scrub_spc / 2).max(1);
         if scrub_spc > 0
@@ -2116,9 +2099,10 @@ fn service_deck_frame(
     let display_pos_samp = d.audio.seek_handle.output_position.load(Ordering::Relaxed)
         / d.audio.seek_handle.channels as usize;
     let drift = d.display.smooth_display_samp - display_pos_samp as f64;
-    // 0.3s: above typical accumulated drift on a loaded system but below a single beat at any
-    // practical BPM (a beat at 120 BPM is 0.5s). Lower thresholds trigger snap during normal drift.
-    let large_drift = drift.abs() > d.audio.sample_rate as f64 * 0.3;
+    // 0.1s: far above damper steady-state drift and audio batch-read noise (< ~25 ms), but
+    // below the smallest deliberate seek (a 1-beat jump at 240 BPM is 0.25 s), so every seek
+    // snaps immediately instead of gliding in through the damper.
+    let large_drift = drift.abs() > d.audio.sample_rate as f64 * 0.1;
     let paused_snap  = d.audio.player.is_paused() && d.nudge == 0 && drift.abs() > 1.0;
     if large_drift || paused_snap {
         // Snap to nearest half-column so sub_col is stable after seeks.
@@ -2170,7 +2154,6 @@ fn service_deck_frame(
         shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
         if let Some(ref hash) = d.tempo.analysis_hash {
             cache.set(hash.clone(), cache_entry_for_deck(d));
-            cache.save();
         }
     }
     d.tap.was_tap_active = tap_active_now;

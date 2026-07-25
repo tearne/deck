@@ -78,6 +78,29 @@ pub(crate) struct LoopState {
     pub(crate) end_sample: usize,
 }
 
+/// Everything the rendered overview depends on. The overview is rebuilt only
+/// when this key changes — a few times per second (playhead column, flash
+/// states) rather than at frame rate.
+#[derive(PartialEq)]
+pub(crate) struct OverviewKey {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) playhead_col: usize,
+    pub(crate) cue_col: Option<usize>,
+    pub(crate) analysing: bool,
+    pub(crate) warning_active: bool,
+    pub(crate) warn_beat_on: bool,
+    pub(crate) gain_db: i8,
+    pub(crate) base_bpm_bits: u32,
+    pub(crate) offset_ms: i64,
+    pub(crate) palette: SpecPalette,
+}
+
+pub(crate) struct OverviewCache {
+    pub(crate) key: OverviewKey,
+    pub(crate) paragraph: ratatui::widgets::Paragraph<'static>,
+}
+
 pub(crate) struct DisplayState {
     pub(crate) smooth_display_samp: f64,
     pub(crate) last_scrub_samp: f64,
@@ -86,6 +109,7 @@ pub(crate) struct DisplayState {
     pub(crate) last_bar_cols: Vec<usize>,
     pub(crate) last_bar_times: Vec<f64>,
     pub(crate) palette: SpecPalette,
+    pub(crate) overview_cache: Option<OverviewCache>,
 }
 
 pub(crate) struct SpectrumState {
@@ -161,7 +185,7 @@ pub(crate) struct Deck {
     pub(crate) rename_accepted: Option<String>,
     pub(crate) tag_editor: Option<TagEditorState>,
     pub(crate) cover_art: Option<Vec<u8>>,
-    pub(crate) cover_art_cache: Option<(u16, u16, u8, Vec<ratatui::text::Line<'static>>)>, // (cols, rows, bright_idx, lines)
+    pub(crate) cover_art_cache: Option<(u16, u16, u8, ratatui::widgets::Paragraph<'static>)>, // (cols, rows, bright_idx, rendered art)
 
     pub(crate) audio: DeckAudio,
     pub(crate) mixer: Mixer,
@@ -242,6 +266,7 @@ impl Deck {
                 last_bar_cols: Vec::new(),
                 last_bar_times: Vec::new(),
                 palette: PALETTE_SCHEMES[0].1, // corrected to slot-specific palette on load
+                overview_cache: None,
             },
             spectrum: SpectrumState {
                 chars: ['\u{2800}'; 16],

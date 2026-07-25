@@ -153,6 +153,8 @@ Bass ratio computed per column from mono sample data within that column's sample
 
 Interpolation is linear between adjacent stops, with brightness scaling that normalises to max channel = 255 to preserve saturation at all brightness levels.
 
+At render time the bass ratio is quantised to 32 levels through a per-palette lookup table — the underlying data keeps full precision, but adjacent columns land on shared colours, so their escape sequences merge into runs and terminal output drops several-fold at no visible cost.
+
 
 # Overview Waveform
 
@@ -229,7 +231,8 @@ A pre-rendered waveform image, much wider than the screen, computed in the backg
 
 - Buffer width: 5x screen width in columns.
 - Background thread: OS thread with 8ms sleep per iteration (~125Hz).
-- Recompute trigger: playhead drifts past 75% of buffer width, or zoom/BPM/track/window changes.
+- Recompute triggers are per deck: playhead drift past 75% of buffer width, track load, and parameter changes (BPM, offset, cue, gain, loop) rebuild only that deck's buffer; resize and zoom rebuild all three.
+- Rebuilds triggered by operator-adjusted values (BPM, offset, gain, loop bounds, speed) wait until the value has been stable for ~50 ms, so a key-repeat burst causes one rebuild when the hold ends rather than one per repeat; drift, resize, zoom, and load rebuild immediately.
 - Buffer content: 2D grid of braille characters (each char is a 2x4 dot matrix). One column = one sample range determined by zoom level.
 - Buffer swap: computed into a new buffer, then swapped in under a mutex. The mutex is held only for the pointer swap, not during computation.
 
@@ -264,7 +267,7 @@ When the displayed position diverges too far from the audio's true output positi
 
 **Detail**
 
-- While playing, the threshold is 0.3 s — above typical steady-state drift but below a single beat at any practical BPM.
+- While playing, the threshold is 0.1 s — far above steady-state drift and audio-batch noise (sub-millisecond and ~25 ms respectively since the drift damper fix), while catching short seeks like a 1-beat jump at high BPM that the old 0.3 s threshold left to crawl in via partial correction.
 - While paused and not nudging, the threshold tightens to a single sample — without motion to mask it, any gap is obvious.
 - After the snap, the display position is rounded to the nearest half-column.
 
@@ -667,7 +670,7 @@ A single JSON file (`~/.config/deck/cache.json`) that lets the player do expensi
 
 **Detail**
 
-- Per-track entries are saved immediately on change; global state on change and on quit. Keys the app didn't touch are never rewritten.
+- Mutation marks the cache dirty; one flush runs after the cache has been idle for ~1 s, and quit always flushes — so a crash can lose at most the last second of trims. Keys the app didn't touch are never rewritten.
 
 
 # Album Art

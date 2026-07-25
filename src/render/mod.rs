@@ -20,6 +20,32 @@ pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
 /// The interpolated colour is normalised so its dominant channel is always 255 before
 /// brightness is applied — this preserves full saturation at all bass ratios and ensures
 /// the hue is clearly identifiable even at low brightness.
+/// Spectral palette quantised to 32 levels. Adjacent columns whose smoothed bass
+/// ratios land on the same level share an identical `Color`, so run-length span
+/// merging collapses them into one styled span — one SGR sequence instead of one
+/// per column. 32 levels are indistinguishable from the continuous gradient at
+/// the box-smoothed rate the bass ratio actually changes.
+pub(crate) const SPECTRAL_LEVELS: usize = 32;
+
+pub(crate) struct SpectralLut {
+    colors: [ratatui::style::Color; SPECTRAL_LEVELS],
+}
+
+impl SpectralLut {
+    pub(crate) fn new(pal: SpecPalette, brightness: f32) -> Self {
+        Self {
+            colors: std::array::from_fn(|i| {
+                spectral_color(pal, i as f32 / (SPECTRAL_LEVELS - 1) as f32, brightness)
+            }),
+        }
+    }
+
+    pub(crate) fn color(&self, bass: f32) -> ratatui::style::Color {
+        let idx = (bass.clamp(0.0, 1.0) * (SPECTRAL_LEVELS - 1) as f32).round() as usize;
+        self.colors[idx.min(SPECTRAL_LEVELS - 1)]
+    }
+}
+
 pub(crate) fn spectral_color(pal: SpecPalette, bass: f32, brightness: f32) -> ratatui::style::Color {
     let stops = [pal.0, pal.1, pal.2, pal.3];
     let t = (bass * 3.0).clamp(0.0, 3.0);
@@ -47,7 +73,7 @@ pub(crate) struct BrailleBuffer {
     pub(crate) bass_ratio:      Vec<f32>,     // per-column bass ratio in [0,1]: 1=bass, 0=treble
     pub(crate) tick:            Vec<u8>,      // per-column tick byte: 0x47=left sub-col, 0xB8=right, 0=none
     pub(crate) cue_buf_col:     Option<usize>,// buffer column of cue point, None if unset or out of range
-    pub(crate) buf_cols:        usize,        // total buffer width (= 3 × screen_cols)
+    pub(crate) buf_cols:        usize,        // total buffer width (= 5 × screen_cols)
     pub(crate) anchor_sample:   usize,        // mono-sample index at the buffer centre
     pub(crate) samples_per_col: usize,        // mono samples represented by each buffer column
 }
@@ -210,33 +236,55 @@ impl SharedDetailRenderer {
             let shared_c_bg  = Arc::clone(&shared_c);
             let stop_bg      = Arc::clone(&stop);
             thread::spawn(move || {
-                let mut last_cols       = 0usize;
-                let mut last_rows       = 0usize;
-                let mut last_zoom       = usize::MAX;
-                let mut last_col_samp_a = 0usize;
-                let mut last_col_samp_b = 0usize;
-                let mut last_col_samp_c = 0usize;
-                let mut last_anchor_a   = 0usize;
-                let mut last_anchor_b   = 0usize;
-                let mut last_anchor_c   = 0usize;
-                let mut last_gen_a      = usize::MAX;
-                let mut last_gen_b      = usize::MAX;
-                let mut last_gen_c      = usize::MAX;
-                let mut last_bpm_a: u32  = 0;
-                let mut last_bpm_b: u32  = 0;
-                let mut last_bpm_c: u32  = 0;
-                let mut last_off_a: i64  = 0;
-                let mut last_off_b: i64  = 0;
-                let mut last_off_c: i64  = 0;
-                let mut last_cue_a: i64  = -1;
-                let mut last_cue_b: i64  = -1;
-                let mut last_cue_c: i64  = -1;
-                let mut last_gain_a: u32 = 1.0f32.to_bits();
-                let mut last_gain_b: u32 = 1.0f32.to_bits();
-                let mut last_gain_c: u32 = 1.0f32.to_bits();
-                let mut last_loop_active_c = false;
-                let mut last_loop_start_c: usize = 0;
-                let mut last_loop_end_c:   usize = 0;
+                let sr_at   = [sr_a_bg, sr_b_bg, sr_c_bg];
+                let ratio   = [ratio_a_bg, ratio_b_bg, ratio_c_bg];
+                let wf      = [wf_a_bg, wf_b_bg, wf_c_bg];
+                let pos_at  = [pos_a_bg, pos_b_bg, pos_c_bg];
+                let ch_at   = [ch_a_bg, ch_b_bg, ch_c_bg];
+                let gen_at  = [gen_a_bg, gen_b_bg, gen_c_bg];
+                let bpm_at  = [bpm_a_bg, bpm_b_bg, bpm_c_bg];
+                let off_at  = [off_ms_a_bg, off_ms_b_bg, off_ms_c_bg];
+                let cue_at  = [cue_a_bg, cue_b_bg, cue_c_bg];
+                let gain_at = [gain_a_bg, gain_b_bg, gain_c_bg];
+                let shared  = [shared_a_bg, shared_b_bg, shared_c_bg];
+
+                /// The rebuild inputs a slot's buffer content is a pure function of
+                /// (besides dimensions, zoom, and the playhead anchor).
+                #[derive(Clone, Copy, PartialEq)]
+                struct SlotParams {
+                    col_samp: usize,
+                    bpm_raw:  u32,
+                    off_ms:   i64,
+                    cue_raw:  i64,
+                    gain_raw: u32,
+                    loop_bounds: Option<(usize, usize)>,
+                }
+
+                fn compute_cue_buf_col(cue_raw: i64, anchor: usize, col_samp: usize, buf_cols: usize) -> Option<usize> {
+                    if cue_raw < 0 || col_samp == 0 { return None; }
+                    let delta = cue_raw - anchor as i64;
+                    let col = buf_cols as i64 / 2 + delta.div_euclid(col_samp as i64);
+                    if col >= 0 && (col as usize) < buf_cols { Some(col as usize) } else { None }
+                }
+                fn scale_peaks(peaks: Vec<(f32, f32)>, g: f32) -> Vec<(f32, f32)> {
+                    peaks.into_iter().map(|(mn, mx)| (mn * g, mx * g)).collect()
+                }
+
+                // Parameter-driven rebuilds wait for the inputs to sit still, so a held
+                // key repeating at ~30 Hz produces one rebuild after the hold instead of
+                // a rebuild storm for its duration. Drift, resize, zoom, and track load
+                // rebuild immediately.
+                const SETTLE: Duration = Duration::from_millis(50);
+
+                let mut last_cols = 0usize;
+                let mut last_rows = 0usize;
+                let mut last_zoom = usize::MAX;
+                let mut last_gen: [usize; 3] = [usize::MAX; 3];
+                // Params and anchor of each slot's live buffer, None before first build.
+                let mut built: [Option<SlotParams>; 3] = [None; 3];
+                let mut built_anchor: [usize; 3] = [0; 3];
+                // Most recently observed params and when they were first seen unchanged.
+                let mut seen: [Option<(SlotParams, std::time::Instant)>; 3] = [None, None, None];
 
                 loop {
                     if stop_bg.load(Ordering::Relaxed) { break; }
@@ -250,181 +298,75 @@ impl SharedDetailRenderer {
 
                     let zoom      = zoom_bg.load(Ordering::Relaxed).min(ZOOM_LEVELS.len() - 1);
                     let zoom_secs = ZOOM_LEVELS[zoom] as f64;
-                    let sr_a      = sr_a_bg.load(Ordering::Relaxed);
-                    let sr_b      = sr_b_bg.load(Ordering::Relaxed);
-                    let sr_c      = sr_c_bg.load(Ordering::Relaxed);
-                    let ratio_a   = ratio_a_bg.load(Ordering::Relaxed) as f64 / 65536.0;
-                    let ratio_b   = ratio_b_bg.load(Ordering::Relaxed) as f64 / 65536.0;
-                    let ratio_c   = ratio_c_bg.load(Ordering::Relaxed) as f64 / 65536.0;
-                    // col_samp scaled by speed ratio so column grid is in playback-time space.
-                    let col_samp_a = ((zoom_secs * sr_a as f64 * ratio_a) as usize / cols).max(1);
-                    let col_samp_b = ((zoom_secs * sr_b as f64 * ratio_b) as usize / cols).max(1);
-                    let col_samp_c = ((zoom_secs * sr_c as f64 * ratio_c) as usize / cols).max(1);
+                    let shared_changed = cols != last_cols || rows != last_rows || zoom != last_zoom;
+                    let buf_cols = cols * 5;
 
-                    let ch_a   = ch_a_bg.load(Ordering::Relaxed).max(1);
-                    let ch_b   = ch_b_bg.load(Ordering::Relaxed).max(1);
-                    let ch_c   = ch_c_bg.load(Ordering::Relaxed).max(1);
-                    let pos_a  = pos_a_bg.load(Ordering::Relaxed) / ch_a;
-                    let pos_b  = pos_b_bg.load(Ordering::Relaxed) / ch_b;
-                    let pos_c  = pos_c_bg.load(Ordering::Relaxed) / ch_c;
-
-                    let drift_a = if last_col_samp_a > 0 {
-                        pos_a.abs_diff(last_anchor_a) / last_col_samp_a
-                    } else { usize::MAX };
-                    let drift_b = if last_col_samp_b > 0 {
-                        pos_b.abs_diff(last_anchor_b) / last_col_samp_b
-                    } else { usize::MAX };
-                    let drift_c = if last_col_samp_c > 0 {
-                        pos_c.abs_diff(last_anchor_c) / last_col_samp_c
-                    } else { usize::MAX };
-
-                    let gen_a     = gen_a_bg.load(Ordering::Relaxed);
-                    let gen_b     = gen_b_bg.load(Ordering::Relaxed);
-                    let gen_c     = gen_c_bg.load(Ordering::Relaxed);
-                    let bpm_a_raw = bpm_a_bg.load(Ordering::Relaxed);
-                    let bpm_b_raw = bpm_b_bg.load(Ordering::Relaxed);
-                    let bpm_c_raw = bpm_c_bg.load(Ordering::Relaxed);
-                    let off_ms_a  = off_ms_a_bg.load(Ordering::Relaxed);
-                    let off_ms_b  = off_ms_b_bg.load(Ordering::Relaxed);
-                    let off_ms_c  = off_ms_c_bg.load(Ordering::Relaxed);
-                    let cue_raw_a  = cue_a_bg.load(Ordering::Relaxed);
-                    let cue_raw_b  = cue_b_bg.load(Ordering::Relaxed);
-                    let cue_raw_c  = cue_c_bg.load(Ordering::Relaxed);
-                    let gain_raw_a = gain_a_bg.load(Ordering::Relaxed);
-                    let gain_raw_b = gain_b_bg.load(Ordering::Relaxed);
-                    let gain_raw_c = gain_c_bg.load(Ordering::Relaxed);
-                    let loop_active_c_now = loop_active_c_bg.load(Ordering::Relaxed);
-                    let loop_start_c_now  = loop_start_c_bg.load(Ordering::Relaxed);
-                    let loop_end_c_now    = loop_end_c_bg.load(Ordering::Relaxed);
-                    let must_recompute = cols != last_cols
-                        || rows != last_rows
-                        || zoom != last_zoom
-                        || col_samp_a != last_col_samp_a
-                        || col_samp_b != last_col_samp_b
-                        || col_samp_c != last_col_samp_c
-                        || drift_a >= cols * 3 / 4
-                        || drift_b >= cols * 3 / 4
-                        || drift_c >= cols * 3 / 4
-                        || gen_a != last_gen_a
-                        || gen_b != last_gen_b
-                        || gen_c != last_gen_c
-                        || bpm_a_raw != last_bpm_a
-                        || bpm_b_raw != last_bpm_b
-                        || bpm_c_raw != last_bpm_c
-                        || off_ms_a != last_off_a
-                        || off_ms_b != last_off_b
-                        || off_ms_c != last_off_c
-                        || cue_raw_a != last_cue_a
-                        || cue_raw_b != last_cue_b
-                        || cue_raw_c != last_cue_c
-                        || gain_raw_a != last_gain_a
-                        || gain_raw_b != last_gain_b
-                        || gain_raw_c != last_gain_c
-                        || loop_active_c_now != last_loop_active_c
-                        || loop_start_c_now  != last_loop_start_c
-                        || loop_end_c_now    != last_loop_end_c;
-
-                    if must_recompute {
-                        let buf_cols = cols * 5;
-
-                        let wf_a: Option<Arc<WaveformData>> = wf_a_bg.lock().unwrap().clone();
-                        let wf_b: Option<Arc<WaveformData>> = wf_b_bg.lock().unwrap().clone();
-                        let wf_c: Option<Arc<WaveformData>> = wf_c_bg.lock().unwrap().clone();
-
-                        let anchor_a = (pos_a / col_samp_a) * col_samp_a;
-                        let anchor_b = (pos_b / col_samp_b) * col_samp_b;
-                        let anchor_c = (pos_c / col_samp_c) * col_samp_c;
-
-                        let tick_view_start_a = anchor_a as f64 - (buf_cols / 2) as f64 * col_samp_a as f64;
-                        let tick_view_start_b = anchor_b as f64 - (buf_cols / 2) as f64 * col_samp_b as f64;
-                        let tick_view_start_c = anchor_c as f64 - (buf_cols / 2) as f64 * col_samp_c as f64;
-                        let compute_cue_buf_col = |cue_raw: i64, anchor: usize, col_samp: usize| -> Option<usize> {
-                            if cue_raw < 0 || col_samp == 0 { return None; }
-                            let delta = cue_raw - anchor as i64;
-                            let col = buf_cols as i64 / 2 + delta.div_euclid(col_samp as i64);
-                            if col >= 0 && (col as usize) < buf_cols { Some(col as usize) } else { None }
-                        };
-                        let gain_a = f32::from_bits(gain_raw_a);
-                        let gain_b = f32::from_bits(gain_raw_b);
-                        let gain_c = f32::from_bits(gain_raw_c);
-                        let scale_peaks = |peaks: Vec<(f32, f32)>, g: f32| -> Vec<(f32, f32)> {
-                            peaks.into_iter().map(|(mn, mx)| (mn * g, mx * g)).collect()
-                        };
-                        let buf_a = Arc::new(BrailleBuffer {
-                            grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_a, anchor_a, col_samp_a, buf_cols, None), gain_a),
-                                rows, buf_cols,
-                            ),
-                            bass_ratio:      spectral_for_slot(&wf_a, anchor_a, col_samp_a, buf_cols, sr_a as u32),
-                            tick:            compute_tick_display(buf_cols, col_samp_a, tick_view_start_a,
-                                                 bpm_a_raw == 0, f32::from_bits(bpm_a_raw), sr_a as u32, off_ms_a),
-                            cue_buf_col:     compute_cue_buf_col(cue_raw_a, anchor_a, col_samp_a),
-                            buf_cols,
-                            anchor_sample:   anchor_a,
-                            samples_per_col: col_samp_a,
-                        });
-                        let buf_b = Arc::new(BrailleBuffer {
-                            grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_b, anchor_b, col_samp_b, buf_cols, None), gain_b),
-                                rows, buf_cols,
-                            ),
-                            bass_ratio:      spectral_for_slot(&wf_b, anchor_b, col_samp_b, buf_cols, sr_b as u32),
-                            tick:            compute_tick_display(buf_cols, col_samp_b, tick_view_start_b,
-                                                 bpm_b_raw == 0, f32::from_bits(bpm_b_raw), sr_b as u32, off_ms_b),
-                            cue_buf_col:     compute_cue_buf_col(cue_raw_b, anchor_b, col_samp_b),
-                            buf_cols,
-                            anchor_sample:   anchor_b,
-                            samples_per_col: col_samp_b,
-                        });
-                        let loop_bounds_c = if loop_active_c_now && loop_end_c_now > loop_start_c_now {
-                            Some((loop_start_c_now, loop_end_c_now))
+                    for slot in 0..3 {
+                        let sr    = sr_at[slot].load(Ordering::Relaxed);
+                        let ratio = ratio[slot].load(Ordering::Relaxed) as f64 / 65536.0;
+                        // col_samp scaled by speed ratio so column grid is in playback-time space.
+                        let col_samp = ((zoom_secs * sr as f64 * ratio) as usize / cols).max(1);
+                        let ch  = ch_at[slot].load(Ordering::Relaxed).max(1);
+                        let pos = pos_at[slot].load(Ordering::Relaxed) / ch;
+                        let load_gen = gen_at[slot].load(Ordering::Relaxed);
+                        let loop_bounds = if slot == 2 && loop_active_c_bg.load(Ordering::Relaxed) {
+                            let (s, e) = (loop_start_c_bg.load(Ordering::Relaxed), loop_end_c_bg.load(Ordering::Relaxed));
+                            (e > s).then_some((s, e))
                         } else { None };
-                        let buf_c = Arc::new(BrailleBuffer {
+                        let params = SlotParams {
+                            col_samp,
+                            bpm_raw:  bpm_at[slot].load(Ordering::Relaxed),
+                            off_ms:   off_at[slot].load(Ordering::Relaxed),
+                            cue_raw:  cue_at[slot].load(Ordering::Relaxed),
+                            gain_raw: gain_at[slot].load(Ordering::Relaxed),
+                            loop_bounds,
+                        };
+
+                        let first_seen = match seen[slot] {
+                            Some((p, t)) if p == params => t,
+                            _ => {
+                                let now = std::time::Instant::now();
+                                seen[slot] = Some((params, now));
+                                now
+                            }
+                        };
+
+                        let drift_cols = match built[slot] {
+                            Some(bp) => pos.abs_diff(built_anchor[slot]) / bp.col_samp,
+                            None => usize::MAX,
+                        };
+                        let immediate = shared_changed
+                            || load_gen != last_gen[slot]
+                            || drift_cols >= cols * 3 / 4;
+                        let settled = built[slot] != Some(params) && first_seen.elapsed() >= SETTLE;
+                        if !immediate && !settled { continue; }
+
+                        let wf: Option<Arc<WaveformData>> = wf[slot].lock().unwrap().clone();
+                        let anchor = (pos / col_samp) * col_samp;
+                        let tick_view_start = anchor as f64 - (buf_cols / 2) as f64 * col_samp as f64;
+                        let gain = f32::from_bits(params.gain_raw);
+                        let buf = Arc::new(BrailleBuffer {
                             grid: render_braille(
-                                &scale_peaks(peaks_for_slot(&wf_c, anchor_c, col_samp_c, buf_cols, loop_bounds_c), gain_c),
+                                &scale_peaks(peaks_for_slot(&wf, anchor, col_samp, buf_cols, params.loop_bounds), gain),
                                 rows, buf_cols,
                             ),
-                            bass_ratio:      spectral_for_slot(&wf_c, anchor_c, col_samp_c, buf_cols, sr_c as u32),
-                            tick:            compute_tick_display(buf_cols, col_samp_c, tick_view_start_c,
-                                                 bpm_c_raw == 0, f32::from_bits(bpm_c_raw), sr_c as u32, off_ms_c),
-                            cue_buf_col:     compute_cue_buf_col(cue_raw_c, anchor_c, col_samp_c),
+                            bass_ratio:      spectral_for_slot(&wf, anchor, col_samp, buf_cols, sr as u32),
+                            tick:            compute_tick_display(buf_cols, col_samp, tick_view_start,
+                                                 params.bpm_raw == 0, f32::from_bits(params.bpm_raw), sr as u32, params.off_ms),
+                            cue_buf_col:     compute_cue_buf_col(params.cue_raw, anchor, col_samp, buf_cols),
                             buf_cols,
-                            anchor_sample:   anchor_c,
-                            samples_per_col: col_samp_c,
+                            anchor_sample:   anchor,
+                            samples_per_col: col_samp,
                         });
-
-                        *shared_a_bg.lock().unwrap() = buf_a;
-                        *shared_b_bg.lock().unwrap() = buf_b;
-                        *shared_c_bg.lock().unwrap() = buf_c;
-
-                        last_cols       = cols;
-                        last_rows       = rows;
-                        last_zoom       = zoom;
-                        last_col_samp_a = col_samp_a;
-                        last_col_samp_b = col_samp_b;
-                        last_col_samp_c = col_samp_c;
-                        last_anchor_a   = anchor_a;
-                        last_anchor_b   = anchor_b;
-                        last_anchor_c   = anchor_c;
-                        last_gen_a      = gen_a;
-                        last_gen_b      = gen_b;
-                        last_gen_c      = gen_c;
-                        last_bpm_a      = bpm_a_raw;
-                        last_bpm_b      = bpm_b_raw;
-                        last_bpm_c      = bpm_c_raw;
-                        last_off_a      = off_ms_a;
-                        last_off_b      = off_ms_b;
-                        last_off_c      = off_ms_c;
-                        last_cue_a      = cue_raw_a;
-                        last_cue_b      = cue_raw_b;
-                        last_cue_c      = cue_raw_c;
-                        last_gain_a     = gain_raw_a;
-                        last_gain_b     = gain_raw_b;
-                        last_gain_c     = gain_raw_c;
-                        last_loop_active_c = loop_active_c_now;
-                        last_loop_start_c  = loop_start_c_now;
-                        last_loop_end_c    = loop_end_c_now;
+                        *shared[slot].lock().unwrap() = buf;
+                        built[slot] = Some(params);
+                        built_anchor[slot] = anchor;
+                        last_gen[slot] = load_gen;
                     }
+
+                    last_cols = cols;
+                    last_rows = rows;
+                    last_zoom = zoom;
 
                     thread::sleep(Duration::from_millis(8));
                 }
@@ -924,17 +866,20 @@ pub(crate) fn info_line_empty(bar_width: u16) -> Line<'static> {
     Line::from(vec![left, Span::raw(spacer), right])
 }
 
-pub(crate) fn overview_for_deck(
-    deck: &Deck,
+/// Rebuild the deck's overview if any input it depends on has changed, storing the
+/// result (and the bar columns/times used by needle drop) on the deck. Most frames
+/// this is a key comparison and nothing else — the playhead column moves every few
+/// seconds, the flash states a few times per second.
+pub(crate) fn refresh_overview_for_deck(
+    deck: &mut Deck,
     rect: ratatui::layout::Rect,
     display_samp: f64,
     analysing: bool,
     warning_active: bool,
     warn_beat_on: bool,
-) -> (Vec<Line<'static>>, Vec<usize>, Vec<f64>) {
+) {
+    use crate::deck::{OverviewCache, OverviewKey};
     let overview_width  = rect.width  as usize;
-    let overview_height = rect.height as usize;
-    let total_peaks = deck.audio.waveform.peaks.len();
     let playhead_frac = if deck.total_duration == 0.0 {
         0.0
     } else {
@@ -948,6 +893,41 @@ pub(crate) fn overview_for_deck(
         ((frac * overview_width as f64).round() as usize)
             .min(overview_width.saturating_sub(1))
     });
+    let key = OverviewKey {
+        width: overview_width,
+        height: rect.height as usize,
+        playhead_col,
+        cue_col,
+        analysing,
+        warning_active,
+        warn_beat_on,
+        gain_db: deck.mixer.gain_db,
+        base_bpm_bits: deck.tempo.base_bpm.to_bits(),
+        offset_ms: deck.tempo.offset_ms,
+        palette: deck.display.palette,
+    };
+    if deck.display.overview_cache.as_ref().map_or(false, |c| c.key == key) {
+        return;
+    }
+    let (lines, bar_cols, bar_times) =
+        overview_lines(deck, rect, playhead_col, cue_col, analysing, warning_active, warn_beat_on);
+    deck.display.last_bar_cols  = bar_cols;
+    deck.display.last_bar_times = bar_times;
+    deck.display.overview_cache = Some(OverviewCache { key, paragraph: Paragraph::new(lines) });
+}
+
+fn overview_lines(
+    deck: &Deck,
+    rect: ratatui::layout::Rect,
+    playhead_col: usize,
+    cue_col: Option<usize>,
+    analysing: bool,
+    warning_active: bool,
+    warn_beat_on: bool,
+) -> (Vec<Line<'static>>, Vec<usize>, Vec<f64>) {
+    let overview_width  = rect.width  as usize;
+    let overview_height = rect.height as usize;
+    let total_peaks = deck.audio.waveform.peaks.len();
 
     let gain_linear = 10f32.powf(deck.mixer.gain_db as f32 / 20.0);
     let hires: Vec<((f32, f32), f32)> = (0..overview_width * 2)
@@ -978,6 +958,12 @@ pub(crate) fn overview_for_deck(
         String::new()
     };
     let legend_start = overview_width.saturating_sub(legend.len());
+    let is_bar_col = {
+        let mut mask = vec![false; overview_width];
+        for &c in &bar_cols { mask[c] = true; }
+        mask
+    };
+    let lut = SpectralLut::new(deck.display.palette, 0.8);
 
     let ov_lines: Vec<Line<'static>> = ov_braille
         .into_iter()
@@ -1000,7 +986,7 @@ pub(crate) fn overview_for_deck(
                     (Color::Rgb(255, 255, 255), '\u{28FF}')
                 } else if cue_col == Some(c) {
                     (Color::Rgb(255, 0, 255), '\u{28FF}')
-                } else if bar_cols.contains(&c) {
+                } else if is_bar_col[c] {
                     if warn_beat_on {
                         (Color::Rgb(120, 60, 60), '│')
                     } else if warning_active {
@@ -1009,8 +995,7 @@ pub(crate) fn overview_for_deck(
                         (Color::DarkGray, '│')
                     }
                 } else {
-                    let spectral = spectral_color(deck.display.palette, ov_bass[c], 0.8);
-                    (spectral, char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
+                    (lut.color(ov_bass[c]), char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
                 };
                 if color != run_color {
                     if !run.is_empty() {
@@ -1669,6 +1654,7 @@ pub(crate) fn render_detail_waveform(
     let centre_col = ((detail_width as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
         .clamp(0, detail_width.saturating_sub(1));
 
+    let lut = SpectralLut::new(palette, 1.0);
     let half_col_samp: f64 = buf.samples_per_col as f64 / 2.0;
     let mut sub_col = false;
     let viewport_start: Option<usize> = if buf.buf_cols >= detail_width && buf.samples_per_col > 0 {
@@ -1731,7 +1717,7 @@ pub(crate) fn render_detail_waveform(
             for (c, &byte) in row.iter().enumerate() {
                 let buf_col  = viewport_start.unwrap_or(0) + c;
                 let bass     = buf.bass_ratio.get(buf_col).copied().unwrap_or(0.5);
-                let spectral = spectral_color(palette, bass, 1.0);
+                let spectral = lut.color(bass);
                 let (color, ch) = if c == centre_col && cue_screen_col == Some(c) {
                     if is_edge_row {
                         (Color::Rgb(255, 0, 255), '\u{28FF}')

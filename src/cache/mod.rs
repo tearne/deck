@@ -72,7 +72,13 @@ pub(crate) struct Cache {
     pub(crate) vinyl_mode: bool,
     pub(crate) art_bright_idx: u8,
     pub(crate) entries: std::collections::HashMap<String, CacheEntry>,
+    /// Time of the most recent unsaved mutation; None when the file is up to date.
+    dirty_at: Option<std::time::Instant>,
 }
+
+/// How long the cache must sit untouched before the idle flush writes it out.
+/// Keeps serialisation and file IO off key-repeat paths (BPM ramp, gain hold).
+const SAVE_IDLE: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl Cache {
     pub(crate) fn load(path: std::path::PathBuf) -> Self {
@@ -97,7 +103,12 @@ impl Cache {
             vinyl_mode: file.vinyl_mode,
             art_bright_idx: file.art_bright_idx,
             entries: file.entries,
+            dirty_at: None,
         }
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty_at = Some(std::time::Instant::now());
     }
 
     pub(crate) fn get(&self, hash: &str) -> Option<&CacheEntry> {
@@ -106,6 +117,7 @@ impl Cache {
 
     pub(crate) fn set(&mut self, hash: String, entry: CacheEntry) {
         self.entries.insert(hash, entry);
+        self.mark_dirty();
     }
 
     pub(crate) fn last_browser_path(&self) -> Option<&std::path::Path> {
@@ -114,6 +126,7 @@ impl Cache {
 
     pub(crate) fn set_last_browser_path(&mut self, p: &std::path::Path) {
         self.last_browser_path = Some(p.to_path_buf());
+        self.mark_dirty();
     }
 
     pub(crate) fn workspace(&self) -> Option<&std::path::Path> {
@@ -122,6 +135,12 @@ impl Cache {
 
     pub(crate) fn set_workspace(&mut self, p: &std::path::Path) {
         self.browser_workspace = Some(p.to_path_buf());
+        self.mark_dirty();
+    }
+
+    pub(crate) fn clear_workspace(&mut self) {
+        self.browser_workspace = None;
+        self.mark_dirty();
     }
 
     pub(crate) fn get_latency(&self) -> i64 {
@@ -130,6 +149,7 @@ impl Cache {
 
     pub(crate) fn set_latency(&mut self, ms: i64) {
         self.audio_latency_ms = ms;
+        self.mark_dirty();
     }
 
     pub(crate) fn get_vinyl_mode(&self) -> bool {
@@ -138,6 +158,7 @@ impl Cache {
 
     pub(crate) fn set_vinyl_mode(&mut self, mode: bool) {
         self.vinyl_mode = mode;
+        self.mark_dirty();
     }
 
     pub(crate) fn get_art_bright_idx(&self) -> u8 {
@@ -146,10 +167,20 @@ impl Cache {
 
     pub(crate) fn set_art_bright_idx(&mut self, state: u8) {
         self.art_bright_idx = state;
+        self.mark_dirty();
     }
 
     pub(crate) fn entries_snapshot(&self) -> std::collections::HashMap<String, CacheEntry> {
         self.entries.clone()
+    }
+
+    /// Write the cache out if it has sat unmutated for `SAVE_IDLE`.
+    /// Called once per frame; a no-op while clean or while mutations are still arriving.
+    pub(crate) fn flush_if_idle(&mut self) {
+        if self.dirty_at.map_or(false, |t| t.elapsed() >= SAVE_IDLE) {
+            self.save();
+            self.dirty_at = None;
+        }
     }
 
     pub(crate) fn save(&self) {
