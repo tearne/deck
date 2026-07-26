@@ -13,7 +13,8 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement,
+    EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
@@ -132,6 +133,10 @@ fn main() {
         }
     };
 
+    // Warp nudge ends on key release, which only terminals speaking the kitty
+    // keyboard protocol can report — without it a warp would latch on forever.
+    let release_events_supported = supports_keyboard_enhancement().unwrap_or(false);
+
     // Load cache early so we can read last_browser_path before the browser opens.
     let cache_file = cache_path();
     let mut cache = Cache::load(cache_file);
@@ -179,7 +184,7 @@ fn main() {
         None
     };
 
-    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config, &mut recorder) {
+    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config, &mut recorder, release_events_supported) {
         cleanup_terminal();
         eprintln!("TUI error: {e}");
         std::process::exit(1);
@@ -354,6 +359,7 @@ fn tui_loop(
     mixer: &rodio::mixer::Mixer,
     use_local_config: bool,
     recorder: &mut Option<frame_stats::Recorder>,
+    release_events_supported: bool,
 ) -> io::Result<()> {
     // Per-deck display values computed each frame from current deck state.
     struct DeckRenderState {
@@ -669,12 +675,11 @@ fn tui_loop(
             }
 
             // Update tempo and cue state for background buffer rendering.
-            // In vinyl mode: suppress ticks (analysing=true) and cue column.
+            // In vinyl mode: suppress ticks (analysing=true); the cue column stays visible.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
                 let (base_bpm, offset_ms, analysing, cue_sample) = deck.map(|d| {
                     let analysing = vinyl_mode || d.tempo.analysis_hash.is_none() || !d.tempo.bpm_established;
-                    let cue = if vinyl_mode { None } else { d.cue_sample };
-                    (d.tempo.base_bpm, d.tempo.offset_ms, analysing, cue)
+                    (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
                 shared_renderer.store_cue(slot, cue_sample);
@@ -1213,13 +1218,21 @@ fn tui_loop(
                                 NudgeMode::Warp => NudgeMode::Jump,
                             })
                             .unwrap_or(NudgeMode::Jump);
-                        for slot in 0..3 {
-                            if let Some(ref mut d) = decks[slot] {
-                                if d.nudge != 0 {
-                                    d.nudge = 0;
-                                    d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+                        if new_mode == NudgeMode::Warp && !release_events_supported {
+                            global_notification = Some(Notification {
+                                message: "Warp nudge unavailable — terminal can't report key releases".to_string(),
+                                style: NotificationStyle::Error,
+                                expires: Instant::now() + NOTIFICATION_TIMEOUT,
+                            });
+                        } else {
+                            for slot in 0..3 {
+                                if let Some(ref mut d) = decks[slot] {
+                                    if d.nudge != 0 {
+                                        d.nudge = 0;
+                                        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+                                    }
+                                    d.nudge_mode = new_mode;
                                 }
-                                d.nudge_mode = new_mode;
                             }
                         }
                     }
@@ -1255,18 +1268,22 @@ fn tui_loop(
                             match d.nudge_mode {
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
-                                    let target = (current - 0.010).max(0.0);
-                                    let bump = (target - current) * d.audio.sample_rate as f64;
-                                    d.audio.seek_handle.set_position(target);
-                                    d.display.smooth_display_samp += bump;
                                     if d.audio.player.is_paused() {
+                                        let target = (current - 0.010).max(0.0);
+                                        d.audio.seek_handle.set_position(target);
+                                        d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
+                                    } else {
+                                        let bump_secs = d.audio.seek_handle.seek_relative_faded(-0.010, d.total_duration);
+                                        d.display.smooth_display_samp += bump_secs * d.audio.sample_rate as f64;
                                     }
                                 }
                                 NudgeMode::Warp => {
-                                    d.nudge = -1;
-                                    d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 0.9);
+                                    if release_events_supported {
+                                        d.nudge = -1;
+                                        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 0.9);
+                                    }
                                 }
                             }
                         }
@@ -1279,18 +1296,22 @@ fn tui_loop(
                             match d.nudge_mode {
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
-                                    let target = (current + 0.010).min(d.total_duration);
-                                    let bump = (target - current) * d.audio.sample_rate as f64;
-                                    d.audio.seek_handle.set_position(target);
-                                    d.display.smooth_display_samp += bump;
                                     if d.audio.player.is_paused() {
+                                        let target = (current + 0.010).min(d.total_duration);
+                                        d.audio.seek_handle.set_position(target);
+                                        d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
                                                     d.audio.sample_rate, d.display.smooth_display_samp as usize, scrub_spc);
+                                    } else {
+                                        let bump_secs = d.audio.seek_handle.seek_relative_faded(0.010, d.total_duration);
+                                        d.display.smooth_display_samp += bump_secs * d.audio.sample_rate as f64;
                                     }
                                 }
                                 NudgeMode::Warp => {
-                                    d.nudge = 1;
-                                    d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 1.1);
+                                    if release_events_supported {
+                                        d.nudge = 1;
+                                        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm * 1.1);
+                                    }
                                 }
                             }
                         }

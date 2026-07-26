@@ -293,10 +293,12 @@ impl SharedDetailRenderer {
                 }
 
                 // Parameter-driven rebuilds wait for the inputs to sit still, so a held
-                // key repeating at ~30 Hz produces one rebuild after the hold instead of
-                // a rebuild storm for its duration. Drift, resize, zoom, and track load
-                // rebuild immediately.
-                const SETTLE: Duration = Duration::from_millis(50);
+                // key repeating at ~30 Hz doesn't cause a rebuild storm — but during a
+                // sustained ramp the slot still rebuilds every THROTTLE so the operator
+                // sees tick marks move against the wave (needed for beat-grid alignment).
+                // Drift, resize, zoom, and track load rebuild immediately.
+                const SETTLE:   Duration = Duration::from_millis(50);
+                const THROTTLE: Duration = Duration::from_millis(100);
 
                 let mut last_cols = 0usize;
                 let mut last_rows = 0usize;
@@ -307,6 +309,7 @@ impl SharedDetailRenderer {
                 let mut built_anchor: [usize; 3] = [0; 3];
                 // Most recently observed params and when they were first seen unchanged.
                 let mut seen: [Option<(SlotParams, std::time::Instant)>; 3] = [None, None, None];
+                let mut last_rebuild: [std::time::Instant; 3] = [std::time::Instant::now(); 3];
 
                 loop {
                     if stop_bg.load(Ordering::Relaxed) { break; }
@@ -360,8 +363,10 @@ impl SharedDetailRenderer {
                         let immediate = shared_changed
                             || load_gen != last_gen[slot]
                             || drift_cols >= cols * 3 / 4;
-                        let settled = built[slot] != Some(params) && first_seen.elapsed() >= SETTLE;
-                        if !immediate && !settled { continue; }
+                        let changed = built[slot] != Some(params);
+                        let settled = changed && first_seen.elapsed() >= SETTLE;
+                        let ramping = changed && last_rebuild[slot].elapsed() >= THROTTLE;
+                        if !immediate && !settled && !ramping { continue; }
 
                         let rebuild_start = std::time::Instant::now();
                         let wf: Option<Arc<WaveformData>> = wf[slot].lock().unwrap().clone();
@@ -383,6 +388,7 @@ impl SharedDetailRenderer {
                         });
                         *shared[slot].lock().unwrap() = buf;
                         crate::frame_stats::note_rebuild(slot, rebuild_start.elapsed());
+                        last_rebuild[slot] = std::time::Instant::now();
                         built[slot] = Some(params);
                         built_anchor[slot] = anchor;
                         last_gen[slot] = load_gen;

@@ -509,6 +509,40 @@ impl SeekHandle {
         self.fade_remaining.store(-FADE_SAMPLES, Ordering::SeqCst);
     }
 
+    /// Relative seek with the fade envelope but no quiet-frame search, for
+    /// playing nudge-jumps: the search window is as large as the nudge step, so
+    /// a searched landing would make repeated steps uneven. Returns the display
+    /// bump in seconds.
+    ///
+    /// Two compensations keep the display and the perceived jump in lockstep
+    /// under key-repeat, where presses arrive faster than the audio thread
+    /// applies seeks:
+    /// - a fresh seek aims past the samples the fade-out will consume;
+    /// - while a seek is still pending, the next one extends the pending target
+    ///   rather than re-reading the not-yet-moved position — otherwise repeated
+    ///   presses collapse into one jump while the display walks ahead.
+    pub(crate) fn seek_relative_faded(&self, delta_secs: f64, total_secs: f64) -> f64 {
+        let frame_len = self.channels as usize;
+        let per_sec = self.sample_rate as f64 * frame_len as f64;
+        let fade_secs = FADE_SAMPLES as f64 / per_sec;
+
+        let pending = self.pending_target.load(Ordering::SeqCst);
+        let target_secs = if pending != usize::MAX {
+            pending as f64 / per_sec + delta_secs
+        } else {
+            self.current_pos().as_secs_f64() + delta_secs + fade_secs
+        }
+        .clamp(0.0, total_secs);
+        let target_sample = ((target_secs * self.sample_rate as f64).round() as usize * frame_len)
+            .min(self.samples.len());
+
+        self.flush_pitch.store(true, Ordering::Relaxed);
+        self.fade_len.store(FADE_SAMPLES, Ordering::SeqCst);
+        self.pending_target.store(target_sample, Ordering::SeqCst);
+        self.fade_remaining.store(-FADE_SAMPLES, Ordering::SeqCst);
+        delta_secs
+    }
+
     /// Seek to `target_secs` directly, without a fade. Used when paused — the audio
     /// thread is not calling next(), so the fade-based seek would never execute.
 

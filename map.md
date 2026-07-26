@@ -234,7 +234,7 @@ A pre-rendered waveform image, much wider than the screen, computed in the backg
 - Buffer width: 5x screen width in columns.
 - Background thread: OS thread with 8ms sleep per iteration (~125Hz).
 - Recompute triggers are per deck: playhead drift past 75% of buffer width, track load, and parameter changes (BPM, offset, cue, gain, loop) rebuild only that deck's buffer; resize and zoom rebuild all three.
-- Rebuilds triggered by operator-adjusted values (BPM, offset, gain, loop bounds, speed) wait until the value has been stable for ~50 ms, so a key-repeat burst causes one rebuild when the hold ends rather than one per repeat; drift, resize, zoom, and load rebuild immediately.
+- Changes to operator-adjusted values (BPM, offset, gain, loop bounds, speed) rebuild at most ~10 times a second while the value keeps changing, then once more ~50 ms after it stops. A held key therefore shows the waveform updating live, and the final state is exact. Drift, resize, zoom, and load rebuild immediately.
 - Buffer content: 2D grid of braille characters (each char is a 2x4 dot matrix). One column = one sample range determined by zoom level.
 - Buffer swap: computed into a new buffer, then swapped in under a mutex. The mutex is held only for the pointer swap, not during computation.
 
@@ -350,6 +350,8 @@ Fine position adjustment with two sub-modes (jump and warp):
 - **While playing** — jump mode seeks ±10ms per press; warp mode applies a continuous ±10% speed offset while held, returning to normal on release
 - **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump fires on each press; warp fires continuously at half-column intervals as the position drifts
 
+Warp needs the terminal to report key releases (the kitty keyboard protocol); where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
+
 **See also**
 
 - [Click-free Seek](#click-free-seek) — shared seek mechanism used by nudge and beat jump
@@ -407,6 +409,8 @@ Clamped to 40.0–240.0 BPM in beat mode. All underlying values retain full prec
 [Down](#pipeline-flush)
 
 When seeking during playback (beat jump or nudge), three independent layers prevent audible clicks. Each catches a different artifact: the fade handles raw discontinuity, the quiet-frame search minimises what the fade has to hide, and the pipeline flush prevents downstream processing from reintroducing what the fade already dealt with.
+
+Nudge seeks skip the quiet-frame search: the fade alone eliminates the click, the search only softens the contrast across the seam — negligible for a ±10 ms hop — and its ±10 ms window is as large as the nudge step itself, so a searched landing would make repeated steps uneven. Under key-repeat, nudge seeks also chain onto the still-pending target and aim past the samples the fade consumes, so the display and the heard position stay in lockstep.
 
 When paused, seeks use direct repositioning with no fade — there's no audible output to protect.
 
