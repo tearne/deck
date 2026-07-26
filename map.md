@@ -27,8 +27,10 @@ Application
 ├ Deck
 │ ├ Deck Selection
 │ ├ Track Loading
-│ ├ Renaming
-│ │ └ Metadata Editor
+│ │ └ Renaming
+│ ├ File Operations
+│ │ ├ Metadata Editor
+│ │ └ Move
 │ ├ Spectral Colour
 │ ├ Overview Waveform
 │ ├ Spectrum Analyser
@@ -73,7 +75,7 @@ Application
 [Up](#application)
 [Down](#deck-selection)
 [Down](#track-loading)
-[Down](#renaming)
+[Down](#file-operations)
 [Down](#spectral-colour)
 [Down](#overview-waveform)
 [Down](#spectrum-analyser)
@@ -101,6 +103,7 @@ Two decks can be swapped wholesale — their entire state trades places, and sel
 # Track Loading
 
 [Up](#deck)
+[Down](#renaming)
 
 Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and BPM analysis follow on a further background pass (see Beat Grid).
 
@@ -109,22 +112,38 @@ Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
 
 # Renaming
 
-[Up](#deck)
-[Down](#metadata-editor)
+[Up](#track-loading)
 
-Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's notification row — accept it to open the metadata editor, or carry on and the offer fades but lingers. The editor is reachable only through this offer: the feature exists to fix names that don't conform, not as a general metadata editor.
+Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's notification row — accept it to open the metadata editor, or carry on and the offer fades but lingers. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
 
 **See also**
 
-- [Track Loading](#track-loading) — the offer fires at load
+- [Metadata Editor](#metadata-editor) — the modal the offer opens
+- [File Operations](#file-operations) — the on-demand path to the same editor
 - [Keymap](#keymap) — fixed rename/editor keys
+
+
+# File Operations
+
+[Up](#deck)
+[Down](#metadata-editor)
+[Down](#move)
+
+A which-key submenu for operations on the loaded track's own file. A prefix key opens a transient panel listing each operation; the next key runs it, Esc cancels. This keeps file operations off the main keymap, which has no spare keys. Two operations, both on the selected deck's track: edit its tags and name, or move the file to another directory.
+
+**See also**
+
+- [Renaming](#renaming) — the load-time path that also opens the editor
+- [Keymap](#keymap) — the submenu prefix and its fixed inner keys
 
 
 # Metadata Editor
 
-[Up](#renaming)
+[Up](#file-operations)
 
 The modal that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. Confirming writes the edited metadata back to the file and renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. While open it captures all input.
+
+Reached two ways: deliberately from File Operations, or via the load-time rename offer (see Renaming).
 
 **Detail**
 
@@ -133,7 +152,23 @@ The modal that does the renaming, by way of editing the track's metadata. Seven 
 
 **See also**
 
+- [Renaming](#renaming) — the load-time offer that also opens this
 - [Keymap](#keymap) — editor keys (fixed, not configurable)
+
+
+# Move
+
+[Up](#file-operations)
+
+Relocates the loaded track's file to another directory — for sorting tracks into folders while listening. Choosing the destination is a distinct, folder-focused experience: folders read in clear blue and are the only thing selectable, tracks and other files are shown but dimmed and inert, and confirming targets the directory currently open. The file is renamed into that directory; playback is unaffected since the audio is already decoded in memory.
+
+**Detail**
+
+- A same-filesystem rename; a cross-device move is refused with a notification rather than falling back to a copy. Moving into the same directory, or onto an existing filename, is refused too.
+
+**See also**
+
+- [Browser](#browser) — the same navigator underneath, shown in its pick-destination mode
 
 
 # Spectral Colour
@@ -592,9 +627,12 @@ A file navigator for loading tracks. It opens over the player at any time (`open
 
 The last-visited directory is remembered between sessions, so the browser reopens where you left off (a path on the command line wins for the first open only). If the target deck is already playing, opening asks for confirmation first, so a stray key can't interrupt a mix.
 
+The same navigator also serves as the move destination picker, in a distinct pick-destination mode (see Move). Navigation is by arrow keys or `j`/`k`.
+
 **See also**
 
 - [Cache](#cache) — where the last-visited directory and workspace persist
+- [Move](#move) — reuses the navigator to pick a destination directory
 - [Keymap](#keymap) — navigation and action keys
 
 
@@ -657,7 +695,7 @@ Three input layers on a split keyboard: plain keys, Shift-modified, and Space-ch
 
 Space acts as a modifier: holding it and pressing another key fires a chord action. Released alone it has no effect. Space-chord bindings are reserved for one-time actions (set cue, open browser, select deck) because terminals cannot reliably detect Space being held, so continuous actions like nudge or fader movement use plain or Shift layers. Ctrl-C always quits unconditionally.
 
-Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser navigation, tag editor input, and confirmation prompts.
+Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser navigation, tag editor input, confirmation prompts, and the file-operations submenu's inner keys.
 
 **See also**
 

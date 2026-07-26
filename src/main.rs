@@ -50,10 +50,10 @@ use render::{
     extract_tick_viewport, halfblock_art, info_line_empty, DEFAULT_ZOOM_IDX,
     info_line_for_deck, notification_line_empty, notification_line_for_deck,
     overview_empty, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
-    render_keyboard_help, render_shared_tick_row,
+    render_file_ops_menu, render_keyboard_help, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
-use tags::{propose_rename_stem, read_cover_art, read_tags_for_editor, read_track_name};
+use tags::{propose_rename_stem, read_cover_art, read_track_name};
 
 fn cleanup_terminal() {
     let _ = disable_raw_mode();
@@ -351,6 +351,41 @@ fn build_deck(
     deck
 }
 
+/// Move a deck's track file into `dest_dir`, updating the deck's path on success.
+/// The audio is already decoded in memory, so playback is unaffected. Returns a
+/// notification describing the outcome.
+fn move_track_to_directory(deck: &mut Deck, dest_dir: &std::path::Path) -> Notification {
+    let Some(filename) = deck.path.file_name() else {
+        return move_notification("Track has no filename", NotificationStyle::Error);
+    };
+    let destination = dest_dir.join(filename);
+    if destination == deck.path {
+        return move_notification("Track is already in that directory", NotificationStyle::Warning);
+    }
+    if destination.exists() {
+        return move_notification(
+            format!("A file named {} already exists there", filename.to_string_lossy()),
+            NotificationStyle::Error,
+        );
+    }
+    match std::fs::rename(&deck.path, &destination) {
+        Ok(()) => {
+            deck.path = destination;
+            move_notification(format!("Moved to {}", dest_dir.display()), NotificationStyle::Success)
+        }
+        // EXDEV: rename can't cross filesystems, and a copy-then-delete fallback
+        // would need progress and interruption handling out of proportion here.
+        Err(e) if e.raw_os_error() == Some(18) => {
+            move_notification("Can't move across filesystems", NotificationStyle::Error)
+        }
+        Err(e) => move_notification(format!("Move failed: {e}"), NotificationStyle::Error),
+    }
+}
+
+fn move_notification(message: impl Into<String>, style: NotificationStyle) -> Notification {
+    Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
+}
+
 fn tui_loop(
     terminal: &mut Terminal<CrosstermBackend<frame_stats::MeteredStdout>>,
     initial_load: Option<PendingLoad>,
@@ -405,6 +440,7 @@ fn tui_loop(
     let mut fps_sample_frames: u32 = 0;
     let mut fps_display: (u32, u32, u32) = (0, 0, target_fps); // (current, budget, cap)
     let mut help_open = false;
+    let mut file_ops_menu_open = false;
     let mut browser_state: Option<(BrowserState, usize)> = None; // (state, target deck slot)
     let mut preview_output: Option<PreviewOutput> = None;
     let mut max_det_h: usize = usize::MAX;
@@ -909,6 +945,11 @@ fn tui_loop(
                 render_keyboard_help(frame, c[16]);
             }
 
+            // File-operations which-key submenu
+            if file_ops_menu_open {
+                render_file_ops_menu(frame, area);
+            }
+
             // Tag editor overlay
             for deck_opt in [&d0, &d1, &d2] {
                 if let Some(deck) = deck_opt {
@@ -1177,6 +1218,15 @@ fn tui_loop(
                             browser_state = None;
                             preview_output = None;
                         }
+                        Some(BrowserResult::DirectoryChosen(dir)) => {
+                            *browser_dir = bs.cwd.clone();
+                            cache.set_last_browser_path(browser_dir);
+                            browser_state = None;
+                            preview_output = None;
+                            if let Some(ref mut d) = decks[target] {
+                                global_notification = Some(move_track_to_directory(d, &dir));
+                            }
+                        }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             cache.set_workspace(&path);
                         }
@@ -1442,24 +1492,7 @@ fn tui_loop(
                             if d.rename_offer_active() {
                                 match key.code {
                                     KeyCode::Char('y') => {
-                                        let tag_values = read_tags_for_editor(&d.path);
-                                        let current_stem = d.path.file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let extension = d.path.extension()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        d.tag_editor = Some(TagEditorState {
-                                            fields: tag_values.into_iter()
-                                                .map(|v| (v, 0))
-                                                .collect(),
-                                            active_field: 0,
-                                            current_stem,
-                                            extension,
-                                            collision_error: None,
-                                        });
+                                        d.tag_editor = Some(TagEditorState::for_track(&d.path));
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
                                     }
@@ -1472,6 +1505,37 @@ fn tui_loop(
                         }
                     }
                     if rename_offer_consumed { continue 'tui; }
+
+                    // File-operations submenu — the prefix opened it last frame; this
+                    // frame's key picks an operation. Inner keys are fixed, not keymap
+                    // entries, so nothing can collide with the submenu.
+                    if file_ops_menu_open {
+                        file_ops_menu_open = false;
+                        match key.code {
+                            KeyCode::Char('e') => {
+                                if let Some(ref mut d) = decks[selected_deck] {
+                                    d.tag_editor = Some(TagEditorState::for_track(&d.path));
+                                }
+                            }
+                            KeyCode::Char('m') => {
+                                if decks[selected_deck].is_some() {
+                                    let workspace = cache.workspace().map(|p| p.to_path_buf());
+                                    let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
+                                    bs.pick_destination = true;
+                                    bs.snap_to_cursor_stop();
+                                    browser_state = Some((bs, selected_deck));
+                                }
+                            }
+                            // Esc, ~, or any other key cancels. Suppress quit briefly so a
+                            // paired Esc Press (crossterm + Kitty decode) can't arm the quit
+                            // warning once the menu has closed.
+                            KeyCode::Esc => {
+                                suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
+                            }
+                            _ => {}
+                        }
+                        continue 'tui;
+                    }
 
                     let action = if space_held && key.code != KeyCode::Char(' ') {
                         if let Some(a) = keymap.get(&KeyBinding::SpaceChord(key.code)) {
@@ -1510,6 +1574,17 @@ fn tui_loop(
                     Some(Action::SelectDeck1) => { selected_deck = 0; }
                     Some(Action::SelectDeck2) => { selected_deck = 1; }
                     Some(Action::SelectDeck3) => { selected_deck = 2; }
+                    Some(Action::FileOperations) => {
+                        if decks[selected_deck].is_some() {
+                            file_ops_menu_open = true;
+                        } else {
+                            global_notification = Some(Notification {
+                                message: "No track on the selected deck".to_string(),
+                                style: NotificationStyle::Error,
+                                expires: Instant::now() + NOTIFICATION_TIMEOUT,
+                            });
+                        }
+                    }
                     Some(Action::OpenBrowser) => {
                         let target = selected_deck;
                         let playing = decks[target].as_ref().map_or(false, |d| !d.audio.player.is_paused());

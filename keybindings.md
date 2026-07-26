@@ -22,12 +22,12 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3                     ╰ [Space]
+/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps   ~ files ╰ [Space]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
 
-Not shown in the overlay: `^`/`Y` FPS cap, `?` help toggle.
+Not shown in the overlay: `?` help toggle.
 
 
 ## Config Actions
@@ -50,8 +50,9 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `latency_decrease` | `[` | Audio latency −10 ms |
 | `fps_increase` | `^` | Increase FPS cap |
 | `fps_decrease` | `Y` | Decrease FPS cap |
-| `palette_cycle` | `~` | Cycle colour palette |
+| `palette_cycle` | `p` | Cycle colour palette |
 | `art_cycle` | `/` | Cycle album art brightness |
+| `file_operations` | `~` | Open the file-operations submenu (edit tags/rename, move) |
 
 ### Deck Selection & Swap
 

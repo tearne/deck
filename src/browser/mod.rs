@@ -40,6 +40,9 @@ pub(crate) struct BrowserState {
     pub(crate) search_results: Option<Vec<std::path::PathBuf>>,
     /// Flat list of all audio files under the workspace; populated on first search keystroke.
     workspace_files: Option<Vec<std::path::PathBuf>>,
+    /// Picking a destination directory for a move rather than a track to load;
+    /// `y` confirms the open directory and track selection is suppressed.
+    pub(crate) pick_destination: bool,
 }
 
 impl BrowserState {
@@ -83,16 +86,34 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, pick_destination: false })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
         matches!(kind, EntryKind::Dir | EntryKind::Audio)
     }
 
+    /// Whether the cursor may rest on an entry. Picking a move destination stops
+    /// only on folders, so tracks never take the highlight while choosing.
+    fn is_cursor_stop(&self, kind: &EntryKind) -> bool {
+        if self.pick_destination {
+            matches!(kind, EntryKind::Dir)
+        } else {
+            Self::is_selectable(kind)
+        }
+    }
+
+    /// Place the cursor on the first navigable entry, skipping `..`.
+    pub(crate) fn snap_to_cursor_stop(&mut self) {
+        self.cursor = self.entries.iter()
+            .position(|e| self.is_cursor_stop(&e.kind) && e.name != "..")
+            .or_else(|| self.entries.iter().position(|e| self.is_cursor_stop(&e.kind)))
+            .unwrap_or(0);
+    }
+
     pub(crate) fn move_down(&mut self) {
         let next = (self.cursor + 1..self.entries.len())
-            .find(|&i| Self::is_selectable(&self.entries[i].kind));
+            .find(|&i| self.is_cursor_stop(&self.entries[i].kind));
         if let Some(i) = next {
             self.cursor = i;
         }
@@ -101,7 +122,7 @@ impl BrowserState {
     pub(crate) fn move_up(&mut self) {
         let prev = (0..self.cursor)
             .rev()
-            .find(|&i| Self::is_selectable(&self.entries[i].kind));
+            .find(|&i| self.is_cursor_stop(&self.entries[i].kind));
         if let Some(i) = prev {
             self.cursor = i;
         }
@@ -172,6 +193,7 @@ fn run_search(term: &str, files: &[std::path::PathBuf], workspace: &std::path::P
 
 pub(crate) enum BrowserResult {
     Selected(std::path::PathBuf),
+    DirectoryChosen(std::path::PathBuf),
     WorkspaceSet(std::path::PathBuf),
     WorkspaceCleared,
     ReturnToPlayer,
@@ -193,9 +215,15 @@ pub(crate) fn render_browser(
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    // Top bar: search field (workspace set) or workspace prompt.
-    // When workspace is set, a right-side hint reminds the user how to clear it.
-    if state.workspace.is_some() {
+    // Top bar: destination-picker banner takes precedence over the search field.
+    if state.pick_destination {
+        let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+        frame.render_widget(
+            Paragraph::new(format!(" Move here → {name}    y: confirm   Esc: cancel"))
+                .style(Style::default().fg(Color::Rgb(150, 190, 250)).bg(bg)),
+            chunks[0],
+        );
+    } else if state.workspace.is_some() {
         let hint = "': unset  ";
         let hint_len = hint.chars().count() as u16;
         let top_cols = Layout::default()
@@ -237,10 +265,20 @@ pub(crate) fn render_browser(
         }).collect()
     } else {
         state.entries.iter().map(|e| {
-            let (label, color) = match e.kind {
-                EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(80, 110, 180)),
-                EntryKind::Audio => (e.name.clone(), Color::Yellow),
-                EntryKind::Other => (e.name.clone(), Color::Rgb(60, 60, 80)),
+            // Picking a move destination: only folders are choosable, so they read in
+            // clear blue while tracks and other files dim back to signal "not selectable".
+            let (label, color) = if state.pick_destination {
+                match e.kind {
+                    EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(120, 160, 230)),
+                    EntryKind::Audio => (e.name.clone(), Color::Rgb(60, 80, 120)),
+                    EntryKind::Other => (e.name.clone(), Color::Rgb(45, 55, 85)),
+                }
+            } else {
+                match e.kind {
+                    EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(80, 110, 180)),
+                    EntryKind::Audio => (e.name.clone(), Color::Yellow),
+                    EntryKind::Other => (e.name.clone(), Color::Rgb(60, 60, 80)),
+                }
             };
             ListItem::new(label).style(Style::default().fg(color))
         }).collect()
@@ -285,14 +323,21 @@ pub(crate) fn render_browser(
         block = block.title_bottom(t);
     }
 
+    let highlight_style = if state.pick_destination {
+        Style::default().fg(Color::Rgb(200, 220, 255)).bg(Color::Rgb(30, 50, 90)).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Yellow).bg(Color::Rgb(60, 50, 0)).add_modifier(Modifier::BOLD)
+    };
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().fg(Color::Yellow).bg(Color::Rgb(60, 50, 0)).add_modifier(Modifier::BOLD));
+        .highlight_style(highlight_style);
 
     let mut list_state = ListState::default().with_selected(Some(state.cursor));
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 
-    let hint = if state.search_results.is_some() {
+    let hint = if state.pick_destination {
+        "↑/↓  Enter: into folder   ←/Bksp: up   y: move here   Esc: cancel"
+    } else if state.search_results.is_some() {
         "↑/↓  Enter: load   Bksp: edit search   Esc: clear search   #: preview   q: quit"
     } else {
         "↑/↓  Enter  ←/Bksp: up   Esc: back   #: preview   q: quit"
@@ -307,7 +352,9 @@ pub(crate) fn handle_browser_key(
     state: &mut BrowserState,
     key: crossterm::event::KeyEvent,
 ) -> io::Result<Option<BrowserResult>> {
-    if key.kind != KeyEventKind::Press { return Ok(None); }
+    // Repeat counts as a press: terminals without key-release reporting deliver
+    // auto-repeat as presses anyway, so held-key behaviour stays uniform.
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) { return Ok(None); }
     match key.code {
         KeyCode::Up => {
             if state.search_results.is_some() {
@@ -334,9 +381,14 @@ pub(crate) fn handle_browser_key(
                     EntryKind::Dir => {
                         let path = entry.path.clone();
                         let workspace = state.workspace.clone();
+                        let pick_destination = state.pick_destination;
                         *state = BrowserState::new(path, workspace)?;
+                        state.pick_destination = pick_destination;
+                        if pick_destination { state.snap_to_cursor_stop(); }
                         Ok(None)
                     }
+                    // Track selection is meaningless while picking a move destination.
+                    EntryKind::Audio if state.pick_destination => Ok(None),
                     EntryKind::Audio => Ok(Some(BrowserResult::Selected(entry.path.clone()))),
                     EntryKind::Other => Ok(None),
                 }
@@ -357,7 +409,10 @@ pub(crate) fn handle_browser_key(
                 state.cursor = 0;
             } else if let Some(parent) = state.cwd.parent().map(|p| p.to_path_buf()) {
                 let workspace = state.workspace.clone();
+                let pick_destination = state.pick_destination;
                 *state = BrowserState::new(parent, workspace)?;
+                state.pick_destination = pick_destination;
+                if pick_destination { state.snap_to_cursor_stop(); }
             }
             Ok(None)
         }
@@ -374,7 +429,28 @@ pub(crate) fn handle_browser_key(
             state.cursor = 0;
             Ok(Some(BrowserResult::WorkspaceCleared))
         }
-        KeyCode::Char('q') if state.search_term.is_empty() => Ok(Some(BrowserResult::Quit)),
+        // j/k navigate like ↓/↑. Reserved for navigation only where letters aren't
+        // captured as search input (no workspace), and always while picking.
+        KeyCode::Char('j') if state.pick_destination || state.workspace.is_none() => {
+            if let Some(ref results) = state.search_results {
+                if state.cursor + 1 < results.len() { state.cursor += 1; }
+            } else {
+                state.move_down();
+            }
+            Ok(None)
+        }
+        KeyCode::Char('k') if state.pick_destination || state.workspace.is_none() => {
+            if state.search_results.is_some() {
+                if state.cursor > 0 { state.cursor -= 1; }
+            } else {
+                state.move_up();
+            }
+            Ok(None)
+        }
+        KeyCode::Char('y') if state.pick_destination => {
+            Ok(Some(BrowserResult::DirectoryChosen(state.cwd.clone())))
+        }
+        KeyCode::Char('q') if state.search_term.is_empty() && !state.pick_destination => Ok(Some(BrowserResult::Quit)),
         KeyCode::Esc => {
             if !state.search_term.is_empty() {
                 state.search_term.clear();
@@ -419,6 +495,7 @@ mod tests {
             search_term: String::new(),
             search_results: None,
             workspace_files: None,
+            pick_destination: false,
         }
     }
 

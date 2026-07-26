@@ -149,6 +149,17 @@ pub(crate) struct TagEditorState {
 }
 
 impl TagEditorState {
+    /// Open the editor for an existing track, seeded from its tags and filename.
+    pub(crate) fn for_track(path: &std::path::Path) -> Self {
+        let fields = crate::tags::read_tags_for_editor(path)
+            .into_iter()
+            .map(|v| (v, 0))
+            .collect();
+        let current_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        TagEditorState { fields, active_field: 0, current_stem, extension, collision_error: None }
+    }
+
     pub(crate) fn active_field_mut(&mut self) -> (&mut String, &mut usize) {
         let (val, cur) = &mut self.fields[self.active_field];
         (val, cur)
