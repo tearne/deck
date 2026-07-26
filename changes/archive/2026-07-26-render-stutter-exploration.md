@@ -55,3 +55,17 @@ Target-hardware captures use the existing container-build-and-pull flow; the sta
 - Frame pacing (sleep-then-trim) if sleep jitter is implicated.
 
 **Done when** every stall class visible in target-hardware captures is eliminated or attributed to a measured cause we consciously accept, with findings recorded in this document.
+
+
+## Log
+
+- Frame-stats recorder implemented (0.11.4): `--frame-stats` writes `frame-stats.csv` in the CWD, one row per frame — t, frame, service, spectrum, draw, write, bytes, budget, sleep, and per-slot rebuild µs/counts. Probes: metered stdout writer under the ratatui backend, spectrum timing at the Goertzel call, rebuild timing in the renderer thread. Smoke-tested via pty + null ALSA: rows and values sane.
+- First capture (2026-07-26, 43 s, 5083 frames, 8.33 ms budget): app-side timing is clean. Frame spacing p50 8.41 ms, p99 8.51 ms, stdev 0.64 ms; exactly one hitch (52.8 ms at t=5.74 s, coinciding with a 131 kB full-screen draw + slot-0 rebuild — looks like a load/zoom event). Draw p50 2.1 ms, write p50 0.54 ms, spectrum ≤1 ms, rebuilds 20 in 43 s (max 5.4 ms, uncorrelated with slow frames). Output volume ~2.4 MB/s while scrolling. Stutter was visible during this run (Kitty, on target hardware) — so the suspicion moves downstream of the app: terminal emulator parse/raster load, or spatial artefacts.
+- Experiment build 0.11.5: spectral LUT entries now map to nearest xterm-256 indexed colours (`38;5;N`, ~11 bytes vs truecolor's ~19; coarser palette also merges more spans). Frame rate needs no code — runtime `fps_increase`/`fps_decrease` actions (`^`/`Y`) already step the levels, so 120 vs 60 can be A/B'd live mid-capture.
+- Experiment outcome: no major visible difference from indexed colour or 60 fps. Residual smoothness variation differs between the laptop's built-in display and an external USB-C monitor — pointing at the display path (monitor refresh handling / emulator raster), downstream of anything the app controls. Decision: stop here; keep indexed colour, make 60 fps the default.
+- 0.11.6: default target_fps 120 → 60 (embedded config, DisplayConfig default, keybindings.md); help overlay footer gains `Y/^ fps` — the keys sit on the 6/Y column the overlay uses as its hand divider, so the footer legend is where they fit.
+
+
+## Conclusion
+
+Done-when met: frame timing measured clean on target hardware (p99 spacing within 2% of budget, one attributable hitch in 43 s), and the residual smoothness variation is attributed to the display path downstream of the app (built-in vs USB-C monitor difference) — accepted. Shipped at 0.11.6: indexed spectral colour, 60 fps default, `Y/^ fps` in the help overlay. The `--frame-stats` recorder stays in the binary for future diagnosis. Patch bumps 0.11.4→0.11.6 confirmed. Unexplored levers (buffered writer, block quantisation, peak pyramid, spectrum stagger) remain listed in the Intent should stutter return under different conditions. Map catch-up pending on Spectral Colour (indexed emission); keybindings.md already updated in-build.

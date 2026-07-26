@@ -31,6 +31,7 @@ mod browser;
 mod cache;
 mod config;
 mod deck;
+mod frame_stats;
 mod render;
 mod tags;
 
@@ -75,6 +76,10 @@ struct Cli {
     /// Resolve config from the current directory instead of ~/.config/deck
     #[arg(long)]
     local_config: bool,
+
+    /// Record per-frame timing statistics to frame-stats.csv in the current directory
+    #[arg(long)]
+    frame_stats: bool,
 }
 
 fn main() {
@@ -110,13 +115,14 @@ fn main() {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 
     // Set up terminal once — shared by browser and player.
-    let setup = (|| -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    let metering = cli.frame_stats;
+    let setup = (|| -> io::Result<Terminal<CrosstermBackend<frame_stats::MeteredStdout>>> {
         enable_raw_mode()?;
         io::stdout()
             .execute(EnterAlternateScreen)?
             .execute(EnableMouseCapture)?
             .execute(PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES))?;
-        Terminal::new(CrosstermBackend::new(io::stdout()))
+        Terminal::new(CrosstermBackend::new(frame_stats::MeteredStdout::new(metering)))
     })();
     let mut terminal = match setup {
         Ok(t) => t,
@@ -160,7 +166,20 @@ fn main() {
     } else {
         None
     };
-    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config) {
+    let mut recorder = if cli.frame_stats {
+        match frame_stats::Recorder::create() {
+            Ok(r) => Some(r),
+            Err(e) => {
+                cleanup_terminal();
+                eprintln!("Could not create {}: {e}", frame_stats::CAPTURE_FILENAME);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config, &mut recorder) {
         cleanup_terminal();
         eprintln!("TUI error: {e}");
         std::process::exit(1);
@@ -328,12 +347,13 @@ fn build_deck(
 }
 
 fn tui_loop(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Terminal<CrosstermBackend<frame_stats::MeteredStdout>>,
     initial_load: Option<PendingLoad>,
     cache: &mut Cache,
     browser_dir: &mut std::path::PathBuf,
     mixer: &rodio::mixer::Mixer,
     use_local_config: bool,
+    recorder: &mut Option<frame_stats::Recorder>,
 ) -> io::Result<()> {
     // Per-deck display values computed each frame from current deck state.
     struct DeckRenderState {
@@ -482,9 +502,11 @@ fn tui_loop(
         }
 
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
+        let service_start = Instant::now();
         for slot in 0..3 {
             service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
         }
+        let service_dur = service_start.elapsed();
 
         // Compute render state for all three decks.
         let render: [Option<DeckRenderState>; 3] = std::array::from_fn(|slot| {
@@ -541,6 +563,7 @@ fn tui_loop(
             Some(format!("Loading {}…{}", p.filename, pct))
         });
 
+        let draw_start = Instant::now();
         terminal.draw(|frame| {
             let area = frame.area();
             let inner = area;
@@ -891,6 +914,7 @@ fn tui_loop(
             }
 
         })?;
+        let draw_dur = draw_start.elapsed();
 
         // Put all three decks back after render.
         decks[0] = d0;
@@ -1980,7 +2004,11 @@ fn tui_loop(
             }
         }
 
+        let sleep_start = Instant::now();
         thread::sleep(frame_dur.saturating_sub(frame_start.elapsed()));
+        if let Some(rec) = recorder.as_mut() {
+            rec.record_frame(frame_start, service_dur, draw_dur, frame_dur, sleep_start.elapsed());
+        }
     }
 }
 
@@ -2194,7 +2222,9 @@ fn service_deck_frame(
     if chars_due || bg_due {
         let latency_correction = if d.audio.player.is_paused() { 0.0 } else { audio_latency_ms as f64 * d.audio.sample_rate as f64 / 1000.0 };
         let display_pos_samp = (d.display.smooth_display_samp - latency_correction).max(0.0) as usize;
+        let spectrum_start = Instant::now();
         let (new_chars, new_bg) = compute_spectrum(&d.audio.mono, display_pos_samp, d.audio.sample_rate, d.mixer.filter_offset);
+        frame_stats::note_spectrum(spectrum_start.elapsed());
         if chars_due {
             d.spectrum.chars = new_chars;
             for i in 0..16 { d.spectrum.bg_accum[i] |= new_bg[i]; }

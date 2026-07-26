@@ -35,7 +35,7 @@ impl SpectralLut {
     pub(crate) fn new(pal: SpecPalette, brightness: f32) -> Self {
         Self {
             colors: std::array::from_fn(|i| {
-                spectral_color(pal, i as f32 / (SPECTRAL_LEVELS - 1) as f32, brightness)
+                indexed(spectral_color(pal, i as f32 / (SPECTRAL_LEVELS - 1) as f32, brightness))
             }),
         }
     }
@@ -43,6 +43,28 @@ impl SpectralLut {
     pub(crate) fn color(&self, bass: f32) -> ratatui::style::Color {
         let idx = (bass.clamp(0.0, 1.0) * (SPECTRAL_LEVELS - 1) as f32).round() as usize;
         self.colors[idx.min(SPECTRAL_LEVELS - 1)]
+    }
+}
+
+/// Nearest xterm-256 colour (6×6×6 cube 16–231, grayscale ramp 232–255) for an
+/// RGB colour. An indexed SGR sequence is ~11 bytes against truecolor's ~19, and
+/// the coarser palette collapses more adjacent waveform columns into shared
+/// spans — both cut the escape volume the terminal emulator has to parse.
+fn indexed(color: ratatui::style::Color) -> ratatui::style::Color {
+    let ratatui::style::Color::Rgb(r, g, b) = color else { return color };
+    const CUBE: [i32; 6] = [0, 95, 135, 175, 215, 255];
+    let level = |v: u8| (0..6).min_by_key(|&i| (CUBE[i] - v as i32).abs()).unwrap();
+    let (ri, gi, bi) = (level(r), level(g), level(b));
+    let dist = |cr: i32, cg: i32, cb: i32| {
+        (cr - r as i32).pow(2) + (cg - g as i32).pow(2) + (cb - b as i32).pow(2)
+    };
+    let cube_dist = dist(CUBE[ri], CUBE[gi], CUBE[bi]);
+    let gray_step = (((r as i32 + g as i32 + b as i32) / 3 - 8).clamp(0, 230) / 10).min(23);
+    let gray = 8 + gray_step * 10;
+    if dist(gray, gray, gray) < cube_dist {
+        ratatui::style::Color::Indexed((232 + gray_step) as u8)
+    } else {
+        ratatui::style::Color::Indexed((16 + 36 * ri + 6 * gi + bi) as u8)
     }
 }
 
@@ -341,6 +363,7 @@ impl SharedDetailRenderer {
                         let settled = built[slot] != Some(params) && first_seen.elapsed() >= SETTLE;
                         if !immediate && !settled { continue; }
 
+                        let rebuild_start = std::time::Instant::now();
                         let wf: Option<Arc<WaveformData>> = wf[slot].lock().unwrap().clone();
                         let anchor = (pos / col_samp) * col_samp;
                         let tick_view_start = anchor as f64 - (buf_cols / 2) as f64 * col_samp as f64;
@@ -359,6 +382,7 @@ impl SharedDetailRenderer {
                             samples_per_col: col_samp,
                         });
                         *shared[slot].lock().unwrap() = buf;
+                        crate::frame_stats::note_rebuild(slot, rebuild_start.elapsed());
                         built[slot] = Some(params);
                         built_anchor[slot] = anchor;
                         last_gen[slot] = load_gen;
@@ -1835,7 +1859,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
     let row15 = Line::from(vec![
-        Span::styled("/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3                    ", ba),
+        Span::styled("/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps          ", ba),
         Span::styled("╰ [Space]", sp),
     ]);
 

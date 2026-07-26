@@ -190,7 +190,7 @@ pub(crate) struct DisplayConfig {
 }
 
 impl Default for DisplayConfig {
-    fn default() -> Self { Self { playhead_position: 20, warning_threshold_secs: 30.0, detail_height: 5, target_fps: 120 } }
+    fn default() -> Self { Self { playhead_position: 20, warning_threshold_secs: 30.0, detail_height: 5, target_fps: 60 } }
 }
 
 /// Finds or creates the config file and returns its text plus an optional notice.

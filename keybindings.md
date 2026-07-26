@@ -226,4 +226,4 @@ Declared under `[display]` in `config.toml`. Missing keys fall back to defaults.
 | `playhead_position` | `20` | Detail playhead position, 0–100% from left |
 | `warning_threshold_secs` | `30` | Seconds before track end to activate bar-marker flash |
 | `detail_height` | `5` | Rows per detail waveform (including 2-row tick area; min 4) |
-| `target_fps` | `120` | Frame rate cap; snapped to nearest: 15, 20, 24, 30, 45, 60, 90, 120, 240 |
+| `target_fps` | `60` | Frame rate cap; snapped to nearest: 15, 20, 24, 30, 45, 60, 90, 120, 240 |

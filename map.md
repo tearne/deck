@@ -155,6 +155,8 @@ Interpolation is linear between adjacent stops, with brightness scaling that nor
 
 At render time the bass ratio is quantised to 32 levels through a per-palette lookup table — the underlying data keeps full precision, but adjacent columns land on shared colours, so their escape sequences merge into runs and terminal output drops several-fold at no visible cost.
 
+The looked-up colours are emitted as xterm-256 indexed colours rather than truecolor, to cut the bandwidth of colour escape codes the terminal has to parse while the waveform scrolls: an indexed sequence is roughly half the bytes, and the coarser palette merges still more columns into shared runs. Accent uses of the palette elsewhere in the UI (track titles, pitch readouts) stay truecolor.
+
 
 # Overview Waveform
 

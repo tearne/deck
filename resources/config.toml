@@ -125,4 +125,4 @@ swap_deck2_deck3 = "space+-"
 playhead_position = 20        # 0–100, percentage from left edge of detail panel
 warning_threshold_secs = 30   # seconds before end to activate bar-marker flash warning
 detail_height = 5             # total rows per detail waveform (including 2-row tick area; min 4)
-# target_fps = 120            # frame rate cap; snapped to nearest level: 15, 20, 24, 30, 45, 60, 90, 120, 240
+# target_fps = 60             # frame rate cap; snapped to nearest level: 15, 20, 24, 30, 45, 60, 90, 120, 240
