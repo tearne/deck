@@ -97,6 +97,8 @@ Three deck instances share one conceptual model. The map describes the deck, not
 
 Each deck is independent, one selected at a time. The selected deck receives all deck-specific input — transport, BPM, cue, nudge, pitch. The mixer controls — level, gain, and filter — are the exception: they address each deck directly, whichever is selected.
 
+The selected deck is marked by a yellow accent bar in the left gutter, beside both its waveform and its strip.
+
 Two decks can be swapped wholesale — their entire state trades places, and selection follows the content so the operator keeps controlling the same track. The others start empty, loaded by selecting them and opening the browser. Audio latency is a single global value shared across all decks.
 
 

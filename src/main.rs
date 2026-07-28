@@ -612,7 +612,14 @@ fn tui_loop(
         let draw_start = Instant::now();
         terminal.draw(|frame| {
             let area = frame.area();
-            let inner = area;
+            // Reserve a one-column gutter on the left for the active-deck accent bar;
+            // everything else lays out in the content area to its right.
+            let gutter_split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(area);
+            let gutter = gutter_split[0];
+            let inner = gutter_split[1];
 
             // Compression order as the terminal shrinks:
             //   1. Detail waveforms compress evenly: detail_height → DET_MIN
@@ -712,6 +719,28 @@ fn tui_loop(
                     shared_renderer.cols.store(w, Ordering::Relaxed);
                     shared_renderer.rows.store(h, Ordering::Relaxed);
                 }
+            }
+
+            // Active-deck accent bar in the reserved gutter: one segment beside the
+            // deck's detail waveform, one beside its header/info/overview strip.
+            {
+                let detail_area   = [area_detail_a, area_detail_b, area_detail_c][selected_deck];
+                let notif_area    = [area_notif_a, area_notif_b, area_notif_c][selected_deck];
+                let info_area     = [area_info_a, area_info_b, area_info_c][selected_deck];
+                let overview_area = [area_overview_a, area_overview_b, area_overview_c][selected_deck];
+                let strip_top    = notif_area.y;
+                let strip_bottom = (notif_area.y + notif_area.height)
+                    .max(info_area.y + info_area.height)
+                    .max(overview_area.y + overview_area.height);
+                let bar_style = Style::default().fg(Color::Yellow);
+                let mut draw_bar = |y: u16, h: u16| {
+                    if h == 0 { return; }
+                    let rect = ratatui::layout::Rect { x: gutter.x, y, width: gutter.width, height: h };
+                    let lines: Vec<Line> = (0..h).map(|_| Line::from(Span::styled("┃", bar_style))).collect();
+                    frame.render_widget(Paragraph::new(lines), rect);
+                };
+                draw_bar(detail_area.y, detail_area.height);
+                draw_bar(strip_top, strip_bottom.saturating_sub(strip_top));
             }
 
             // Update tempo and cue state for background buffer rendering.
