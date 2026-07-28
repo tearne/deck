@@ -695,6 +695,8 @@ Three input layers on a split keyboard: plain keys, Shift-modified, and Space-ch
 
 Space acts as a modifier: holding it and pressing another key fires a chord action. Released alone it has no effect. Space-chord bindings are reserved for one-time actions (set cue, open browser, select deck) because terminals cannot reliably detect Space being held, so continuous actions like nudge or fader movement use plain or Shift layers. Ctrl-C always quits unconditionally.
 
+Esc is inherently ambiguous — it is both the dismiss/quit key and the byte that begins every terminal escape sequence — and some terminals report a single Esc keypress as two events. Esc is therefore debounced: a second Esc within ~200 ms of one that acted is ignored, so a single tap can't, for instance, dismiss an overlay and then quit.
+
 Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser navigation, tag editor input, confirmation prompts, and the file-operations submenu's inner keys.
 
 **See also**

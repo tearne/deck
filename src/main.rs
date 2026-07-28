@@ -458,9 +458,13 @@ fn tui_loop(
     let mut browser_blocked: Option<(Instant, usize)> = None; // (expiry, target deck slot)
     let mut bpm_ramp_started: Option<Instant> = None;
     let mut bpm_ramp_last: Option<Instant> = None;
-    // When Esc dismisses an overlay, suppress the next Quit action for a short window.
-    // This absorbs the duplicate Esc event that Kitty injects after the first one.
-    let mut suppress_quit_until: Option<Instant> = None;
+    // One Esc tap arrives as two Press events ~100 ms apart (a Kitty decode quirk;
+    // Esc uniquely sends no Release). The second is the phantom. Only an *acting*
+    // Esc starts this window and the phantom that follows within it is swallowed —
+    // the window is never refreshed by swallowed presses, so a deliberate re-press
+    // (e.g. impatiently pressing Esc to quit) always gets through once it clears.
+    let mut last_esc_press: Option<Instant> = None;
+    const ESC_PHANTOM_WINDOW: Duration = Duration::from_millis(200);
 
     'tui: loop {
         frame_count += 1;
@@ -1005,6 +1009,15 @@ fn tui_loop(
                 }
             }
             Event::Key(key) => {
+                // Swallow the phantom second Esc: if an acting Esc happened within the
+                // window, drop this one without refreshing the window, so only the
+                // phantom is caught and a deliberate re-press soon after still acts.
+                if key.code == KeyCode::Esc && key.kind == KeyEventKind::Press {
+                    if last_esc_press.is_some_and(|t| t.elapsed() < ESC_PHANTOM_WINDOW) {
+                        continue 'tui;
+                    }
+                    last_esc_press = Some(Instant::now());
+                }
                 // Ctrl-C: unconditional quit.
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     for slot in 0..3 {
@@ -1409,10 +1422,9 @@ fn tui_loop(
                 }
                 // All other actions fire on Press only.
                 if key.kind == KeyEventKind::Press {
-                    // Esc closes the help overlay (suppresses quit so Esc doesn't quit immediately after).
+                    // Esc closes the help overlay.
                     if help_open && key.code == KeyCode::Esc {
                         help_open = false;
-                        suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                         continue 'tui;
                     }
                     // Browser-blocked intercept — y overrides, Esc/n cancels.
@@ -1431,9 +1443,6 @@ fn tui_loop(
                     }
                     // Quit confirmation intercept — y/Enter confirms, anything else cancels.
                     if pending_quit.is_some() {
-                        if suppress_quit_until.take().map_or(false, |until| Instant::now() < until) {
-                            continue 'tui;
-                        }
                         pending_quit = None;
                         if matches!(key.code, KeyCode::Char('y') | KeyCode::Enter) {
                             for slot in 0..3 {
@@ -1448,16 +1457,11 @@ fn tui_loop(
                             cache.save();
                             return Ok(());
                         }
-                        // Absorb a paired Press event for the same dismiss keystroke (crossterm
-                        // + Kitty can decode key-repeats as additional Press events) so the
-                        // followup doesn't re-enter Action::Quit and re-arm the warning.
-                        suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                         continue 'tui;
                     }
                     // Esc dismisses any active global notification.
                     if global_notification.is_some() && key.code == KeyCode::Esc {
                         global_notification = None;
-                        suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                         continue 'tui;
                     }
                     // BPM confirmation intercept — check both decks.
@@ -1526,12 +1530,7 @@ fn tui_loop(
                                     browser_state = Some((bs, selected_deck));
                                 }
                             }
-                            // Esc, ~, or any other key cancels. Suppress quit briefly so a
-                            // paired Esc Press (crossterm + Kitty decode) can't arm the quit
-                            // warning once the menu has closed.
-                            KeyCode::Esc => {
-                                suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
-                            }
+                            // Esc, ~, or any other key cancels.
                             _ => {}
                         }
                         continue 'tui;
@@ -1550,13 +1549,9 @@ fn tui_loop(
                     };
                     match action {
                     Some(Action::Quit) => {
-                        if suppress_quit_until.take().map_or(false, |until| Instant::now() < until) {
-                            continue 'tui;
-                        }
                         let any_playing = decks.iter().flatten().any(|d| !d.audio.player.is_paused());
                         if any_playing && pending_quit.is_none() {
                             pending_quit = Some(Instant::now() + Duration::from_secs(5));
-                            suppress_quit_until = Some(Instant::now() + Duration::from_millis(300));
                             continue 'tui;
                         }
                         for slot in 0..3 {
