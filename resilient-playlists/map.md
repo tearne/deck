@@ -13,9 +13,11 @@ Resilient Playlists
 │ ├ Hints
 │ └ Settings
 ├ Track Identity
+│ └ Conformance
 ├ File Resolution
 │ ├ Descriptive Fallback
-│ └ Tags Refresh
+│ ├ Tags Refresh
+│ └ Method Migration
 └ Resilient Writes
   ├ Write Procedure
   └ Backup Scheme
@@ -76,14 +78,16 @@ The content-derived, unambiguous identifier for the track — stable across move
 
 ```json
 "identity": {
-  "hash_algorithm": "blake3",
-  "content_hash":   "<hex>",
-  "duration_secs":  214.7
+  "hash_algorithm":           "blake3",
+  "payload_extraction_version": 1,
+  "content_hash":             "<hex>",
+  "duration_secs":            214.7
 }
 ```
 
 - `duration_secs` lives here rather than in hints because it is content-derived and participates in candidate pre-filtering during resolution.
-- `hash_algorithm` records which algorithm produced `content_hash`, so a future spec version can introduce a new algorithm without breaking existing entries. An implementation encountering an unknown value must treat the entry as unresolvable by hash rather than computing a wrong result silently.
+- Two independent axes describe how `content_hash` was produced. `hash_algorithm` names the hash function; `payload_extraction_version` names the byte-range rules that selected the bytes fed into it. Either can change without the other — a new hash function, or a correction to which bytes count as audio — so they are versioned separately. Both are recorded per entry, so a partially-migrated playlist (some files present and re-hashed, some missing and not) can hold a mix.
+- An implementation encountering a value it does not implement — an unknown `hash_algorithm`, or a `payload_extraction_version` it cannot reproduce — must treat the entry as unresolvable by hash rather than computing a wrong result silently. See [Method Migration](#method-migration) for how an entry made by an older version is healed forward.
 
 **See also**
 
@@ -157,10 +161,11 @@ Likely future content: in/out points (to play a sub-section of a track), per-ent
 # Track Identity
 
 [Up](#resilient-playlists)
+[Down](#conformance)
 
 Identity is a hash of the file's **encoded audio payload** — the raw compressed bytes on disk, tag regions excluded, never decompressed to PCM. Any implementation reading the same file computes the same hash byte-for-byte.
 
-The `hash_algorithm` field records which algorithm was used, so a future version of the spec can introduce a different algorithm without breaking existing entries. The current value is `"blake3"`. An implementation encountering an unknown value must treat the entry as unresolvable by hash rather than computing a wrong result silently.
+Two fields record how the hash was made: `hash_algorithm` (the hash function, currently `"blake3"`) and `payload_extraction_version` (the byte-range rules that chose the input bytes, currently `1`). They are versioned separately because either can change alone. An implementation encountering a value it cannot reproduce must treat the entry as unresolvable by hash rather than computing a wrong result silently; a bump to the extraction rules is healed forward per [Method Migration](#method-migration).
 
 The cost: re-encoding a track (different compression settings, format conversion) yields a new identity. This case is handled by the descriptive fallback in [File Resolution](#file-resolution).
 
@@ -183,6 +188,21 @@ Implementations must iterate each file's structure to extract these ranges exact
 **See also**
 
 - [File Resolution](#file-resolution) — how the content hash is used in candidate screening
+- [Conformance](#conformance) — how an implementation proves its hashing is correct
+
+
+# Conformance
+
+[Up](#track-identity)
+
+Byte-range extraction is the one place implementations must agree exactly — a hash computed over the wrong bytes silently fails to match every other implementation. Prose alone can't guarantee that agreement, so conformance is defined by a shared **test-vector corpus**: a set of small audio files with, for each, its expected content hash and audio byte-range. An implementation conforms when it reproduces every expected hash.
+
+The corpus covers one clean file per supported format, plus tag-placement edge cases — a file with a prepended ID3v2 tag, a file wrapped in ID3v1 and APEv2 trailers, and so on. These edge cases carry the *same* expected hash as their untagged counterpart: identical hashes prove the tag regions are excluded, which is where implementations most easily diverge.
+
+**Detail**
+
+- The corpus files are synthetic (generated from a tone, no third-party audio) and pinned alongside `target_results.json` — the expected hashes and byte-ranges — so the contract is immutable and reproducible offline.
+- Reference implementation: the `resilient-playlists` crate (`src/lib.rs`), with its corpus and `target_results.json` under `corpus/`. A new implementation validates against those target results.
 
 
 # File Resolution
@@ -190,6 +210,7 @@ Implementations must iterate each file's structure to extract these ranges exact
 [Up](#resilient-playlists)
 [Down](#descriptive-fallback)
 [Down](#tags-refresh)
+[Down](#method-migration)
 
 How an implementation locates the audio file for a given entry and keeps location hints up to date.
 
@@ -215,7 +236,7 @@ How an implementation locates the audio file for a given entry and keeps locatio
 
 When no hash match exists anywhere, the track may have been re-encoded — its compressed bytes are entirely new so its identity can never match. The fallback offers library files whose duration and description are similar, for the user to confirm.
 
-On confirmed re-link: rewrite hints *and* overwrite `identity` (`hash_algorithm`, `content_hash`, and `duration_secs` from the new file) and refresh `description` from its tags. This is the only sanctioned mutation of identity.
+On confirmed re-link: rewrite hints *and* overwrite `identity` (`hash_algorithm`, `payload_extraction_version`, `content_hash`, and `duration_secs`, all from the new file computed with the implementation's current method) and refresh `description` from its tags. This is the only sanctioned mutation of identity.
 
 No match and no confirmed re-link → the entry is kept and shown unavailable.
 
@@ -234,6 +255,21 @@ No match and no confirmed re-link → the entry is kept and shown unavailable.
 Whenever a file is located (steps 1–2 of [File Resolution](#file-resolution)), compare its current tags against the stored `description`. If any field differs, refresh `description` from the file.
 
 A plain move leaves tags unchanged so nothing refreshes; deliberate retags propagate automatically.
+
+
+# Method Migration
+
+[Up](#file-resolution)
+
+A correction to the byte-range rules bumps `payload_extraction_version`, which changes the hashes a newer implementation computes. Without care, every entry made by the older version would fail its hash confirm even for files sitting exactly where the playlist says — and degrade to the descriptive fallback needlessly. Migration heals this forward, one entry at a time.
+
+When resolving an entry whose `payload_extraction_version` is older than the one the implementation now produces, it confirms the file using the entry's *stated* (older) version — so an implementation must retain the older extraction rules — and on a match, rewrites the entry's `content_hash` and `payload_extraction_version` to the current values. The same applies to `hash_algorithm`.
+
+> [!IMPORTANT] Migration is per entry and opportunistic: an entry heals only when its file is found. A missing file keeps its older version until it reappears, so a playlist may legitimately hold entries at different versions.
+
+**See also**
+
+- [Identity](#identity) — the two version fields and why they are per entry
 
 
 # Resilient Writes

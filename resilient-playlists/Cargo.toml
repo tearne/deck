@@ -1,0 +1,12 @@
+[package]
+name = "resilient-playlists"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Reference implementation of the resilient playlist content-identity hash, plus its conformance corpus. See map.md."
+
+[dependencies]
+blake3 = "1"
+
+[dev-dependencies]
+serde_json = "1"

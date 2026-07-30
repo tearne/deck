@@ -4,18 +4,16 @@
 
 ## Intent
 
-Implement playlist support in Deck, wiring the resilient playlist format (`playlist.md`) into the player. The operator can create, open, edit, and play back playlists from within Deck.
+The Deck-side of playlist support: reading and writing `.rpl` files, resolving entries to tracks, and the whole operator experience — opening playlists from the browser, per-deck playlist state, an overlay for viewing and editing (remove, reorder), adding the loaded track, creating a new playlist, a position indicator, and auto-advance between tracks. File resolution uses Deck's `@` workspace as the library root, and the descriptive-fallback confirmation is presented to the operator.
 
-This covers the Deck-specific side deferred from the specification change: browsing and opening `.rpl` files, creating a new playlist at a named location, adding and removing tracks, reordering entries, playback with auto-advance between tracks, and file resolution using Deck's `@` workspace as the library root.
-
-When a deck is playing from a playlist, this is visually indicated and the current position within the list is apparent to the operator.
+Uses [[content-identity-hashing]] for track identity — that is the only shared code. The `.rpl` format, resolution, tags refresh, and resilient writes are Deck's own implementations of the prose spec, organised into a `src/playlist/` module for testability.
 
 
 ## Approach
 
-### New `playlist` module
+### `.rpl` format, resolution, and resilient writes from the spec
 
-A new `src/playlist/mod.rs` implementing the `.rpl` format: parsing, serialising, the file resolution algorithm, and resilient writes. The module is independent of Deck UI — it handles the format and resolution logic only, so the same code can be tested in isolation and reused by the embedded player.
+A `src/playlist/` module implements `playlist.md`'s prose: parse/serialise the JSON schema; file resolution (path-hint confirm, library search with duration/size pre-filter then hash confirm via the shared hasher, descriptive-fallback candidate ranking, unavailable); tags refresh on locate; and resilient writes (validate by re-parse, temp file in the same directory, `.bak1`–`.bak3` rotation, atomic rename, backup recovery). Deck's own code, unit-tested here — not shared with the C player, which implements the same prose independently.
 
 ### Browser treats `.rpl` files as selectable
 
@@ -43,11 +41,11 @@ When a deck has an active playlist, the current position `x / y` is shown in the
 
 ### Auto-advance hooks into `service_deck_frame`
 
-When a deck's track finishes (remaining time ≤ 0, not paused) and its active playlist has a next entry, a load is triggered automatically. Each entry is resolved lazily — just before it plays — using the resolution algorithm, and hints are updated in the file on a successful relocate.
+When a deck's track finishes (remaining time ≤ 0, not paused) and its active playlist has a next entry, a load is triggered automatically. Each entry is resolved lazily — just before it plays — and hints are updated in the file on a successful relocate.
 
-### File resolution uses `@` workspace as library root
+### File resolution uses `@` workspace as library root, confirmation in-app
 
-The existing workspace (`BrowserState.workspace`, persisted in cache) is passed to the resolution algorithm as the search root. If no workspace is set, resolution falls back to hint-only (no library search); the operator is not prompted automatically, but the existing workspace prompt (`@`) serves this purpose.
+The existing workspace (`BrowserState.workspace`, persisted in cache) is passed to the core's resolution as the search root. If no workspace is set, resolution falls back to hint-only (no library search); the existing workspace prompt (`@`) serves this purpose. When the core returns a needs-confirmation outcome (descriptive fallback), Deck presents the ranked candidates for the operator to confirm or reject.
 
 
 ## Unresolved

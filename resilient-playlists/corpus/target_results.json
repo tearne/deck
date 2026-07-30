@@ -1,0 +1,49 @@
+{
+  "clean.wav": {
+    "format": "wav",
+    "payload": [78, 7134],
+    "hash": "c6be62f02db7b7ed0166091caacfc0cf6b8f2e2d94a95cef55b3ea8636616e43"
+  },
+  "clean.flac": {
+    "format": "flac",
+    "payload": [8288, 9258],
+    "hash": "6dd633f2317ae66cf4e260b7acf44e8adba7e57249babde493f236201da690ca"
+  },
+  "clean.ogg": {
+    "format": "ogg-vorbis",
+    "payload": [3352, 3726],
+    "hash": "5385b3c32975f5ce198861a980f0694c9129cc01d340e8f3aa22bb415fdf3158"
+  },
+  "clean.opus": {
+    "format": "opus",
+    "payload": [137, 1292],
+    "hash": "52fc1988ecbc634c043e43ec0e8668f99da771b4e4970cf03858a6f85966c061"
+  },
+  "clean.mp3": {
+    "format": "mp3",
+    "payload": [0, 1044],
+    "hash": "b15d0412a584b4580c16f53ccbd87859fa83d268ca916544d3d935eef57463b0"
+  },
+  "clean.aac": {
+    "format": "aac",
+    "payload": [0, 1238],
+    "hash": "03a9fd5e2360e9fc56bc9b87da35592f1175cbfcb4207bdbf7dbf78fca4e4de4"
+  },
+  "clean.m4a": {
+    "format": "m4a",
+    "payload": [44, 1247],
+    "hash": "c26371218614bb2ad0683e78abd80daf24a02314ef61ffe20a8023e90ac01d47"
+  },
+  "id3-prepended.flac": {
+    "format": "flac",
+    "payload": [8335, 9305],
+    "hash": "6dd633f2317ae66cf4e260b7acf44e8adba7e57249babde493f236201da690ca",
+    "note": "clean.flac preceded by an ID3v2 tag; identical hash proves the tag is excluded"
+  },
+  "tagged.mp3": {
+    "format": "mp3",
+    "payload": [60, 1104],
+    "hash": "b15d0412a584b4580c16f53ccbd87859fa83d268ca916544d3d935eef57463b0",
+    "note": "clean.mp3 wrapped in ID3v2 (leading) + APEv2 + ID3v1 (trailing); identical hash proves all are excluded"
+  }
+}
