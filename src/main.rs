@@ -33,6 +33,7 @@ mod cache;
 mod config;
 mod deck;
 mod frame_stats;
+mod playlist;
 mod render;
 mod tags;
 
