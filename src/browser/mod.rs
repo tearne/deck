@@ -55,6 +55,9 @@ pub(crate) struct BrowserState {
     /// The file being relocated while in Move mode (the entry highlighted when `m`
     /// was pressed).
     pub(crate) move_source: Option<std::path::PathBuf>,
+    /// Which deck a load will target. Floats — set on open to the least-disruptive
+    /// deck and adjustable with `[`/`]` (any mode) or `1`/`2`/`3` (command mode).
+    pub(crate) target_deck: usize,
 }
 
 impl BrowserState {
@@ -98,7 +101,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0 })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -221,6 +224,18 @@ impl BrowserState {
         let cwd = self.cwd.clone();
         self.navigate_to(cwd)
     }
+
+    /// Whether a search filter is currently narrowing the listing.
+    fn has_filter(&self) -> bool {
+        self.search_results.is_some() || !self.search_term.is_empty()
+    }
+
+    /// Drop the search filter, returning to the plain directory listing. Mode is
+    /// left unchanged so exiting *from* search mode still restores it on reopen.
+    fn clear_filter(&mut self) {
+        self.search_term.clear();
+        self.update_search();
+    }
 }
 
 /// Compute a human-readable relative path from `base` to `target`, using `./` and `../` notation.
@@ -300,14 +315,14 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "j/k move · Enter/l open · h up · / search · @ workspace · Esc exit",
+            legend: "j/k move · Enter load/open · [ ] deck · / search · @ ws · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
             highlight_fg: Color::Rgb(210, 235, 255),
             highlight_bg: Color::Rgb(20, 50, 70),
             label: "SEARCH",
-            legend: "type to filter · ↑/↓ move · Enter open · Tab command · Esc exit",
+            legend: "type to filter · ↑/↓ move · Enter load · [ ] deck · Tab command · Esc clear/exit",
         },
         BrowserMode::Move => ModeTheme {
             accent: Color::Rgb(150, 190, 250),
@@ -323,7 +338,6 @@ pub(crate) fn render_browser(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     state: &BrowserState,
-    deck_slot: usize,
 ) {
     let bg    = Color::Rgb(20, 20, 38);
     let theme = mode_theme(state.mode);
@@ -334,38 +348,51 @@ pub(crate) fn render_browser(
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    // Top bar: mode-dependent. Search shows the filter field; Move a destination
-    // banner; Command the workspace status.
+    // Top bar: a prominent load-target chip on the left (easy to miss otherwise),
+    // the mode's content right-aligned on the right.
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(11), Constraint::Min(0)])
+        .split(chunks[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(ratatui::text::Span::styled(
+            format!(" ▶ DECK {} ", state.target_deck + 1),
+            Style::default().fg(Color::Black).bg(theme.accent).add_modifier(Modifier::BOLD),
+        ))).style(Style::default().bg(bg)),
+        top[0],
+    );
+    let right = top[1];
     match state.mode {
         BrowserMode::Search => {
             let mut spans = vec![
-                ratatui::text::Span::styled(" search: ", Style::default().fg(theme.accent).bg(bg)),
+                ratatui::text::Span::styled("search: ", Style::default().fg(theme.accent).bg(bg)),
             ];
             if state.search_term.is_empty() {
                 spans.push(ratatui::text::Span::styled("type to filter", Style::default().fg(Color::Rgb(60, 60, 80)).bg(bg)));
             } else {
                 spans.push(ratatui::text::Span::styled(state.search_term.clone(), Style::default().fg(Color::White).bg(bg)));
             }
-            spans.push(ratatui::text::Span::styled("█", Style::default().fg(theme.accent).bg(bg)));
-            frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)), chunks[0]);
+            spans.push(ratatui::text::Span::styled("█ ", Style::default().fg(theme.accent).bg(bg)));
+            frame.render_widget(Paragraph::new(Line::from(spans)).alignment(Alignment::Right).style(Style::default().bg(bg)), right);
         }
         BrowserMode::Move => {
             let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
             frame.render_widget(
-                Paragraph::new(format!(" Move here → {name}    y: confirm   Esc: cancel"))
+                Paragraph::new(format!("Move here → {name}    y: confirm   Esc: cancel "))
+                    .alignment(Alignment::Right)
                     .style(Style::default().fg(theme.accent).bg(bg)),
-                chunks[0],
+                right,
             );
         }
         BrowserMode::Command => {
             let msg = if state.workspace.is_some() {
-                " workspace set · ' to clear · / to search"
+                "workspace set · ' clear · / search "
             } else {
-                " Press @ to set this directory as your search workspace"
+                "@ to set a search workspace "
             };
             frame.render_widget(
-                Paragraph::new(msg).style(Style::default().fg(Color::Rgb(80, 100, 140)).bg(bg)),
-                chunks[0],
+                Paragraph::new(msg).alignment(Alignment::Right).style(Style::default().fg(Color::Rgb(80, 100, 140)).bg(bg)),
+                right,
             );
         }
     }
@@ -428,7 +455,6 @@ pub(crate) fn render_browser(
 
     let mut block = Block::default()
         .title(path_title.alignment(Alignment::Left))
-        .title(Line::from(ratatui::text::Span::styled(format!(" deck {} ", deck_slot + 1), Style::default().fg(Color::Yellow).bg(bg))).alignment(Alignment::Right))
         .border_style(border_style)
         .style(Style::default().bg(bg))
         .borders(Borders::ALL);
@@ -469,6 +495,13 @@ pub(crate) fn handle_browser_key(
     // Repeat counts as a press: terminals without key-release reporting deliver
     // auto-repeat as presses anyway, so held-key behaviour stays uniform.
     if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) { return Ok(None); }
+    // `[`/`]` cycle the load target in every mode — non-letter keys, so they don't
+    // collide with search typing.
+    match key.code {
+        KeyCode::Char('[') => { state.target_deck = (state.target_deck + 2) % 3; return Ok(None); }
+        KeyCode::Char(']') => { state.target_deck = (state.target_deck + 1) % 3; return Ok(None); }
+        _ => {}
+    }
     match state.mode {
         BrowserMode::Command => command_key(state, key),
         BrowserMode::Search => search_key(state, key),
@@ -534,6 +567,8 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
             }
             Ok(None)
         }
+        KeyCode::Char(d @ '1'..='3') => { state.target_deck = d as usize - '1' as usize; Ok(None) }
+        KeyCode::Esc if state.has_filter() => { state.clear_filter(); Ok(None) }
         KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
         _ => Ok(None),
     }
@@ -545,6 +580,7 @@ fn search_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io::
         KeyCode::Down => { state.nav_down(); Ok(None) }
         KeyCode::Enter => open_highlighted(state),
         KeyCode::Tab => { state.mode = BrowserMode::Command; Ok(None) }
+        KeyCode::Esc if state.has_filter() => { state.clear_filter(); Ok(None) }
         KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
         KeyCode::Backspace => {
             state.search_term.pop();
@@ -601,6 +637,7 @@ mod tests {
             workspace_files: None,
             mode: BrowserMode::Command,
             move_source: None,
+            target_deck: 0,
         }
     }
 

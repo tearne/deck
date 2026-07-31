@@ -397,13 +397,21 @@ fn notification(message: impl Into<String>, style: NotificationStyle) -> Notific
     Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
 }
 
+/// The least-disruptive deck to load into: an empty deck first, then a
+/// loaded-but-not-playing one, falling back to `selected` when all are playing.
+fn default_target_deck(decks: &[Option<Deck>; 3], selected: usize) -> usize {
+    (0..3).find(|&i| decks[i].is_none())
+        .or_else(|| (0..3).find(|&i| decks[i].as_ref().is_some_and(|d| d.audio.player.is_paused())))
+        .unwrap_or(selected)
+}
+
 /// One key for the standalone tag editor. Saving writes tags (and renames on a
 /// stem change) to the editor's own file, syncs any deck loaded from it, refreshes
 /// the browser if open, and reports through the global notification.
 fn handle_tag_editor_key(
     tag_editor: &mut Option<TagEditorState>,
     decks: &mut [Option<Deck>; 3],
-    browser_state: &mut Option<(BrowserState, usize)>,
+    browser_state: &mut Option<BrowserState>,
     global_notification: &mut Option<Notification>,
     key: crossterm::event::KeyEvent,
 ) {
@@ -446,7 +454,7 @@ fn handle_tag_editor_key(
                         Err(e) => *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error)),
                         Ok(()) => {
                             sync_deck_path(decks, &old, &target, Some(&name));
-                            if let Some((bs, _)) = browser_state.as_mut() { let _ = bs.refresh(); }
+                            if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
                             *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
                         }
                     }
@@ -552,7 +560,9 @@ fn tui_loop(
     // The tag editor is a standalone overlay (may sit over the browser or the
     // player), not attached to a deck.
     let mut tag_editor: Option<TagEditorState> = None;
-    let mut browser_state: Option<(BrowserState, usize)> = None; // (state, target deck slot)
+    let mut browser_state: Option<BrowserState> = None;
+    // A pending load awaiting confirmation because its target deck is playing.
+    let mut browser_load_confirm: Option<(PathBuf, usize)> = None;
     // The browser's primary mode persists across open/close within a session, so
     // reopening restores Command or Search as last used.
     let mut last_browser_mode = BrowserMode::Command;
@@ -569,7 +579,6 @@ fn tui_loop(
     let mut space_repeat_suppressed = false;
     let mut space_saw_event_this_frame = false;
     let mut pending_quit: Option<Instant> = None;
-    let mut browser_blocked: Option<(Instant, usize)> = None; // (expiry, target deck slot)
     let mut bpm_ramp_started: Option<Instant> = None;
     let mut bpm_ramp_last: Option<Instant> = None;
     // One Esc tap arrives as two Press events ~100 ms apart (a Kitty decode quirk;
@@ -723,6 +732,10 @@ fn tui_loop(
             Some(format!("Loading {}…{}", p.filename, pct))
         });
 
+        // While the browser is open, player commands are intercepted and the load
+        // target (not the selected deck) is what matters, so the selected-deck
+        // highlight is suspended to avoid reading as the target.
+        let browser_open = browser_state.is_some();
         let draw_start = Instant::now();
         terminal.draw(|frame| {
             let area = frame.area();
@@ -837,7 +850,8 @@ fn tui_loop(
 
             // Active-deck accent bar in the reserved gutter: one segment beside the
             // deck's detail waveform, one beside its header/info/overview strip.
-            {
+            // Suspended while the browser is open.
+            if !browser_open {
                 let detail_area   = [area_detail_a, area_detail_b, area_detail_c][selected_deck];
                 let notif_area    = [area_notif_a, area_notif_b, area_notif_c][selected_deck];
                 let info_area     = [area_info_a, area_info_b, area_info_c][selected_deck];
@@ -907,7 +921,7 @@ fn tui_loop(
             // ---- Deck 1 ----
             if let (Some(deck), Some(rs)) = (&mut d0, &render[0]) {
                 let content = notification_line_for_deck(deck, area_notif_a.width.saturating_sub(2) as usize, vinyl_mode);
-                let num1_style = if selected_deck == 0 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num1_style = if selected_deck == 0 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_a);
@@ -920,7 +934,7 @@ fn tui_loop(
                 }
                 render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
-                let num1_style = if selected_deck == 0 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num1_style = if selected_deck == 0 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
                 if let Some(ref s) = loading_label[0] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
@@ -936,7 +950,7 @@ fn tui_loop(
             // ---- Deck 2 ----
             if let (Some(deck), Some(rs)) = (&mut d1, &render[1]) {
                 let content = notification_line_for_deck(deck, area_notif_b.width.saturating_sub(2) as usize, vinyl_mode);
-                let num2_style = if selected_deck == 1 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num2_style = if selected_deck == 1 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_b);
@@ -949,7 +963,7 @@ fn tui_loop(
                 }
                 render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
-                let num2_style = if selected_deck == 1 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num2_style = if selected_deck == 1 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
                 if let Some(ref s) = loading_label[1] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
@@ -965,7 +979,7 @@ fn tui_loop(
             // ---- Deck 3 ----
             if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
                 let content = notification_line_for_deck(deck, area_notif_c.width.saturating_sub(2) as usize, vinyl_mode);
-                let num3_style = if selected_deck == 2 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num3_style = if selected_deck == 2 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_c);
@@ -982,7 +996,7 @@ fn tui_loop(
                 }
                 render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
             } else {
-                let num3_style = if selected_deck == 2 { Style::default().fg(Color::Yellow) } else { label_style };
+                let num3_style = if selected_deck == 2 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
                 if let Some(ref s) = loading_label[2] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
@@ -998,7 +1012,6 @@ fn tui_loop(
             // ---- Global status bar ----
             {
                 if pending_quit.map_or(false, |e| Instant::now() > e) { pending_quit = None; }
-                if browser_blocked.map_or(false, |(e, _)| Instant::now() > e) { browser_blocked = None; global_notification = None; }
                 let notification_bar = |msg: &str, expires: Instant, fg: Color, bg: Color, countdown_fg: Color| {
                     let secs = expires.saturating_duration_since(Instant::now()).as_secs();
                     let countdown = format!("[{}]", secs);
@@ -1047,13 +1060,13 @@ fn tui_loop(
             }
 
             // ---- Browser / cover art (spacer row) ----
-            if let Some((ref bs, slot)) = browser_state {
+            if let Some(ref bs) = browser_state {
                 if c[16].height >= 8 {
-                    render_browser(frame, c[16], bs, slot);
+                    render_browser(frame, c[16], bs);
                 } else {
                     // Art area too small — render browser fullscreen.
                     frame.render_widget(ratatui::widgets::Clear, inner);
-                    render_browser(frame, inner, bs, slot);
+                    render_browser(frame, inner, bs);
                 }
             } else if c[16].height >= 3 && art_bright_idx < 2 {
                 let brightness = [1.0f32, 0.35, 0.0][art_bright_idx as usize];
@@ -1172,10 +1185,30 @@ fn tui_loop(
                     }
                     continue; // block all other key handling while editor is open
                 }
+                // Load-confirm: the target deck was playing. y/Enter loads; any other
+                // key cancels (so a stray press can never leave input stuck).
+                if browser_state.is_some() && browser_load_confirm.is_some() {
+                    if key.kind == KeyEventKind::Press {
+                        if key.code == KeyCode::Enter {
+                            let (path, deck) = browser_load_confirm.take().unwrap();
+                            global_notification = None;
+                            if let Some(bs) = browser_state.as_ref() { *browser_dir = bs.cwd.clone(); }
+                            cache.set_last_browser_path(browser_dir);
+                            if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
+                            decks[deck] = None;
+                            pending_loads[deck] = Some(start_load(&path));
+                            browser_state = None;
+                            preview_output = None;
+                        } else {
+                            // Any other key cancels — no wedge, and it matches the prompt.
+                            browser_load_confirm = None;
+                            global_notification = None;
+                        }
+                    }
+                    continue;
+                }
                 // Browser — intercepts all key events when open.
-                if let Some((ref mut bs, target)) = browser_state {
-                    let target = target;
-
+                if let Some(bs) = browser_state.as_mut() {
                     // # previews the highlighted audio file — only in Command mode,
                     // where letters aren't filter input.
                     if key.kind == KeyEventKind::Press
@@ -1206,13 +1239,24 @@ fn tui_loop(
                             preview_output = None;
                         }
                         Some(BrowserResult::Selected(path)) => {
-                            *browser_dir = bs.cwd.clone();
-                            cache.set_last_browser_path(browser_dir);
-                            if let Some(ref d) = decks[target] { d.audio.player.stop(); }
-                            decks[target] = None;
-                            pending_loads[target] = Some(start_load(&path));
-                            browser_state = None;
-                            preview_output = None;
+                            let target = bs.target_deck;
+                            let playing = decks[target].as_ref().is_some_and(|d| !d.audio.player.is_paused());
+                            if playing {
+                                // Defer the load behind a confirmation; the browser stays open.
+                                browser_load_confirm = Some((path, target));
+                                global_notification = Some(notification(
+                                    format!("Deck {} is playing — Enter to load, any other key cancels", target + 1),
+                                    NotificationStyle::Error,
+                                ));
+                            } else {
+                                *browser_dir = bs.cwd.clone();
+                                cache.set_last_browser_path(browser_dir);
+                                if let Some(ref d) = decks[target] { d.audio.player.stop(); }
+                                decks[target] = None;
+                                pending_loads[target] = Some(start_load(&path));
+                                browser_state = None;
+                                preview_output = None;
+                            }
                         }
                         Some(BrowserResult::EditRequested(path)) => {
                             tag_editor = Some(TagEditorState::for_track(&path));
@@ -1410,22 +1454,6 @@ fn tui_loop(
                         help_open = false;
                         continue 'tui;
                     }
-                    // Browser-blocked intercept — y overrides, Esc/n cancels.
-                    if let Some((_, target)) = browser_blocked {
-                        if matches!(key.code, KeyCode::Char('y')) {
-                            browser_blocked = None;
-                            global_notification = None;
-                            let workspace = cache.workspace().map(|p| p.to_path_buf());
-                            let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
-                            bs.mode = last_browser_mode;
-                            browser_state = Some((bs, target));
-                            preview_output = Some(PreviewOutput::new(mixer));
-                        } else if matches!(key.code, KeyCode::Char('n') | KeyCode::Esc) {
-                            browser_blocked = None;
-                            global_notification = None;
-                        }
-                        continue 'tui;
-                    }
                     // Quit confirmation intercept — y/Enter confirms, anything else cancels.
                     if pending_quit.is_some() {
                         pending_quit = None;
@@ -1529,23 +1557,14 @@ fn tui_loop(
                     Some(Action::SelectDeck2) => { selected_deck = 1; }
                     Some(Action::SelectDeck3) => { selected_deck = 2; }
                     Some(Action::OpenBrowser) => {
-                        let target = selected_deck;
-                        let playing = decks[target].as_ref().map_or(false, |d| !d.audio.player.is_paused());
-                        if playing {
-                            let expires = Instant::now() + Duration::from_secs(5);
-                            global_notification = Some(Notification {
-                                message: "Track is playing — open browser?  [y] open   [Esc/n] cancel".to_string(),
-                                style: NotificationStyle::Error,
-                                expires,
-                            });
-                            browser_blocked = Some((expires, target));
-                        } else {
-                            let workspace = cache.workspace().map(|p| p.to_path_buf());
-                            let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
-                            bs.mode = last_browser_mode;
-                            browser_state = Some((bs, target));
-                            preview_output = Some(PreviewOutput::new(mixer));
-                        }
+                        // Opening never interrupts anything; the load target defaults to
+                        // the least-disruptive deck and is adjustable in the browser.
+                        let workspace = cache.workspace().map(|p| p.to_path_buf());
+                        let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
+                        bs.mode = last_browser_mode;
+                        bs.target_deck = default_target_deck(&decks, selected_deck);
+                        browser_state = Some(bs);
+                        preview_output = Some(PreviewOutput::new(mixer));
                     }
                     Some(Action::PlayPause) => {
                         if let Some(ref d) = decks[selected_deck] {

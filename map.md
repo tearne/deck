@@ -58,6 +58,7 @@ Application
 ├ Browser
 │ ├ Search
 │ ├ Preview
+│ ├ Load Target
 │ └ File Operations
 │   ├ Metadata Editor
 │   └ Move
@@ -624,12 +625,13 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#search)
 [Down](#preview)
 [Down](#file-operations)
+[Down](#load-target)
 
-A file navigator for loading tracks. It opens over the player at any time (`open_browser`) with audio still playing; choosing an audio file loads it into the selected deck and returns to the player. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
+A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
-The last-visited directory is remembered between sessions, so the browser reopens where you left off (a path on the command line wins for the first open only). If the target deck is already playing, opening asks for confirmation first, so a stray key can't interrupt a mix.
+The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track into the current Load Target.
 
-The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen — and `Esc` leaves the browser from any mode. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
+The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen. `Esc` backs out one level — clearing an active search filter in place (mode unchanged, so exiting from search still restores it on reopen), then exiting the browser. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
 **See also**
 
@@ -661,6 +663,13 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 **See also**
 
 - [Keymap](#keymap) — the preview key
+
+
+# Load Target
+
+[Up](#browser)
+
+Where `Enter` sends the highlighted track. The browser isn't bound to a deck — the target floats, shown as a chip. It defaults to the least-disruptive deck: an empty one, else a loaded-but-not-playing one, else the selected deck. Adjust it with `[`/`]` in any mode, or `1`/`2`/`3` in command mode. Loading into a deck that is playing asks to confirm first — `Enter` loads, any other key cancels.
 
 
 # Mixer
