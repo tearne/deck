@@ -143,6 +143,9 @@ pub(crate) const TAG_EDITOR_MIN_WIDTH: u16 = 36; // 2 borders + 9 label + at lea
 pub(crate) struct TagEditorState {
     pub(crate) fields:          Vec<(String, usize)>,
     pub(crate) active_field:    usize,
+    /// Directory of the file being edited, so save can write and rename without
+    /// reference to any deck.
+    pub(crate) dir:             std::path::PathBuf,
     pub(crate) current_stem:    String,
     pub(crate) extension:       String,
     pub(crate) collision_error: Option<String>,
@@ -155,9 +158,29 @@ impl TagEditorState {
             .into_iter()
             .map(|v| (v, 0))
             .collect();
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
         let current_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        TagEditorState { fields, active_field: 0, current_stem, extension, collision_error: None }
+        TagEditorState { fields, active_field: 0, dir, current_stem, extension, collision_error: None }
+    }
+
+    /// The file's current full path (before any pending rename).
+    pub(crate) fn current_path(&self) -> std::path::PathBuf {
+        if self.extension.is_empty() {
+            self.dir.join(&self.current_stem)
+        } else {
+            self.dir.join(format!("{}.{}", self.current_stem, self.extension))
+        }
+    }
+
+    /// The full path the current field values would rename the file to.
+    pub(crate) fn target_path(&self) -> std::path::PathBuf {
+        let stem = self.preview();
+        if self.extension.is_empty() {
+            self.dir.join(stem)
+        } else {
+            self.dir.join(format!("{stem}.{}", self.extension))
+        }
     }
 
     pub(crate) fn active_field_mut(&mut self) -> (&mut String, &mut usize) {
@@ -194,7 +217,6 @@ pub(crate) struct Deck {
     pub(crate) rename_hint: Option<String>,
     pub(crate) rename_offer_started: Option<Instant>,
     pub(crate) rename_accepted: Option<String>,
-    pub(crate) tag_editor: Option<TagEditorState>,
     pub(crate) cover_art: Option<Vec<u8>>,
     pub(crate) cover_art_cache: Option<(u16, u16, u8, ratatui::widgets::Paragraph<'static>)>, // (cols, rows, bright_idx, rendered art)
 
@@ -236,7 +258,6 @@ impl Deck {
             rename_offer_started: rename_hint.as_ref().map(|_| Instant::now()),
             rename_hint,
             rename_accepted: None,
-            tag_editor: None,
             cover_art: None,
             cover_art_cache: None,
             audio,

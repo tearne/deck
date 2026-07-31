@@ -51,7 +51,7 @@ use render::{
     extract_tick_viewport, halfblock_art, info_line_empty, DEFAULT_ZOOM_IDX,
     info_line_for_deck, notification_line_empty, notification_line_for_deck,
     overview_empty, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
-    render_file_ops_menu, render_keyboard_help, render_shared_tick_row,
+    render_keyboard_help, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
 use tags::{propose_rename_stem, read_cover_art, read_track_name};
@@ -352,39 +352,147 @@ fn build_deck(
     deck
 }
 
-/// Move a deck's track file into `dest_dir`, updating the deck's path on success.
-/// The audio is already decoded in memory, so playback is unaffected. Returns a
-/// notification describing the outcome.
-fn move_track_to_directory(deck: &mut Deck, dest_dir: &std::path::Path) -> Notification {
-    let Some(filename) = deck.path.file_name() else {
-        return move_notification("Track has no filename", NotificationStyle::Error);
+/// Move `source` into `dest_dir`. Audio already decoded in memory is unaffected.
+/// Returns the outcome notification and, on success, the file's new path.
+fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Notification, Option<PathBuf>) {
+    let Some(filename) = source.file_name() else {
+        return (notification("File has no name", NotificationStyle::Error), None);
     };
     let destination = dest_dir.join(filename);
-    if destination == deck.path {
-        return move_notification("Track is already in that directory", NotificationStyle::Warning);
+    if destination == source {
+        return (notification("Already in that directory", NotificationStyle::Warning), None);
     }
     if destination.exists() {
-        return move_notification(
-            format!("A file named {} already exists there", filename.to_string_lossy()),
-            NotificationStyle::Error,
+        return (
+            notification(format!("A file named {} already exists there", filename.to_string_lossy()), NotificationStyle::Error),
+            None,
         );
     }
-    match std::fs::rename(&deck.path, &destination) {
-        Ok(()) => {
-            deck.path = destination;
-            move_notification(format!("Moved to {}", dest_dir.display()), NotificationStyle::Success)
-        }
+    match std::fs::rename(source, &destination) {
+        Ok(()) => (notification(format!("Moved to {}", dest_dir.display()), NotificationStyle::Success), Some(destination)),
         // EXDEV: rename can't cross filesystems, and a copy-then-delete fallback
         // would need progress and interruption handling out of proportion here.
-        Err(e) if e.raw_os_error() == Some(18) => {
-            move_notification("Can't move across filesystems", NotificationStyle::Error)
-        }
-        Err(e) => move_notification(format!("Move failed: {e}"), NotificationStyle::Error),
+        Err(e) if e.raw_os_error() == Some(18) => (notification("Can't move across filesystems", NotificationStyle::Error), None),
+        Err(e) => (notification(format!("Move failed: {e}"), NotificationStyle::Error), None),
     }
 }
 
-fn move_notification(message: impl Into<String>, style: NotificationStyle) -> Notification {
+/// After a file is renamed or moved, update any deck loaded from the old path so
+/// it follows the file. `new_track_name` refreshes the display name on a retag.
+fn sync_deck_path(decks: &mut [Option<Deck>; 3], old_path: &Path, new_path: &Path, new_track_name: Option<&str>) {
+    for slot in 0..3 {
+        if let Some(ref mut d) = decks[slot] {
+            if d.path == old_path {
+                d.path = new_path.to_path_buf();
+                d.filename = new_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                if let Some(name) = new_track_name { d.track_name = name.to_string(); }
+                d.rename_hint = None;
+                d.rename_offer_started = None;
+            }
+        }
+    }
+}
+
+fn notification(message: impl Into<String>, style: NotificationStyle) -> Notification {
     Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
+}
+
+/// One key for the standalone tag editor. Saving writes tags (and renames on a
+/// stem change) to the editor's own file, syncs any deck loaded from it, refreshes
+/// the browser if open, and reports through the global notification.
+fn handle_tag_editor_key(
+    tag_editor: &mut Option<TagEditorState>,
+    decks: &mut [Option<Deck>; 3],
+    browser_state: &mut Option<(BrowserState, usize)>,
+    global_notification: &mut Option<Notification>,
+    key: crossterm::event::KeyEvent,
+) {
+    match key.code {
+        KeyCode::Esc => { *tag_editor = None; }
+        KeyCode::Enter => {
+            enum Job { Skip, Save { old: PathBuf, target: PathBuf, needs_rename: bool, fields: Vec<(String, usize)>, name: String, stem: String } }
+            let job = {
+                let editor = tag_editor.as_mut().unwrap();
+                if editor.fields[0].0.trim().is_empty() || editor.fields[1].0.trim().is_empty() {
+                    Job::Skip
+                } else {
+                    for (val, cursor) in &mut editor.fields {
+                        let trimmed = val.trim().to_string();
+                        *cursor = (*cursor).min(trimmed.chars().count());
+                        *val = trimmed;
+                    }
+                    let stem = editor.preview();
+                    let needs_rename = stem != editor.current_stem;
+                    let old = editor.current_path();
+                    let target = editor.target_path();
+                    if needs_rename && target.exists() {
+                        let fname = target.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                        editor.collision_error = Some(format!("already exists: {fname}"));
+                        Job::Skip
+                    } else {
+                        editor.collision_error = None;
+                        let fields = editor.fields.clone();
+                        let name = format!("{} \u{2013} {}", fields[1].0, fields[0].0);
+                        Job::Save { old, target, needs_rename, fields, name, stem }
+                    }
+                }
+            };
+            if let Job::Save { old, target, needs_rename, fields, name, stem } = job {
+                *tag_editor = None;
+                if let Err(e) = crate::tags::write_tags(&old, &fields) {
+                    *global_notification = Some(notification(format!("tag write failed: {e}"), NotificationStyle::Error));
+                } else if needs_rename {
+                    match std::fs::rename(&old, &target) {
+                        Err(e) => *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error)),
+                        Ok(()) => {
+                            sync_deck_path(decks, &old, &target, Some(&name));
+                            if let Some((bs, _)) = browser_state.as_mut() { let _ = bs.refresh(); }
+                            *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
+                        }
+                    }
+                } else {
+                    sync_deck_path(decks, &old, &old, Some(&name));
+                    *global_notification = Some(notification("tags saved", NotificationStyle::Info));
+                }
+            }
+        }
+        _ => {
+            let editor = tag_editor.as_mut().unwrap();
+            match key.code {
+                KeyCode::Tab | KeyCode::Down => { editor.active_field = (editor.active_field + 1) % TAG_FIELD_LABELS.len(); }
+                KeyCode::BackTab | KeyCode::Up => { editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len() - 1) % TAG_FIELD_LABELS.len(); }
+                KeyCode::Left => { let (_, cursor) = editor.active_field_mut(); if *cursor > 0 { *cursor -= 1; } }
+                KeyCode::Right => { let (text, cursor) = editor.active_field_mut(); let len = text.chars().count(); if *cursor < len { *cursor += 1; } }
+                KeyCode::Home => { let (_, cursor) = editor.active_field_mut(); *cursor = 0; }
+                KeyCode::End => { let (text, cursor) = editor.active_field_mut(); *cursor = text.chars().count(); }
+                KeyCode::Backspace => {
+                    let (text, cursor) = editor.active_field_mut();
+                    if *cursor > 0 {
+                        let mut chars: Vec<char> = text.chars().collect();
+                        chars.remove(*cursor - 1);
+                        *text = chars.into_iter().collect();
+                        *cursor -= 1;
+                    }
+                }
+                KeyCode::Delete => {
+                    let (text, cursor) = editor.active_field_mut();
+                    let mut chars: Vec<char> = text.chars().collect();
+                    if *cursor < chars.len() {
+                        chars.remove(*cursor);
+                        *text = chars.into_iter().collect();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    let (text, cursor) = editor.active_field_mut();
+                    let mut chars: Vec<char> = text.chars().collect();
+                    chars.insert(*cursor, c);
+                    *text = chars.into_iter().collect();
+                    *cursor += 1;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn tui_loop(
@@ -441,7 +549,9 @@ fn tui_loop(
     let mut fps_sample_frames: u32 = 0;
     let mut fps_display: (u32, u32, u32) = (0, 0, target_fps); // (current, budget, cap)
     let mut help_open = false;
-    let mut file_ops_menu_open = false;
+    // The tag editor is a standalone overlay (may sit over the browser or the
+    // player), not attached to a deck.
+    let mut tag_editor: Option<TagEditorState> = None;
     let mut browser_state: Option<(BrowserState, usize)> = None; // (state, target deck slot)
     // The browser's primary mode persists across open/close within a session, so
     // reopening restores Command or Search as last used.
@@ -490,7 +600,7 @@ fn tui_loop(
         // automatically — the sleep shrinks to compensate for a slow terminal flush.
         // When the tag editor is open, bypass the waveform-derived budget entirely so text
         // navigation and input are never throttled by zoom level.
-        let tag_editor_open = decks.iter().flatten().any(|d| d.tag_editor.is_some());
+        let tag_editor_open = tag_editor.is_some();
         let frame_dur = if tag_editor_open {
             Duration::from_millis(16)
         } else {
@@ -982,18 +1092,9 @@ fn tui_loop(
                 render_keyboard_help(frame, c[16]);
             }
 
-            // File-operations which-key submenu
-            if file_ops_menu_open {
-                render_file_ops_menu(frame, area);
-            }
-
-            // Tag editor overlay
-            for deck_opt in [&d0, &d1, &d2] {
-                if let Some(deck) = deck_opt {
-                    if let Some(ref editor) = deck.tag_editor {
-                        render_tag_editor(frame, editor, area);
-                    }
-                }
+            // Tag editor overlay — a standalone modal over whatever is beneath.
+            if let Some(ref editor) = tag_editor {
+                render_tag_editor(frame, editor, area);
             }
 
         })?;
@@ -1009,7 +1110,7 @@ fn tui_loop(
             match event::read()? {
             Event::Mouse(mouse_event) => {
                 if browser_state.is_some() { continue; }
-                if decks.iter().flatten().any(|d| d.tag_editor.is_some()) { continue; }
+                if tag_editor.is_some() { continue; }
                 if mouse_event.kind == MouseEventKind::Down(MouseButton::Left) {
                     let col = mouse_event.column as usize;
                     let row = mouse_event.row as usize;
@@ -1064,170 +1165,12 @@ fn tui_loop(
                     cache.save();
                     return Ok(());
                 }
-                // Tag editor — intercepts all key events when open, before any other handling.
-                {
-                    let editor_open = decks.iter().flatten().any(|d| d.tag_editor.is_some());
-                    if editor_open {
-                        if let KeyEventKind::Press = key.kind {
-                            for slot in 0..3 {
-                                if let Some(ref mut d) = decks[slot] {
-                                    if let Some(ref mut editor) = d.tag_editor {
-                                        match key.code {
-                                            KeyCode::Esc => { d.tag_editor = None; }
-                                            KeyCode::Enter => {
-                                                let artist_blank = editor.fields[0].0.trim().is_empty();
-                                                let title_blank  = editor.fields[1].0.trim().is_empty();
-                                                if !artist_blank && !title_blank {
-                                                    for (val, cursor) in &mut editor.fields {
-                                                        let trimmed = val.trim().to_string();
-                                                        *cursor = (*cursor).min(trimmed.chars().count());
-                                                        *val = trimmed;
-                                                    }
-                                                    let new_stem  = editor.preview();
-                                                    let extension = editor.extension.clone();
-                                                    let needs_rename = new_stem != editor.current_stem;
-                                                    let target_path = {
-                                                        let parent = d.path.parent()
-                                                            .unwrap_or_else(|| std::path::Path::new("."));
-                                                        if extension.is_empty() {
-                                                            parent.join(&new_stem)
-                                                        } else {
-                                                            parent.join(format!("{new_stem}.{extension}"))
-                                                        }
-                                                    };
-                                                    if needs_rename && target_path.exists() {
-                                                        let filename = target_path
-                                                            .file_name()
-                                                            .and_then(|n| n.to_str())
-                                                            .unwrap_or("")
-                                                            .to_string();
-                                                        editor.collision_error = Some(format!("already exists: {filename}"));
-                                                    } else {
-                                                        editor.collision_error = None;
-                                                        let fields_snapshot: Vec<(String, usize)> = editor.fields.clone();
-                                                        d.tag_editor = None;
-                                                        match crate::tags::write_tags(&d.path, &fields_snapshot) {
-                                                            Err(e) => {
-                                                                d.active_notification = Some(Notification {
-                                                                    message: format!("tag write failed: {e}"),
-                                                                    style: NotificationStyle::Error,
-                                                                    expires: Instant::now() + Duration::from_secs(5),
-                                                                });
-                                                            }
-                                                            Ok(()) => {
-                                                                if needs_rename {
-                                                                    match std::fs::rename(&d.path, &target_path) {
-                                                                        Err(e) => {
-                                                                            d.active_notification = Some(Notification {
-                                                                                message: format!("rename failed: {e}"),
-                                                                                style: NotificationStyle::Error,
-                                                                                expires: Instant::now() + Duration::from_secs(5),
-                                                                            });
-                                                                        }
-                                                                        Ok(()) => {
-                                                                            if target_path.exists() {
-                                                                                d.path = target_path.clone();
-                                                                                d.filename = target_path
-                                                                                    .file_name()
-                                                                                    .and_then(|n| n.to_str())
-                                                                                    .unwrap_or("")
-                                                                                    .to_string();
-                                                                                d.track_name = format!(
-                                                                                    "{} \u{2013} {}",
-                                                                                    fields_snapshot[1].0,
-                                                                                    fields_snapshot[0].0,
-                                                                                );
-                                                                                d.rename_hint = None;
-                                                                                d.rename_offer_started = None;
-                                                                                d.active_notification = Some(Notification {
-                                                                                    message: format!("\u{2192} {new_stem}"),
-                                                                                    style: NotificationStyle::Success,
-                                                                                    expires: Instant::now() + NOTIFICATION_TIMEOUT,
-                                                                                });
-                                                                            } else {
-                                                                                d.active_notification = Some(Notification {
-                                                                                    message: "rename could not be verified".to_string(),
-                                                                                    style: NotificationStyle::Error,
-                                                                                    expires: Instant::now() + Duration::from_secs(5),
-                                                                                });
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                } else {
-                                                                    d.track_name = format!(
-                                                                        "{} \u{2013} {}",
-                                                                        fields_snapshot[1].0,
-                                                                        fields_snapshot[0].0,
-                                                                    );
-                                                                    d.rename_hint = None;
-                                                                    d.rename_offer_started = None;
-                                                                    d.active_notification = Some(Notification {
-                                                                        message: "tags saved".to_string(),
-                                                                        style: NotificationStyle::Info,
-                                                                        expires: Instant::now() + NOTIFICATION_TIMEOUT,
-                                                                    });
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            KeyCode::Tab | KeyCode::Down => {
-                                                editor.active_field = (editor.active_field + 1) % TAG_FIELD_LABELS.len();
-                                            }
-                                            KeyCode::BackTab | KeyCode::Up => {
-                                                editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len() - 1) % TAG_FIELD_LABELS.len();
-                                            }
-                                            KeyCode::Left => {
-                                                let (_, cursor) = editor.active_field_mut();
-                                                if *cursor > 0 { *cursor -= 1; }
-                                            }
-                                            KeyCode::Right => {
-                                                let (text, cursor) = editor.active_field_mut();
-                                                let len = text.chars().count();
-                                                if *cursor < len { *cursor += 1; }
-                                            }
-                                            KeyCode::Home => {
-                                                let (_, cursor) = editor.active_field_mut();
-                                                *cursor = 0;
-                                            }
-                                            KeyCode::End => {
-                                                let (text, cursor) = editor.active_field_mut();
-                                                *cursor = text.chars().count();
-                                            }
-                                            KeyCode::Backspace => {
-                                                let (text, cursor) = editor.active_field_mut();
-                                                if *cursor > 0 {
-                                                    let mut chars: Vec<char> = text.chars().collect();
-                                                    chars.remove(*cursor - 1);
-                                                    *text = chars.into_iter().collect();
-                                                    *cursor -= 1;
-                                                }
-                                            }
-                                            KeyCode::Delete => {
-                                                let (text, cursor) = editor.active_field_mut();
-                                                let mut chars: Vec<char> = text.chars().collect();
-                                                if *cursor < chars.len() {
-                                                    chars.remove(*cursor);
-                                                    *text = chars.into_iter().collect();
-                                                }
-                                            }
-                                            KeyCode::Char(c) => {
-                                                let (text, cursor) = editor.active_field_mut();
-                                                let mut chars: Vec<char> = text.chars().collect();
-                                                chars.insert(*cursor, c);
-                                                *text = chars.into_iter().collect();
-                                                *cursor += 1;
-                                            }
-                                            _ => {}
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        continue; // block all other key handling while editor is open
+                // Tag editor — a standalone modal; intercepts all keys while open.
+                if tag_editor.is_some() {
+                    if let KeyEventKind::Press = key.kind {
+                        handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut global_notification, key);
                     }
+                    continue; // block all other key handling while editor is open
                 }
                 // Browser — intercepts all key events when open.
                 if let Some((ref mut bs, target)) = browser_state {
@@ -1271,14 +1214,21 @@ fn tui_loop(
                             browser_state = None;
                             preview_output = None;
                         }
+                        Some(BrowserResult::EditRequested(path)) => {
+                            tag_editor = Some(TagEditorState::for_track(&path));
+                        }
                         Some(BrowserResult::DirectoryChosen(dir)) => {
-                            *browser_dir = bs.cwd.clone();
-                            cache.set_last_browser_path(browser_dir);
-                            browser_state = None;
-                            preview_output = None;
-                            if let Some(ref mut d) = decks[target] {
-                                global_notification = Some(move_track_to_directory(d, &dir));
+                            // Move the carried source file, sync any deck loaded from
+                            // it, and stay in the browser (back to Command) refreshed.
+                            if let Some(source) = bs.move_source.take() {
+                                let (notif, new_path) = move_file_to_directory(&source, &dir);
+                                if let Some(ref new_path) = new_path {
+                                    sync_deck_path(&mut decks, &source, new_path, None);
+                                }
+                                global_notification = Some(notif);
                             }
+                            bs.mode = BrowserMode::Command;
+                            let _ = bs.refresh();
                         }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             cache.set_workspace(&path);
@@ -1531,7 +1481,7 @@ fn tui_loop(
                             if d.rename_offer_active() {
                                 match key.code {
                                     KeyCode::Char('y') => {
-                                        d.tag_editor = Some(TagEditorState::for_track(&d.path));
+                                        tag_editor = Some(TagEditorState::for_track(&d.path));
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
                                     }
@@ -1544,32 +1494,6 @@ fn tui_loop(
                         }
                     }
                     if rename_offer_consumed { continue 'tui; }
-
-                    // File-operations submenu — the prefix opened it last frame; this
-                    // frame's key picks an operation. Inner keys are fixed, not keymap
-                    // entries, so nothing can collide with the submenu.
-                    if file_ops_menu_open {
-                        file_ops_menu_open = false;
-                        match key.code {
-                            KeyCode::Char('e') => {
-                                if let Some(ref mut d) = decks[selected_deck] {
-                                    d.tag_editor = Some(TagEditorState::for_track(&d.path));
-                                }
-                            }
-                            KeyCode::Char('m') => {
-                                if decks[selected_deck].is_some() {
-                                    let workspace = cache.workspace().map(|p| p.to_path_buf());
-                                    let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
-                                    bs.mode = BrowserMode::Move;
-                                    bs.snap_to_cursor_stop();
-                                    browser_state = Some((bs, selected_deck));
-                                }
-                            }
-                            // Esc, ~, or any other key cancels.
-                            _ => {}
-                        }
-                        continue 'tui;
-                    }
 
                     let action = if space_held && key.code != KeyCode::Char(' ') {
                         if let Some(a) = keymap.get(&KeyBinding::SpaceChord(key.code)) {
@@ -1604,17 +1528,6 @@ fn tui_loop(
                     Some(Action::SelectDeck1) => { selected_deck = 0; }
                     Some(Action::SelectDeck2) => { selected_deck = 1; }
                     Some(Action::SelectDeck3) => { selected_deck = 2; }
-                    Some(Action::FileOperations) => {
-                        if decks[selected_deck].is_some() {
-                            file_ops_menu_open = true;
-                        } else {
-                            global_notification = Some(Notification {
-                                message: "No track on the selected deck".to_string(),
-                                style: NotificationStyle::Error,
-                                expires: Instant::now() + NOTIFICATION_TIMEOUT,
-                            });
-                        }
-                    }
                     Some(Action::OpenBrowser) => {
                         let target = selected_deck;
                         let playing = decks[target].as_ref().map_or(false, |d| !d.audio.player.is_paused());

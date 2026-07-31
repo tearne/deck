@@ -22,7 +22,7 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps   ~ files ╰ [Space]
+/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps          ╰ [Space]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
@@ -52,7 +52,6 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `fps_decrease` | `Y` | Decrease FPS cap |
 | `palette_cycle` | `p` | Cycle colour palette |
 | `art_cycle` | `/` | Cycle album art brightness |
-| `file_operations` | `~` | Open the file-operations submenu (edit tags/rename, move) |
 
 ### Deck Selection & Swap
 

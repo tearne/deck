@@ -52,6 +52,9 @@ pub(crate) struct BrowserState {
     /// Flat list of all audio files under the workspace; populated on first search keystroke.
     workspace_files: Option<Vec<std::path::PathBuf>>,
     pub(crate) mode: BrowserMode,
+    /// The file being relocated while in Move mode (the entry highlighted when `m`
+    /// was pressed).
+    pub(crate) move_source: Option<std::path::PathBuf>,
 }
 
 impl BrowserState {
@@ -95,7 +98,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -200,14 +203,23 @@ impl BrowserState {
         }
     }
 
-    /// Rebuild the browser at `dir`, preserving the workspace and mode.
+    /// Rebuild the browser at `dir`, preserving the workspace, mode, and any
+    /// in-flight move source.
     fn navigate_to(&mut self, dir: std::path::PathBuf) -> io::Result<()> {
         let workspace = self.workspace.clone();
         let mode = self.mode;
+        let move_source = self.move_source.take();
         *self = BrowserState::new(dir, workspace)?;
         self.mode = mode;
+        self.move_source = move_source;
         if mode == BrowserMode::Move { self.snap_to_cursor_stop(); }
         Ok(())
+    }
+
+    /// Re-read the current directory in place (after a file was renamed or moved).
+    pub(crate) fn refresh(&mut self) -> io::Result<()> {
+        let cwd = self.cwd.clone();
+        self.navigate_to(cwd)
     }
 }
 
@@ -264,6 +276,7 @@ fn run_search(term: &str, files: &[std::path::PathBuf], workspace: &std::path::P
 pub(crate) enum BrowserResult {
     Selected(std::path::PathBuf),
     DirectoryChosen(std::path::PathBuf),
+    EditRequested(std::path::PathBuf),
     WorkspaceSet(std::path::PathBuf),
     WorkspaceCleared,
     ReturnToPlayer,
@@ -511,6 +524,16 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         KeyCode::Tab | KeyCode::Char('/') => { state.mode = BrowserMode::Search; Ok(None) }
         KeyCode::Char('@') => Ok(set_workspace(state)),
         KeyCode::Char('\'') => Ok(clear_workspace(state)),
+        // File operations on the highlighted audio entry; no-op on dirs/non-audio.
+        KeyCode::Char('e') => Ok(state.highlighted_audio_path().map(BrowserResult::EditRequested)),
+        KeyCode::Char('m') => {
+            if let Some(source) = state.highlighted_audio_path() {
+                state.move_source = Some(source);
+                state.mode = BrowserMode::Move;
+                state.snap_to_cursor_stop();
+            }
+            Ok(None)
+        }
         KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
         _ => Ok(None),
     }
@@ -547,7 +570,9 @@ fn move_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io::Re
         }
         KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => { go_up(state)?; Ok(None) }
         KeyCode::Char('y') => Ok(Some(BrowserResult::DirectoryChosen(state.cwd.clone()))),
-        KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
+        // Move is entered from within the browser, so cancelling returns to Command
+        // rather than leaving the browser entirely.
+        KeyCode::Esc => { state.mode = BrowserMode::Command; state.move_source = None; state.snap_to_cursor_stop(); Ok(None) }
         _ => Ok(None),
     }
 }
@@ -575,6 +600,7 @@ mod tests {
             search_results: None,
             workspace_files: None,
             mode: BrowserMode::Command,
+            move_source: None,
         }
     }
 

@@ -28,9 +28,6 @@ Application
 │ ├ Deck Selection
 │ ├ Track Loading
 │ │ └ Renaming
-│ ├ File Operations
-│ │ ├ Metadata Editor
-│ │ └ Move
 │ ├ Spectral Colour
 │ ├ Overview Waveform
 │ ├ Spectrum Analyser
@@ -60,7 +57,10 @@ Application
 │   └ Metronome
 ├ Browser
 │ ├ Search
-│ └ Preview
+│ ├ Preview
+│ └ File Operations
+│   ├ Metadata Editor
+│   └ Move
 ├ Mixer
 │ └ PFL Monitor
 ├ Keymap
@@ -75,7 +75,6 @@ Application
 [Up](#application)
 [Down](#deck-selection)
 [Down](#track-loading)
-[Down](#file-operations)
 [Down](#spectral-colour)
 [Down](#overview-waveform)
 [Down](#spectrum-analyser)
@@ -121,22 +120,22 @@ Keeps track filenames matching their tags. The convention is `Title - Artist` (a
 **See also**
 
 - [Metadata Editor](#metadata-editor) — the modal the offer opens
-- [File Operations](#file-operations) — the on-demand path to the same editor
+- [File Operations](#file-operations) — editing the same file on demand, from the browser
 - [Keymap](#keymap) — fixed rename/editor keys
 
 
 # File Operations
 
-[Up](#deck)
+[Up](#browser)
 [Down](#metadata-editor)
 [Down](#move)
 
-A which-key submenu for operations on the loaded track's own file. A prefix key opens a transient panel listing each operation; the next key runs it, Esc cancels. This keeps file operations off the main keymap, which has no spare keys. Two operations, both on the selected deck's track: edit its tags and name, or move the file to another directory.
+The browser's command mode acts on the highlighted file: `e` edits its tags and name, `m` moves it to another directory. Any audio file you can navigate to, not just one loaded on a deck — the browser is a file manager. If a touched file is currently loaded on a deck, that deck follows it (its path and name update).
 
 **See also**
 
-- [Renaming](#renaming) — the load-time path that also opens the editor
-- [Keymap](#keymap) — the submenu prefix and its fixed inner keys
+- [Renaming](#renaming) — the load-time offer that also opens the editor
+- [Keymap](#keymap) — the fixed command-mode file-op keys
 
 
 # Metadata Editor
@@ -145,7 +144,7 @@ A which-key submenu for operations on the loaded track's own file. A prefix key 
 
 The modal that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. Confirming writes the edited metadata back to the file and renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. While open it captures all input.
 
-Reached two ways: deliberately from File Operations, or via the load-time rename offer (see Renaming).
+Reached two ways: by `e` on a highlighted file in the browser, or via the load-time rename offer (see Renaming).
 
 **Detail**
 
@@ -162,7 +161,7 @@ Reached two ways: deliberately from File Operations, or via the load-time rename
 
 [Up](#file-operations)
 
-Relocates the loaded track's file to another directory — for sorting tracks into folders while listening. Choosing the destination is a distinct, folder-focused experience: folders read in clear blue and are the only thing selectable, tracks and other files are shown but dimmed and inert, and confirming targets the directory currently open. The file is renamed into that directory; playback is unaffected since the audio is already decoded in memory.
+Relocates the highlighted file to another directory — for sorting tracks into folders while listening. Pressing `m` in command mode enters the browser's move mode: a folder-focused view where folders read in clear blue and are the only thing selectable, tracks and other files shown but dimmed and inert. Navigate to the target folder and `y` moves the file there. If the file is loaded on a deck, that deck follows it; playback is unaffected since the audio is already decoded in memory.
 
 **Detail**
 
@@ -170,7 +169,7 @@ Relocates the loaded track's file to another directory — for sorting tracks in
 
 **See also**
 
-- [Browser](#browser) — the same navigator underneath, shown in its pick-destination mode
+- [Browser](#browser) — move is one of its command-mode modes
 
 
 # Spectral Colour
@@ -624,17 +623,18 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Up](#application)
 [Down](#search)
 [Down](#preview)
+[Down](#file-operations)
 
 A file navigator for loading tracks. It opens over the player at any time (`open_browser`) with audio still playing; choosing an audio file loads it into the selected deck and returns to the player. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
 The last-visited directory is remembered between sessions, so the browser reopens where you left off (a path on the command line wins for the first open only). If the target deck is already playing, opening asks for confirmation first, so a stray key can't interrupt a mix.
 
-The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands; **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen — and `Esc` leaves the browser from any mode. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
+The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen — and `Esc` leaves the browser from any mode. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
 **See also**
 
 - [Cache](#cache) — where the last-visited directory and workspace persist
-- [Move](#move) — reuses the navigator to pick a destination directory
+- [File Operations](#file-operations) — editing and moving files from command mode
 - [Keymap](#keymap) — navigation and action keys
 
 
@@ -699,7 +699,7 @@ Space acts as a modifier: holding it and pressing another key fires a chord acti
 
 Esc is inherently ambiguous — it is both the dismiss/quit key and the byte that begins every terminal escape sequence — and some terminals report a single Esc keypress as two events. Esc is therefore debounced: a second Esc within ~200 ms of one that acted is ignored, so a single tap can't, for instance, dismiss an overlay and then quit.
 
-Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser navigation, tag editor input, confirmation prompts, and the file-operations submenu's inner keys.
+Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser command-mode and search keys, tag editor input, and confirmation prompts.
 
 **See also**
 

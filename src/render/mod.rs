@@ -1865,7 +1865,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
     let row15 = Line::from(vec![
-        Span::styled("/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps   ~ files", ba),
+        Span::styled("/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps          ", ba),
         Span::styled("╰ [Space]", sp),
     ]);
 
@@ -1890,40 +1890,4 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),
         inner,
     );
-}
-
-/// A Helix-style which-key panel: the file-operations prefix has been pressed
-/// and the next key picks an operation.
-pub(crate) fn render_file_ops_menu(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-    let entries = [("e", "Edit tags / rename"), ("m", "Move to directory…")];
-
-    let bg = Color::Rgb(15, 15, 15);
-    let key_style   = Style::default().fg(Color::Rgb(220, 200, 120));
-    let name_style  = Style::default().fg(Color::Rgb(170, 170, 170));
-    let title_style = Style::default().fg(Color::Rgb(120, 140, 180));
-
-    let mut lines = vec![Line::styled("File operations", title_style), Line::from("")];
-    for (key, name) in entries {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {key}   "), key_style),
-            Span::styled(name, name_style),
-        ]));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::styled("  Esc cancels", Style::default().fg(Color::Rgb(90, 90, 90))));
-
-    let width  = 30u16;
-    let height = lines.len() as u16 + 2;
-    let outer  = popup_area(width, height, area);
-
-    frame.render_widget(Clear, outer);
-    frame.render_widget(Block::default().style(Style::default().bg(bg)), outer);
-
-    let inner = ratatui::layout::Rect {
-        x: outer.x + 2,
-        y: outer.y + 1,
-        width: outer.width.saturating_sub(4),
-        height: outer.height.saturating_sub(2),
-    };
-    frame.render_widget(Paragraph::new(lines).style(Style::default().bg(bg)), inner);
 }
