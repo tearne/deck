@@ -629,7 +629,7 @@ A file navigator for loading tracks. It opens over the player at any time (`open
 
 The last-visited directory is remembered between sessions, so the browser reopens where you left off (a path on the command line wins for the first open only). If the target deck is already playing, opening asks for confirmation first, so a stray key can't interrupt a mix.
 
-The same navigator also serves as the move destination picker, in a distinct pick-destination mode (see Move). Navigation is by arrow keys or `j`/`k`.
+The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands; **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen — and `Esc` leaves the browser from any mode. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
 **See also**
 
@@ -642,9 +642,9 @@ The same navigator also serves as the move destination picker, in a distinct pic
 
 [Up](#browser)
 
-Fuzzy track-finding across a whole library, not just the current directory. Searching needs a **workspace** — a directory nominated as the search root (`@` sets the current directory, `'` clears it). The workspace persists between sessions and is silently dropped if it no longer exists, prompting for a new one.
+Fuzzy track-finding, entered as **search mode** (`Tab` or `/` from command mode). With a **workspace** set — a directory nominated as the search root (`@` sets the current directory, `'` clears it) — typing searches recursively beneath the root, each match shown relative to it, best-match-first. With no workspace, typing filters the current directory's own listing instead. Clearing the term restores the full listing.
 
-With a workspace set, typing builds a search term and the listing is replaced by audio files found recursively beneath the root, each shown relative to it and ordered best-match-first. Clearing the term restores the directory listing.
+The workspace persists between sessions and is silently dropped if it no longer exists, prompting for a new one.
 
 **See also**
 

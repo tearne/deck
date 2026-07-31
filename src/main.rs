@@ -38,7 +38,7 @@ mod render;
 mod tags;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
-use browser::{BrowserResult, BrowserState, handle_browser_key, render_browser};
+use browser::{BrowserMode, BrowserResult, BrowserState, handle_browser_key, render_browser};
 use cache::{cache_path, hash_mono, Cache, detect_bpm};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
@@ -443,6 +443,9 @@ fn tui_loop(
     let mut help_open = false;
     let mut file_ops_menu_open = false;
     let mut browser_state: Option<(BrowserState, usize)> = None; // (state, target deck slot)
+    // The browser's primary mode persists across open/close within a session, so
+    // reopening restores Command or Search as last used.
+    let mut last_browser_mode = BrowserMode::Command;
     let mut preview_output: Option<PreviewOutput> = None;
     let mut max_det_h: usize = usize::MAX;
     let pfl_active_deck = Arc::new(AtomicUsize::new(usize::MAX));
@@ -1230,8 +1233,12 @@ fn tui_loop(
                 if let Some((ref mut bs, target)) = browser_state {
                     let target = target;
 
-                    // # starts (or restarts) preview of the highlighted audio file.
-                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('#') {
+                    // # previews the highlighted audio file — only in Command mode,
+                    // where letters aren't filter input.
+                    if key.kind == KeyEventKind::Press
+                        && key.code == KeyCode::Char('#')
+                        && bs.mode == BrowserMode::Command
+                    {
                         if let Some(ref po) = preview_output {
                             if let Some(path) = bs.highlighted_audio_path() {
                                 po.play(&path);
@@ -1244,6 +1251,9 @@ fn tui_loop(
                     if let Some(ref po) = preview_output {
                         po.stop();
                     }
+
+                    // Remember the primary mode so the browser reopens where it left off.
+                    last_browser_mode = bs.primary_mode();
 
                     match handle_browser_key(bs, key)? {
                         Some(BrowserResult::ReturnToPlayer) => {
@@ -1275,13 +1285,6 @@ fn tui_loop(
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
                             cache.clear_workspace();
-                        }
-                        Some(BrowserResult::Quit) => {
-                            *browser_dir = bs.cwd.clone();
-                            cache.set_last_browser_path(browser_dir);
-                            for slot in 0..3 { if let Some(ref d) = decks[slot] { d.audio.player.stop(); } }
-                            cache.save();
-                            return Ok(());
                         }
                         None => {}
                     }
@@ -1463,7 +1466,9 @@ fn tui_loop(
                             browser_blocked = None;
                             global_notification = None;
                             let workspace = cache.workspace().map(|p| p.to_path_buf());
-                            browser_state = Some((BrowserState::new(browser_dir.clone(), workspace)?, target));
+                            let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
+                            bs.mode = last_browser_mode;
+                            browser_state = Some((bs, target));
                             preview_output = Some(PreviewOutput::new(mixer));
                         } else if matches!(key.code, KeyCode::Char('n') | KeyCode::Esc) {
                             browser_blocked = None;
@@ -1555,7 +1560,7 @@ fn tui_loop(
                                 if decks[selected_deck].is_some() {
                                     let workspace = cache.workspace().map(|p| p.to_path_buf());
                                     let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
-                                    bs.pick_destination = true;
+                                    bs.mode = BrowserMode::Move;
                                     bs.snap_to_cursor_stop();
                                     browser_state = Some((bs, selected_deck));
                                 }
@@ -1623,7 +1628,9 @@ fn tui_loop(
                             browser_blocked = Some((expires, target));
                         } else {
                             let workspace = cache.workspace().map(|p| p.to_path_buf());
-                            browser_state = Some((BrowserState::new(browser_dir.clone(), workspace)?, target));
+                            let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
+                            bs.mode = last_browser_mode;
+                            browser_state = Some((bs, target));
                             preview_output = Some(PreviewOutput::new(mixer));
                         }
                     }
