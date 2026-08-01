@@ -59,6 +59,7 @@ Application
 │ ├ Search
 │ ├ Preview
 │ ├ Load Target
+│ ├ Jump to Loaded
 │ ├ Tag Compliance
 │ └ File Operations
 │   ├ Metadata Editor
@@ -628,6 +629,7 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#file-operations)
 [Down](#load-target)
 [Down](#tag-compliance)
+[Down](#jump-to-loaded)
 
 A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
@@ -672,6 +674,13 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 [Up](#browser)
 
 Where `Enter` sends the highlighted track. The browser isn't bound to a deck — the target floats, shown as a chip. It defaults to the least-disruptive deck: an empty one, else a loaded-but-not-playing one, else the selected deck. Adjust it with `[`/`]` in any mode, or `1`/`2`/`3` in command mode. Loading into a deck that is playing asks to confirm first — `Enter` loads, any other key cancels.
+
+
+# Jump to Loaded
+
+[Up](#browser)
+
+`` ` `` in command mode rotates the browser through the directories of the tracks currently loaded on the decks, highlighting each track, and loops back to the directory it opened at — a quick way to return to where a loaded track lives while browsing. A subtle chip at the top names each stop: "Working directory", then "Deck N directory".
 
 
 # Tag Compliance

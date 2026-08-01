@@ -639,6 +639,9 @@ fn tui_loop(
     // player), not attached to a deck.
     let mut tag_editor: Option<TagEditorState> = None;
     let mut browser_state: Option<BrowserState> = None;
+    // Rotation index for the `` ` `` jump through loaded-track locations (0 = the
+    // opening directory); reset when the browser opens.
+    let mut location_cycle: usize = 0;
     // A pending load awaiting confirmation because its target deck is playing.
     let mut browser_load_confirm: Option<(PathBuf, usize)> = None;
     // Tag-compliance scan: a per-session cache keyed by path, and the current
@@ -1394,6 +1397,22 @@ fn tui_loop(
                             bs.mode = BrowserMode::Command;
                             let _ = bs.refresh();
                         }
+                        Some(BrowserResult::CycleLocation) => {
+                            // Locations: the opening directory (home), then each loaded
+                            // deck's track directory (with the track highlighted).
+                            let mut locations: Vec<(PathBuf, Option<PathBuf>, String)> =
+                                vec![(browser_dir.clone(), None, "Working directory".to_string())];
+                            for slot in 0..3 {
+                                if let Some(ref d) = decks[slot] {
+                                    if let Some(parent) = d.path.parent() {
+                                        locations.push((parent.to_path_buf(), Some(d.path.clone()), format!("Deck {} directory", slot + 1)));
+                                    }
+                                }
+                            }
+                            location_cycle = (location_cycle + 1) % locations.len();
+                            let (dir, highlight, label) = &locations[location_cycle];
+                            let _ = bs.go_to(dir.clone(), highlight.as_deref(), label.clone());
+                        }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             cache.set_workspace(&path);
                         }
@@ -1683,8 +1702,11 @@ fn tui_loop(
                         let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
                         bs.mode = last_browser_mode;
                         bs.target_deck = default_target_deck(&decks, selected_deck);
+                        // Opens at the working directory (cycle position 0); show its label.
+                        bs.location_label = Some("Working directory".to_string());
                         browser_state = Some(bs);
                         preview_output = Some(PreviewOutput::new(mixer));
+                        location_cycle = 0;
                     }
                     Some(Action::PlayPause) => {
                         if let Some(ref d) = decks[selected_deck] {

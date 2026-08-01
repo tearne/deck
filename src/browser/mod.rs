@@ -64,6 +64,9 @@ pub(crate) struct BrowserState {
     /// Tag-compliance "cleanup mode": when on, the current directory is scanned and
     /// non-compliant files are marked. Toggled with `T`, preserved across navigation.
     pub(crate) compliance_on: bool,
+    /// Label naming a location the operator just jumped to (`` ` `` cycle), shown at
+    /// the top. Cleared on the next manual navigation.
+    pub(crate) location_label: Option<String>,
 }
 
 impl BrowserState {
@@ -108,7 +111,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0, compliance_on: false })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0, compliance_on: false, location_label: None })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -236,6 +239,19 @@ impl BrowserState {
         self.navigate_to(cwd)
     }
 
+    /// Jump to `dir`, optionally placing the cursor on `highlight`, and record
+    /// `label` naming the stop (shown at the top until the next manual navigation).
+    pub(crate) fn go_to(&mut self, dir: std::path::PathBuf, highlight: Option<&std::path::Path>, label: String) -> io::Result<()> {
+        self.navigate_to(dir)?;
+        if let Some(p) = highlight {
+            if let Some(i) = self.entries.iter().position(|e| e.path == p) {
+                self.cursor = i;
+            }
+        }
+        self.location_label = Some(label);
+        Ok(())
+    }
+
     /// Whether a search filter is currently narrowing the listing.
     fn has_filter(&self) -> bool {
         self.search_results.is_some() || !self.search_term.is_empty()
@@ -326,6 +342,8 @@ pub(crate) enum BrowserResult {
     WorkspaceSet(std::path::PathBuf),
     WorkspaceCleared,
     ReturnToPlayer,
+    /// `` ` `` — rotate to the next loaded-track location (handled by the player loop).
+    CycleLocation,
 }
 
 /// The colour identity and key legend for a mode — the visual signal of which
@@ -346,7 +364,7 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "j/k move · Enter load · [ ] deck · / search · @ ws · T tags · Esc back",
+            legend: "j/k move · Enter load · [ ] deck · ` jump · / search · @ ws · T tags · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
@@ -426,6 +444,17 @@ pub(crate) fn render_browser(
                 right,
             );
         }
+    }
+    // The jumped-to location label sits prominently at the top-left of the content,
+    // over the mode hint, until the next manual navigation clears it.
+    if let Some(ref label) = state.location_label {
+        frame.render_widget(
+            Paragraph::new(Line::from(ratatui::text::Span::styled(
+                format!(" ◈ {label} "),
+                Style::default().fg(Color::Rgb(170, 195, 225)).bg(Color::Rgb(38, 50, 78)),
+            ))).style(Style::default().bg(bg)),
+            right,
+        );
     }
 
     // List: search results or directory entries.
@@ -610,6 +639,8 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
             Ok(None)
         }
         KeyCode::Char(d @ '1'..='3') => { state.target_deck = d as usize - '1' as usize; Ok(None) }
+        // Rotate through loaded-track locations.
+        KeyCode::Char('`') => Ok(Some(BrowserResult::CycleLocation)),
         // Tag-compliance cleanup mode. Editing a flagged file auto-advances to the
         // next one, so no explicit jump key is needed.
         KeyCode::Char('T') => { state.compliance_on = !state.compliance_on; Ok(None) }
@@ -685,6 +716,7 @@ mod tests {
             move_source: None,
             target_deck: 0,
             compliance_on: false,
+            location_label: None,
         }
     }
 
