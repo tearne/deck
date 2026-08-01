@@ -69,6 +69,19 @@ fn panic_log_path() -> std::path::PathBuf {
         .join(".config/deck/panic.log")
 }
 
+/// The app's state directory (`$XDG_STATE_HOME` else `~/.local/state`, plus
+/// `/deck`) — for diagnostic artefacts and logs.
+fn state_dir() -> std::path::PathBuf {
+    if let Some(x) = std::env::var_os("XDG_STATE_HOME") {
+        std::path::PathBuf::from(x).join("deck")
+    } else {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".local/state/deck")
+    }
+}
+
 /// A minimal terminal DJ player.
 #[derive(Parser)]
 #[command(version)]
@@ -398,6 +411,85 @@ fn notification(message: impl Into<String>, style: NotificationStyle) -> Notific
     Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
 }
 
+/// The file's content-identity hash, or `None` if it can't be read or hashed
+/// (an unverifiable identity — a different concern from a changed one).
+fn identity_of(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    resilient_playlists::content_hash(&bytes).ok()
+}
+
+/// Write tags to `path`, verifying the content identity is unchanged — tag edits
+/// must never alter the audio payload. Returns `Ok(None)` when the identity holds
+/// (or can't be verified), `Ok(Some(dir))` when it changed (a fault: the original
+/// and edited files plus details are preserved in the returned incident folder),
+/// or `Err` if the write itself failed.
+fn write_tags_verified(path: &Path, fields: &[(String, usize)]) -> Result<Option<PathBuf>, String> {
+    let base = state_dir().join("identity-mismatches");
+    let _ = std::fs::create_dir_all(&base);
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("track");
+    let staged = base.join(format!(".staging-{filename}"));
+    let staged_ok = std::fs::copy(path, &staged).is_ok();
+
+    let before = identity_of(path);
+    crate::tags::write_tags(path, fields)?; // propagates a write failure unchanged
+    let mut after = identity_of(path);
+    // Fault injection for exercising the safety net without touching the file: when
+    // this env var is set, force the identity comparison to fail so the alert and
+    // incident-folder path runs on a real (uncorrupted) edit.
+    if std::env::var_os("DECK_SIMULATE_IDENTITY_FAULT").is_some() {
+        after = Some("simulated-identity-fault".to_string());
+    }
+
+    let mismatch = matches!((&before, &after), (Some(b), Some(a)) if b != a);
+    if !mismatch || !staged_ok {
+        let _ = std::fs::remove_file(&staged);
+        return Ok(None);
+    }
+
+    // Assemble a self-contained incident folder.
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
+    let incident = base.join(format!("{ts}-{stem}"));
+    std::fs::create_dir_all(&incident).map_err(|e| e.to_string())?;
+    let original = incident.join(format!("original.{ext}"));
+    let edited = incident.join(format!("edited.{ext}"));
+    let _ = std::fs::rename(&staged, &original);
+    let _ = std::fs::copy(path, &edited);
+    let _ = std::fs::write(incident.join("details.txt"), identity_incident_details(path, ts, &before, &after, &original, &edited));
+    Ok(Some(incident))
+}
+
+/// Human-readable details for an identity-mismatch incident, including the audio
+/// payload byte ranges each file reports (the two files sit alongside for diffing).
+fn identity_incident_details(source: &Path, ts: u64, before: &Option<String>, after: &Option<String>, original: &Path, edited: &Path) -> String {
+    let ranges = |p: &Path| -> String {
+        match std::fs::read(p) {
+            Ok(b) => match resilient_playlists::detect_format(&b).map(|f| resilient_playlists::payload_ranges(&b, f)) {
+                Some(Ok(r)) => format!("{r:?}"),
+                _ => "unknown".to_string(),
+            },
+            Err(_) => "unreadable".to_string(),
+        }
+    };
+    format!(
+        "Identity mismatch on tag edit — the audio payload changed, which must never happen.\n\
+         This most likely indicates a byte-range extraction bug. The original and edited\n\
+         files are preserved here for analysis (diff them to find the differing bytes).\n\n\
+         time (unix seconds): {ts}\n\
+         source path:         {}\n\
+         hash before:         {}\n\
+         hash after:          {}\n\
+         payload range (original): {}\n\
+         payload range (edited):   {}\n",
+        source.display(),
+        before.as_deref().unwrap_or("<unverifiable>"),
+        after.as_deref().unwrap_or("<unverifiable>"),
+        ranges(original),
+        ranges(edited),
+    )
+}
+
 /// A background tag-compliance scan of one directory, streaming `(path, non_compliant)`
 /// results and cancellable when the operator navigates away.
 struct ComplianceScan {
@@ -516,26 +608,44 @@ fn handle_tag_editor_key(
                 // be recomputed — drop both possible paths from the cache.
                 compliance_cache.remove(&old);
                 compliance_cache.remove(&target);
-                if let Err(e) = crate::tags::write_tags(&old, &fields) {
-                    *global_notification = Some(notification(format!("tag write failed: {e}"), NotificationStyle::Error));
-                    false
-                } else if needs_rename {
-                    match std::fs::rename(&old, &target) {
-                        Err(e) => {
-                            *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error));
-                            false
-                        }
-                        Ok(()) => {
-                            sync_deck_path(decks, &old, &target, Some(&name));
-                            if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
-                            *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
-                            true
-                        }
+                match write_tags_verified(&old, &fields) {
+                    Err(e) => {
+                        *global_notification = Some(notification(format!("tag write failed: {e}"), NotificationStyle::Error));
+                        false
                     }
-                } else {
-                    sync_deck_path(decks, &old, &old, Some(&name));
-                    *global_notification = Some(notification("tags saved", NotificationStyle::Info));
-                    true
+                    Ok(incident) => {
+                        let saved = if needs_rename {
+                            match std::fs::rename(&old, &target) {
+                                Err(e) => {
+                                    *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error));
+                                    false
+                                }
+                                Ok(()) => {
+                                    sync_deck_path(decks, &old, &target, Some(&name));
+                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
+                                    *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
+                                    true
+                                }
+                            }
+                        } else {
+                            sync_deck_path(decks, &old, &old, Some(&name));
+                            *global_notification = Some(notification("tags saved", NotificationStyle::Info));
+                            true
+                        };
+                        // A changed identity is a critical alert. Show it in the
+                        // browser header (near the eyes) with a long timeout when the
+                        // browser is open, else fall back to the global notification.
+                        if let Some(dir) = incident {
+                            let msg = format!("⚠ IDENTITY CHANGED by tag edit — files preserved in {}", dir.display());
+                            let expiry = Instant::now() + Duration::from_secs(30);
+                            if let Some(bs) = browser_state.as_mut() {
+                                bs.alert = Some((msg, expiry));
+                            } else {
+                                *global_notification = Some(Notification { message: msg, style: NotificationStyle::Error, expires: expiry });
+                            }
+                        }
+                        saved
+                    }
                 }
             } else {
                 false
@@ -2440,3 +2550,63 @@ fn service_deck_frame(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A normal tag write must not change the content identity — otherwise the
+    /// check would raise a false incident on every edit. Verifies no incident and
+    /// no leftover staging.
+    #[test]
+    fn tag_write_preserves_identity() {
+        let tmp = std::env::temp_dir().join(format!("deck-idcheck-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // SAFETY: single-threaded test setup; no other test reads XDG_STATE_HOME.
+        unsafe { std::env::set_var("XDG_STATE_HOME", &tmp); }
+
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/resilient-playlists/corpus/clean.flac");
+        let file = tmp.join("track.flac");
+        std::fs::copy(src, &file).unwrap();
+
+        let fields: Vec<(String, usize)> = ["Artist", "Title", "", "", "", "", ""]
+            .iter().map(|s| (s.to_string(), 0)).collect();
+        let incident = write_tags_verified(&file, &fields).unwrap();
+        assert_eq!(incident, None, "a normal tag write must not change identity");
+
+        let base = state_dir().join("identity-mismatches");
+        let entries: Vec<_> = std::fs::read_dir(&base).map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default();
+        assert!(entries.is_empty(), "staging/incident left behind: {entries:?}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Demonstration of the unhappy path: forces a mismatch and prints the incident
+    /// folder it produces. Run with `cargo test demo_identity_incident -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn demo_identity_incident() {
+        let tmp = std::env::temp_dir().join(format!("deck-iddemo-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // SAFETY: run alone (ignored); no other test observes these vars.
+        unsafe {
+            std::env::set_var("XDG_STATE_HOME", &tmp);
+            std::env::set_var("DECK_SIMULATE_IDENTITY_FAULT", "1");
+        }
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/resilient-playlists/corpus/clean.flac");
+        let file = tmp.join("Some Track.flac");
+        std::fs::copy(src, &file).unwrap();
+        let fields: Vec<(String, usize)> = ["Artist", "Title", "", "", "", "", ""]
+            .iter().map(|s| (s.to_string(), 0)).collect();
+
+        let incident = write_tags_verified(&file, &fields).unwrap()
+            .expect("fault injection should produce an incident");
+        println!("\n=== incident folder: {} ===", incident.display());
+        for e in std::fs::read_dir(&incident).unwrap().filter_map(|e| e.ok()) {
+            let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+            println!("  {}  ({len} bytes)", e.file_name().to_string_lossy());
+        }
+        println!("--- details.txt ---\n{}", std::fs::read_to_string(incident.join("details.txt")).unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

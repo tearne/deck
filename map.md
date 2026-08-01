@@ -149,10 +149,13 @@ The modal that does the renaming, by way of editing the track's metadata. Seven 
 
 Reached two ways: by `e` on a highlighted file in the browser, or via the load-time rename offer (see Renaming).
 
+> [!IMPORTANT] A tag edit must never change the track's **content identity** — the hash of the audio payload, with tags excluded by design, so only tag/container bytes may shift, never the payload itself. The editor enforces this as a **required safeguard**: it computes the identity (over the audio payload) before and after every write and, on any change, raises a critical alert and preserves the original and edited files under `~/.local/state/deck/identity-mismatches/` for analysis. A changed identity silently breaks every playlist referencing the track, so this is not optional and never auto-undone (the original is kept for recovery).
+
 **Detail**
 
 - Tags read via symphonia (ID3v2 preferred over container tags), written via `lofty` (symphonia is read-only).
 - Filename-illegal characters `/ \ : * ? " < > |` become `-`; renamed only when the proposed stem differs.
+- Identity check: a mismatch is a critical fault (most likely a byte-range extraction bug), surfaced and preserved rather than reverted — the audio-payload-only hash is the same invariant the playlist format's conformance relies on (tags excluded from identity).
 
 **See also**
 
