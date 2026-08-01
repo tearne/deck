@@ -59,6 +59,7 @@ Application
 │ ├ Search
 │ ├ Preview
 │ ├ Load Target
+│ ├ Tag Compliance
 │ └ File Operations
 │   ├ Metadata Editor
 │   └ Move
@@ -626,6 +627,7 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#preview)
 [Down](#file-operations)
 [Down](#load-target)
+[Down](#tag-compliance)
 
 A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
@@ -670,6 +672,24 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 [Up](#browser)
 
 Where `Enter` sends the highlighted track. The browser isn't bound to a deck — the target floats, shown as a chip. It defaults to the least-disruptive deck: an empty one, else a loaded-but-not-playing one, else the selected deck. Adjust it with `[`/`]` in any mode, or `1`/`2`/`3` in command mode. Loading into a deck that is playing asks to confirm first — `Enter` loads, any other key cancels.
+
+
+# Tag Compliance
+
+[Up](#browser)
+
+A cleanup mode (toggle `T`) for finding and fixing badly-named files. When on, the current directory's audio files are checked in the background — a file is flagged when its name doesn't match its tags (the `Title - Artist` convention) — and flagged entries show an amber `⚠` marker with a count. The same amber marks the load-time rename offer on a deck, so the signal is consistent.
+
+Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the cursor auto-advances to the next flagged file below (wrapping). Only a save advances — cancelling leaves the cursor put.
+
+**Detail**
+
+- The check opens and probes each file for tags, so it runs on a background thread and never blocks the interface. Results are cached per session (keyed by path), so revisiting a directory is instant and only new files are scanned; navigating cancels the current scan and restarts for the new directory.
+
+**See also**
+
+- [File Operations](#file-operations) — `e` opens the editor that fixes a flagged file
+- [Renaming](#renaming) — the same non-conformance check, at load time
 
 
 # Mixer

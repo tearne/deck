@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,7 +39,7 @@ mod render;
 mod tags;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
-use browser::{BrowserMode, BrowserResult, BrowserState, handle_browser_key, render_browser};
+use browser::{BrowserMode, BrowserResult, BrowserState, EntryKind, handle_browser_key, render_browser};
 use cache::{cache_path, hash_mono, Cache, detect_bpm};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
@@ -397,6 +398,69 @@ fn notification(message: impl Into<String>, style: NotificationStyle) -> Notific
     Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
 }
 
+/// A background tag-compliance scan of one directory, streaming `(path, non_compliant)`
+/// results and cancellable when the operator navigates away.
+struct ComplianceScan {
+    dir: PathBuf,
+    cancel: Arc<AtomicBool>,
+    rx: mpsc::Receiver<(PathBuf, bool)>,
+}
+
+/// A file is non-compliant when its stem differs from its tag-derived name — the
+/// same check the load-time rename offer uses. Opens and probes the file for tags.
+fn is_non_compliant(path: &Path) -> bool {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    !stem.is_empty() && propose_rename_stem(path) != stem
+}
+
+fn spawn_compliance_scan(dir: PathBuf, paths: Vec<PathBuf>) -> ComplianceScan {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let cancel_bg = Arc::clone(&cancel);
+    thread::spawn(move || {
+        for path in paths {
+            if cancel_bg.load(Ordering::Relaxed) { break; }
+            let flagged = is_non_compliant(&path);
+            if tx.send((path, flagged)).is_err() { break; }
+        }
+    });
+    ComplianceScan { dir, cancel, rx }
+}
+
+/// Each frame while the browser is open: drain scan results into the cache, mark
+/// entries from it, and keep a scan running for the current directory's unscanned
+/// files (cancelling and restarting on navigation). No-op work when off.
+fn drive_compliance_scan(
+    bs: &mut BrowserState,
+    cache: &mut HashMap<PathBuf, bool>,
+    scan: &mut Option<ComplianceScan>,
+) {
+    if !bs.compliance_on {
+        if let Some(s) = scan.take() { s.cancel.store(true, Ordering::Relaxed); }
+        for e in &mut bs.entries { e.compliance = None; }
+        return;
+    }
+    if let Some(s) = scan.as_ref() {
+        while let Ok((path, flagged)) = s.rx.try_recv() { cache.insert(path, flagged); }
+    }
+    for e in &mut bs.entries {
+        if e.kind == EntryKind::Audio {
+            e.compliance = cache.get(&e.path).copied();
+        }
+    }
+    let uncached: Vec<PathBuf> = bs.entries.iter()
+        .filter(|e| e.kind == EntryKind::Audio && !cache.contains_key(&e.path))
+        .map(|e| e.path.clone())
+        .collect();
+    let scan_covers_cwd = scan.as_ref().map_or(false, |s| s.dir == bs.cwd);
+    if !uncached.is_empty() && !scan_covers_cwd {
+        if let Some(s) = scan.take() { s.cancel.store(true, Ordering::Relaxed); }
+        *scan = Some(spawn_compliance_scan(bs.cwd.clone(), uncached));
+    } else if uncached.is_empty() && scan_covers_cwd {
+        *scan = None; // directory fully scanned
+    }
+}
+
 /// The least-disruptive deck to load into: an empty deck first, then a
 /// loaded-but-not-playing one, falling back to `selected` when all are playing.
 fn default_target_deck(decks: &[Option<Deck>; 3], selected: usize) -> usize {
@@ -413,10 +477,11 @@ fn handle_tag_editor_key(
     decks: &mut [Option<Deck>; 3],
     browser_state: &mut Option<BrowserState>,
     global_notification: &mut Option<Notification>,
+    compliance_cache: &mut HashMap<PathBuf, bool>,
     key: crossterm::event::KeyEvent,
-) {
+) -> bool {
     match key.code {
-        KeyCode::Esc => { *tag_editor = None; }
+        KeyCode::Esc => { *tag_editor = None; false }
         KeyCode::Enter => {
             enum Job { Skip, Save { old: PathBuf, target: PathBuf, needs_rename: bool, fields: Vec<(String, usize)>, name: String, stem: String } }
             let job = {
@@ -447,21 +512,33 @@ fn handle_tag_editor_key(
             };
             if let Job::Save { old, target, needs_rename, fields, name, stem } = job {
                 *tag_editor = None;
+                // The edit changes tags (and maybe the name), so its compliance must
+                // be recomputed — drop both possible paths from the cache.
+                compliance_cache.remove(&old);
+                compliance_cache.remove(&target);
                 if let Err(e) = crate::tags::write_tags(&old, &fields) {
                     *global_notification = Some(notification(format!("tag write failed: {e}"), NotificationStyle::Error));
+                    false
                 } else if needs_rename {
                     match std::fs::rename(&old, &target) {
-                        Err(e) => *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error)),
+                        Err(e) => {
+                            *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error));
+                            false
+                        }
                         Ok(()) => {
                             sync_deck_path(decks, &old, &target, Some(&name));
                             if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
                             *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
+                            true
                         }
                     }
                 } else {
                     sync_deck_path(decks, &old, &old, Some(&name));
                     *global_notification = Some(notification("tags saved", NotificationStyle::Info));
+                    true
                 }
+            } else {
+                false
             }
         }
         _ => {
@@ -499,6 +576,7 @@ fn handle_tag_editor_key(
                 }
                 _ => {}
             }
+            false
         }
     }
 }
@@ -563,6 +641,16 @@ fn tui_loop(
     let mut browser_state: Option<BrowserState> = None;
     // A pending load awaiting confirmation because its target deck is playing.
     let mut browser_load_confirm: Option<(PathBuf, usize)> = None;
+    // Tag-compliance scan: a per-session cache keyed by path, and the current
+    // background scan (if any).
+    let mut compliance_cache: HashMap<PathBuf, bool> = HashMap::new();
+    let mut compliance_scan: Option<ComplianceScan> = None;
+    // Cleanup-mode auto-advance. `edit_resume_anchor` is the entry just below the
+    // one being edited (captured at edit-open, stable across a rename); on a save
+    // it becomes `cleanup_advance_to`, applied a frame later once the listing and
+    // markers are current, moving the cursor to the next flagged entry from there.
+    let mut edit_resume_anchor: Option<PathBuf> = None;
+    let mut cleanup_advance_to: Option<PathBuf> = None;
     // The browser's primary mode persists across open/close within a session, so
     // reopening restores Command or Search as last used.
     let mut last_browser_mode = BrowserMode::Command;
@@ -736,6 +824,24 @@ fn tui_loop(
         // target (not the selected deck) is what matters, so the selected-deck
         // highlight is suspended to avoid reading as the target.
         let browser_open = browser_state.is_some();
+        // Drive the tag-compliance scan (drains results, marks entries, keeps a
+        // scan running for the current directory) before rendering.
+        if let Some(bs) = browser_state.as_mut() {
+            drive_compliance_scan(bs, &mut compliance_cache, &mut compliance_scan);
+            // After an edit in cleanup mode, resume from the neighbour that was below
+            // the fixed file (anchored by path, so a re-sort doesn't offset it): land
+            // on it if it's flagged, otherwise the next flagged below it.
+            if let Some(anchor) = cleanup_advance_to.take() {
+                if let Some(i) = bs.entries.iter().position(|e| e.path == anchor) {
+                    bs.cursor = i;
+                    if bs.entries[i].compliance != Some(true) {
+                        bs.jump_flagged(true);
+                    }
+                } else {
+                    bs.jump_flagged(true);
+                }
+            }
+        }
         let draw_start = Instant::now();
         terminal.draw(|frame| {
             let area = frame.area();
@@ -1181,7 +1287,14 @@ fn tui_loop(
                 // Tag editor — a standalone modal; intercepts all keys while open.
                 if tag_editor.is_some() {
                     if let KeyEventKind::Press = key.kind {
-                        handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut global_notification, key);
+                        let saved = handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut global_notification, &mut compliance_cache, key);
+                        if saved {
+                            // A fix: advance from the resume anchor next frame.
+                            cleanup_advance_to = edit_resume_anchor.take();
+                        } else if tag_editor.is_none() {
+                            // Editor closed without saving (cancelled) — don't advance.
+                            edit_resume_anchor = None;
+                        }
                     }
                     continue; // block all other key handling while editor is open
                 }
@@ -1260,6 +1373,13 @@ fn tui_loop(
                         }
                         Some(BrowserResult::EditRequested(path)) => {
                             tag_editor = Some(TagEditorState::for_track(&path));
+                            // Cleanup mode: remember the entry below this one so a save
+                            // resumes there (stable across the rename), wrapping to top.
+                            if bs.compliance_on {
+                                edit_resume_anchor = bs.entries.get(bs.cursor + 1)
+                                    .or_else(|| bs.entries.first())
+                                    .map(|e| e.path.clone());
+                            }
                         }
                         Some(BrowserResult::DirectoryChosen(dir)) => {
                             // Move the carried source file, sync any deck loaded from

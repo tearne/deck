@@ -29,6 +29,9 @@ pub(crate) struct BrowserEntry {
     pub(crate) name: String,
     pub(crate) path: std::path::PathBuf,
     pub(crate) kind: EntryKind,
+    /// Tag-compliance result, populated from the scan cache while compliance mode
+    /// is on: `None` unknown/unchecked, `Some(true)` non-compliant, `Some(false)` ok.
+    pub(crate) compliance: Option<bool>,
 }
 
 /// The browser is modal. Letters type into the filter only in `Search`; in every
@@ -58,6 +61,9 @@ pub(crate) struct BrowserState {
     /// Which deck a load will target. Floats — set on open to the least-disruptive
     /// deck and adjustable with `[`/`]` (any mode) or `1`/`2`/`3` (command mode).
     pub(crate) target_deck: usize,
+    /// Tag-compliance "cleanup mode": when on, the current directory is scanned and
+    /// non-compliant files are marked. Toggled with `T`, preserved across navigation.
+    pub(crate) compliance_on: bool,
 }
 
 impl BrowserState {
@@ -70,6 +76,7 @@ impl BrowserState {
                 name: "..".to_string(),
                 path: dir.parent().unwrap().to_path_buf(),
                 kind: EntryKind::Dir,
+                compliance: None,
             });
         }
 
@@ -83,11 +90,11 @@ impl BrowserState {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
-                dirs.push(BrowserEntry { name, path, kind: EntryKind::Dir });
+                dirs.push(BrowserEntry { name, path, kind: EntryKind::Dir, compliance: None });
             } else if is_audio(&path) {
-                audio.push(BrowserEntry { name, path, kind: EntryKind::Audio });
+                audio.push(BrowserEntry { name, path, kind: EntryKind::Audio, compliance: None });
             } else {
-                other.push(BrowserEntry { name, path, kind: EntryKind::Other });
+                other.push(BrowserEntry { name, path, kind: EntryKind::Other, compliance: None });
             }
         }
         entries.extend(dirs);
@@ -101,7 +108,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0 })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0, compliance_on: false })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -206,15 +213,19 @@ impl BrowserState {
         }
     }
 
-    /// Rebuild the browser at `dir`, preserving the workspace, mode, and any
-    /// in-flight move source.
+    /// Rebuild the browser at `dir`, preserving the workspace, mode, target deck,
+    /// compliance mode, and any in-flight move source.
     fn navigate_to(&mut self, dir: std::path::PathBuf) -> io::Result<()> {
         let workspace = self.workspace.clone();
         let mode = self.mode;
         let move_source = self.move_source.take();
+        let target_deck = self.target_deck;
+        let compliance_on = self.compliance_on;
         *self = BrowserState::new(dir, workspace)?;
         self.mode = mode;
         self.move_source = move_source;
+        self.target_deck = target_deck;
+        self.compliance_on = compliance_on;
         if mode == BrowserMode::Move { self.snap_to_cursor_stop(); }
         Ok(())
     }
@@ -228,6 +239,26 @@ impl BrowserState {
     /// Whether a search filter is currently narrowing the listing.
     fn has_filter(&self) -> bool {
         self.search_results.is_some() || !self.search_term.is_empty()
+    }
+
+    /// Count of entries flagged non-compliant.
+    pub(crate) fn non_compliant_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.compliance == Some(true)).count()
+    }
+
+    /// Move the cursor to the next (`forward`) or previous non-compliant entry,
+    /// wrapping around, so flagged files can be worked through in sequence.
+    pub(crate) fn jump_flagged(&mut self, forward: bool) {
+        let n = self.entries.len();
+        if n == 0 { return; }
+        let order: Vec<usize> = if forward {
+            (1..=n).map(|d| (self.cursor + d) % n).collect()
+        } else {
+            (1..=n).map(|d| (self.cursor + n - d) % n).collect()
+        };
+        if let Some(i) = order.into_iter().find(|&i| self.entries[i].compliance == Some(true)) {
+            self.cursor = i;
+        }
     }
 
     /// Drop the search filter, returning to the plain directory listing. Mode is
@@ -315,7 +346,7 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "j/k move · Enter load/open · [ ] deck · / search · @ ws · Esc back",
+            legend: "j/k move · Enter load · [ ] deck · / search · @ ws · T tags · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
@@ -414,6 +445,9 @@ pub(crate) fn render_browser(
                     EntryKind::Audio => (e.name.clone(), Color::Rgb(60, 80, 120)),
                     EntryKind::Other => (e.name.clone(), Color::Rgb(45, 55, 85)),
                 }
+            } else if e.compliance == Some(true) {
+                // Non-compliant: a warning marker and amber, so it stands out for cleanup.
+                (format!("⚠ {}", e.name), Color::Rgb(230, 170, 60))
             } else {
                 match e.kind {
                     EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(80, 110, 180)),
@@ -474,8 +508,9 @@ pub(crate) fn render_browser(
     let mut list_state = ListState::default().with_selected(Some(state.cursor));
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 
-    // Status bar: the mode label (in its accent) followed by that mode's legend.
-    let status = Line::from(vec![
+    // Status bar: the mode label (in its accent) followed by that mode's legend,
+    // plus a tag-compliance indicator when cleanup mode is on.
+    let mut status_spans = vec![
         ratatui::text::Span::styled(
             format!(" {} ", theme.label),
             Style::default().fg(Color::Black).bg(theme.accent).add_modifier(Modifier::BOLD),
@@ -484,8 +519,15 @@ pub(crate) fn render_browser(
             format!("  {}", theme.legend),
             Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg),
         ),
-    ]);
-    frame.render_widget(Paragraph::new(status).style(Style::default().bg(bg)), chunks[2]);
+    ];
+    if state.compliance_on {
+        let flagged = state.non_compliant_count();
+        status_spans.push(ratatui::text::Span::styled(
+            format!("   tags: {flagged} ⚠  (e fixes, then advances)"),
+            Style::default().fg(Color::Rgb(230, 170, 60)).bg(bg),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(status_spans)).style(Style::default().bg(bg)), chunks[2]);
 }
 
 pub(crate) fn handle_browser_key(
@@ -568,6 +610,9 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
             Ok(None)
         }
         KeyCode::Char(d @ '1'..='3') => { state.target_deck = d as usize - '1' as usize; Ok(None) }
+        // Tag-compliance cleanup mode. Editing a flagged file auto-advances to the
+        // next one, so no explicit jump key is needed.
+        KeyCode::Char('T') => { state.compliance_on = !state.compliance_on; Ok(None) }
         KeyCode::Esc if state.has_filter() => { state.clear_filter(); Ok(None) }
         KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
         _ => Ok(None),
@@ -628,6 +673,7 @@ mod tests {
                     name: format!("entry{i}"),
                     path: PathBuf::from(format!("/test/entry{i}")),
                     kind: k.clone(),
+                    compliance: None,
                 })
                 .collect(),
             cursor: 0,
@@ -638,6 +684,7 @@ mod tests {
             mode: BrowserMode::Command,
             move_source: None,
             target_deck: 0,
+            compliance_on: false,
         }
     }
 
@@ -647,6 +694,31 @@ mod tests {
         assert!(is_audio(&PathBuf::from("track.mp3")));
         assert!(is_audio(&PathBuf::from("track.ogg")));
         assert!(is_audio(&PathBuf::from("track.wav")));
+    }
+
+    #[test]
+    fn jump_flagged_moves_to_next_and_prev_wrapping() {
+        let mut s = make_state(&[EntryKind::Audio, EntryKind::Audio, EntryKind::Audio, EntryKind::Audio]);
+        s.entries[1].compliance = Some(true);
+        s.entries[3].compliance = Some(true);
+        s.cursor = 0;
+        s.jump_flagged(true);
+        assert_eq!(s.cursor, 1);
+        s.jump_flagged(true);
+        assert_eq!(s.cursor, 3);
+        s.jump_flagged(true); // wraps back to 1
+        assert_eq!(s.cursor, 1);
+        s.jump_flagged(false); // previous flagged wraps to 3
+        assert_eq!(s.cursor, 3);
+        assert_eq!(s.non_compliant_count(), 2);
+    }
+
+    #[test]
+    fn jump_flagged_noop_when_none_flagged() {
+        let mut s = make_state(&[EntryKind::Audio, EntryKind::Audio]);
+        s.cursor = 1;
+        s.jump_flagged(true);
+        assert_eq!(s.cursor, 1);
     }
 
     #[test]

@@ -646,9 +646,10 @@ pub(crate) fn notification_line_for_deck(deck: &Deck, content_width: usize, viny
         let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
         let (offer, offer_style) = if elapsed < 10 {
             let secs_left = 10 - elapsed;
-            (format!("rename? [y]  ({}s)", secs_left), Style::default().fg(Color::Red))
+            // Same amber as the browser's non-compliant marker, then fades to grey.
+            (format!("⚠ rename? [y]  ({}s)", secs_left), Style::default().fg(Color::Rgb(230, 170, 60)))
         } else {
-            ("rename? [y]".to_string(), dim)
+            ("⚠ rename? [y]".to_string(), dim)
         };
         let track_name = deck.track_name.clone();
         let indicators = cache_indicator_spans(deck, vinyl_mode);
