@@ -37,10 +37,11 @@ mod frame_stats;
 mod playlist;
 mod render;
 mod tags;
+mod xdg;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
 use browser::{BrowserMode, BrowserResult, BrowserState, EntryKind, handle_browser_key, render_browser};
-use cache::{cache_path, hash_mono, Cache, detect_bpm};
+use cache::{hash_mono, SessionState, TrackDatabase, detect_bpm};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
@@ -63,23 +64,7 @@ fn cleanup_terminal() {
 }
 
 fn panic_log_path() -> std::path::PathBuf {
-    std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".config/deck/panic.log")
-}
-
-/// The app's state directory (`$XDG_STATE_HOME` else `~/.local/state`, plus
-/// `/deck`) — for diagnostic artefacts and logs.
-fn state_dir() -> std::path::PathBuf {
-    if let Some(x) = std::env::var_os("XDG_STATE_HOME") {
-        std::path::PathBuf::from(x).join("deck")
-    } else {
-        std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".local/state/deck")
-    }
+    xdg::state_dir().join("panic.log")
 }
 
 /// A minimal terminal DJ player.
@@ -152,9 +137,11 @@ fn main() {
     // keyboard protocol can report — without it a warp would latch on forever.
     let release_events_supported = supports_keyboard_enhancement().unwrap_or(false);
 
-    // Load cache early so we can read last_browser_path before the browser opens.
-    let cache_file = cache_path();
-    let mut cache = Cache::load(cache_file);
+    // Load persisted state early so we can read last_browser_path before the browser opens.
+    // Migrate any pre-split cache.json into the two new stores first.
+    cache::migrate_legacy_cache();
+    let mut track_data = TrackDatabase::load();
+    let mut session = SessionState::load();
 
     // Compute the initial browser directory:
     //   CLI dir arg  → that directory (overrides last-visited for this first open only)
@@ -165,7 +152,7 @@ fn main() {
     } else if start.is_file() {
         start.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| start.clone())
     } else {
-        cache.last_browser_path()
+        session.last_browser_path()
             .filter(|p| p.exists())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")))
@@ -199,7 +186,7 @@ fn main() {
         None
     };
 
-    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut cache, &mut browser_dir, &mixer, use_local_config, &mut recorder, release_events_supported) {
+    if let Err(e) = tui_loop(&mut terminal, initial_load, &mut track_data, &mut session, &mut browser_dir, &mixer, use_local_config, &mut recorder, release_events_supported) {
         cleanup_terminal();
         eprintln!("TUI error: {e}");
         std::process::exit(1);
@@ -244,7 +231,7 @@ fn build_deck(
     sample_rate:     u32,
     channels:        u16,
     mixer:           &rodio::mixer::Mixer,
-    cache:           &Cache,
+    track_data:      &TrackDatabase,
     pfl_active_deck: Arc<AtomicUsize>,
     deck_slot:       usize,
 ) -> Deck {
@@ -318,7 +305,7 @@ fn build_deck(
     let (bpm_tx, bpm_rx) = mpsc::channel::<(String, f32, i64, bool)>();
     {
         let mono_bg = Arc::clone(&mono);
-        let entries = cache.entries_snapshot();
+        let entries = track_data.entries_snapshot();
         thread::spawn(move || {
             let hash = hash_mono(&mono_bg);
             // is_fresh=false → applied immediately and marks bpm_established=true (confirmed).
@@ -424,7 +411,7 @@ fn identity_of(path: &Path) -> Option<String> {
 /// and edited files plus details are preserved in the returned incident folder),
 /// or `Err` if the write itself failed.
 fn write_tags_verified(path: &Path, fields: &[(String, usize)]) -> Result<Option<PathBuf>, String> {
-    let base = state_dir().join("identity-mismatches");
+    let base = xdg::state_dir().join("identity-mismatches");
     let _ = std::fs::create_dir_all(&base);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("track");
     let staged = base.join(format!(".staging-{filename}"));
@@ -694,7 +681,8 @@ fn handle_tag_editor_key(
 fn tui_loop(
     terminal: &mut Terminal<CrosstermBackend<frame_stats::MeteredStdout>>,
     initial_load: Option<PendingLoad>,
-    cache: &mut Cache,
+    track_data: &mut TrackDatabase,
+    session: &mut SessionState,
     browser_dir: &mut std::path::PathBuf,
     mixer: &rodio::mixer::Mixer,
     use_local_config: bool,
@@ -731,11 +719,11 @@ fn tui_loop(
         });
     }
     const DET_MIN: u16 = 3;
-    let mut audio_latency_ms: i64 = ((cache.get_latency() as f64 / 10.0).round() as i64 * 10).clamp(0, 250);
+    let mut audio_latency_ms: i64 = ((session.get_latency() as f64 / 10.0).round() as i64 * 10).clamp(0, 250);
     let mut scheme_idx: usize = 0;
-    let mut art_bright_idx: u8 = cache.get_art_bright_idx();
+    let mut art_bright_idx: u8 = session.get_art_bright_idx();
     let mut zoom_idx: usize = DEFAULT_ZOOM_IDX;
-    let mut vinyl_mode: bool = cache.get_vinyl_mode();
+    let mut vinyl_mode: bool = session.get_vinyl_mode();
 
     let shared_renderer = SharedDetailRenderer::new(zoom_idx);
     let mut detail_height: usize = display_cfg.detail_height.max(DET_MIN as usize);
@@ -843,7 +831,8 @@ fn tui_loop(
         if global_notification.as_ref().map_or(false, |n| frame_start >= n.expires) {
             global_notification = None;
         }
-        cache.flush_if_idle();
+        track_data.flush_if_idle();
+        session.flush_if_idle();
         // Complete any pending loads.
         for slot in 0..3 {
             if pending_loads[slot].is_none() { continue; }
@@ -851,7 +840,7 @@ fn tui_loop(
             match recv {
                 Ok(Ok((mono, stereo, sample_rate, channels))) => {
                     let pending = pending_loads[slot].take().unwrap();
-                    let new_deck = build_deck(&pending.path, pending.filename, mono, stereo, sample_rate, channels, mixer, cache, Arc::clone(&pfl_active_deck), slot);
+                    let new_deck = build_deck(&pending.path, pending.filename, mono, stereo, sample_rate, channels, mixer, &track_data, Arc::clone(&pfl_active_deck), slot);
                     shared_renderer.set_deck(slot, Arc::clone(&new_deck.audio.waveform), new_deck.audio.seek_handle.channels, new_deck.audio.sample_rate);
                     decks[slot] = Some(new_deck);
                     if let Some(ref mut d) = decks[slot] {
@@ -874,7 +863,7 @@ fn tui_loop(
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         let service_start = Instant::now();
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, cache, audio_latency_ms, vinyl_mode);
+            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, vinyl_mode);
         }
         let service_dur = service_start.elapsed();
 
@@ -1390,11 +1379,12 @@ fn tui_loop(
                         if let Some(ref d) = decks[slot] {
                             d.audio.player.stop();
                             if let Some(ref hash) = d.tempo.analysis_hash {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
-                    cache.save();
+                    track_data.save();
+                    session.save();
                     return Ok(());
                 }
                 // Tag editor — a standalone modal; intercepts all keys while open.
@@ -1419,7 +1409,7 @@ fn tui_loop(
                             let (path, deck) = browser_load_confirm.take().unwrap();
                             global_notification = None;
                             if let Some(bs) = browser_state.as_ref() { *browser_dir = bs.cwd.clone(); }
-                            cache.set_last_browser_path(browser_dir);
+                            session.set_last_browser_path(browser_dir);
                             if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
                             decks[deck] = None;
                             pending_loads[deck] = Some(start_load(&path));
@@ -1460,7 +1450,7 @@ fn tui_loop(
                     match handle_browser_key(bs, key)? {
                         Some(BrowserResult::ReturnToPlayer) => {
                             *browser_dir = bs.cwd.clone();
-                            cache.set_last_browser_path(browser_dir);
+                            session.set_last_browser_path(browser_dir);
                             browser_state = None;
                             preview_output = None;
                         }
@@ -1476,7 +1466,7 @@ fn tui_loop(
                                 ));
                             } else {
                                 *browser_dir = bs.cwd.clone();
-                                cache.set_last_browser_path(browser_dir);
+                                session.set_last_browser_path(browser_dir);
                                 if let Some(ref d) = decks[target] { d.audio.player.stop(); }
                                 decks[target] = None;
                                 pending_loads[target] = Some(start_load(&path));
@@ -1524,10 +1514,10 @@ fn tui_loop(
                             let _ = bs.go_to(dir.clone(), highlight.as_deref(), label.clone());
                         }
                         Some(BrowserResult::WorkspaceSet(path)) => {
-                            cache.set_workspace(&path);
+                            session.set_workspace(&path);
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
-                            cache.clear_workspace();
+                            session.clear_workspace();
                         }
                         None => {}
                     }
@@ -1692,7 +1682,7 @@ fn tui_loop(
                         shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                         anchor_beat_grid_to_cue(d);
                         if let Some(ref hash) = d.tempo.analysis_hash {
-                            cache.set(hash.clone(), cache_entry_for_deck(d));
+                            track_data.set(hash.clone(), cache_entry_for_deck(d));
                         }
                     }
                 }
@@ -1711,12 +1701,13 @@ fn tui_loop(
                                 if let Some(ref d) = decks[slot] {
                                     d.audio.player.stop();
                                     if let Some(ref hash) = d.tempo.analysis_hash {
-                                        cache.set(hash.clone(), cache_entry_for_deck(d));
+                                        track_data.set(hash.clone(), cache_entry_for_deck(d));
                                     }
                                 }
                             }
-                            cache.set_latency(audio_latency_ms);
-                            cache.save();
+                            session.set_latency(audio_latency_ms);
+                            track_data.save();
+                            session.save();
                             return Ok(());
                         }
                         continue 'tui;
@@ -1739,7 +1730,7 @@ fn tui_loop(
                                     d.audio.player.set_speed(1.0);
                                     shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
                                     d.tempo.offset_established = true;
-                                    cache.set(hash.clone(), cache_entry_for_deck(d));
+                                    track_data.set(hash.clone(), cache_entry_for_deck(d));
                                     d.tempo.analysis_hash = Some(hash);
                                 }
                                 // Any key dismisses the confirmation.
@@ -1794,12 +1785,13 @@ fn tui_loop(
                             if let Some(ref d) = decks[slot] {
                                 d.audio.player.stop();
                                 if let Some(ref hash) = d.tempo.analysis_hash {
-                                    cache.set(hash.clone(), cache_entry_for_deck(d));
+                                    track_data.set(hash.clone(), cache_entry_for_deck(d));
                                 }
                             }
                         }
-                        cache.set_latency(audio_latency_ms);
-                        cache.save();
+                        session.set_latency(audio_latency_ms);
+                        track_data.save();
+                        session.save();
                         return Ok(());
                     }
                     Some(Action::SelectDeck1) => { selected_deck = 0; }
@@ -1808,7 +1800,7 @@ fn tui_loop(
                     Some(Action::OpenBrowser) => {
                         // Opening never interrupts anything; the load target defaults to
                         // the least-disruptive deck and is adjustable in the browser.
-                        let workspace = cache.workspace().map(|p| p.to_path_buf());
+                        let workspace = session.workspace().map(|p| p.to_path_buf());
                         let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
                         bs.mode = last_browser_mode;
                         bs.target_deck = default_target_deck(&decks, selected_deck);
@@ -1894,7 +1886,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db + 1).min(12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -1903,7 +1895,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db - 1).max(-12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -1912,7 +1904,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db + 1).min(12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -1921,7 +1913,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db - 1).max(-12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -1930,7 +1922,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db + 1).min(12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -1939,7 +1931,7 @@ fn tui_loop(
                             d.mixer.gain_db = (d.mixer.gain_db - 1).max(-12);
                             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                             if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                cache.set(hash.clone(), cache_entry_for_deck(d));
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
                         }
                     }
@@ -2041,15 +2033,15 @@ fn tui_loop(
                                 }
                             }
                         }
-                        cache.set_vinyl_mode(vinyl_mode);
+                        session.set_vinyl_mode(vinyl_mode);
                     }
                     Some(Action::LatencyDecrease)  => {
                         audio_latency_ms = (audio_latency_ms - 10).max(0);
-                        cache.set_latency(audio_latency_ms);
+                        session.set_latency(audio_latency_ms);
                     }
                     Some(Action::LatencyIncrease)  => {
                         audio_latency_ms = (audio_latency_ms + 10).min(250);
-                        cache.set_latency(audio_latency_ms);
+                        session.set_latency(audio_latency_ms);
                     }
                     Some(Action::FpsIncrease) => {
                         if let Some(pos) = FPS_LEVELS.iter().position(|&l| l == target_fps) {
@@ -2092,7 +2084,7 @@ fn tui_loop(
                     }
                     Some(Action::ArtCycle) => {
                         art_bright_idx = [2u8, 0, 1][art_bright_idx as usize]; // dim→bright→off→dim
-                        cache.set_art_bright_idx(art_bright_idx);
+                        session.set_art_bright_idx(art_bright_idx);
                     }
                     Some(Action::OffsetIncrease) => {
                         if !vinyl_mode { if let Some(ref mut d) = decks[selected_deck] { apply_offset_step(d, 5); } }
@@ -2248,7 +2240,7 @@ fn tui_loop(
                                 d.cue_sample = Some(raw_samp);
                                 anchor_beat_grid_to_cue(d);
                                 if let Some(ref hash) = d.tempo.analysis_hash.clone() {
-                                    cache.set(hash.clone(), cache_entry_for_deck(d));
+                                    track_data.set(hash.clone(), cache_entry_for_deck(d));
                                 }
                             }
                         }
@@ -2332,7 +2324,7 @@ fn service_deck_frame(
     elapsed_uncapped: f64,
     mixer: &rodio::mixer::Mixer,
     shared_renderer: &SharedDetailRenderer,
-    cache: &mut Cache,
+    track_data: &mut TrackDatabase,
     audio_latency_ms: i64,
     vinyl_mode: bool,
 ) {
@@ -2359,10 +2351,10 @@ fn service_deck_frame(
             d.tempo.base_bpm = new_bpm;
             shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
             d.tempo.offset_ms = (new_offset as f64 / 10.0).round() as i64 * 10;
-            // Restore cue_sample, offset_established, and gain_db from cache if present.
-            d.cue_sample = cache.get(hash.as_str()).and_then(|e| e.cue_sample);
-            d.tempo.offset_established = cache.get(hash.as_str()).map_or(false, |e| e.offset_established);
-            d.mixer.gain_db = cache.get(hash.as_str()).map_or(0, |e| e.gain_db);
+            // Restore cue_sample, offset_established, and gain_db from the track database if present.
+            d.cue_sample = track_data.get(hash.as_str()).and_then(|e| e.cue_sample);
+            d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
+            d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
             d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
             if !vinyl_mode {
                 if let Some(cue_samp) = d.cue_sample {
@@ -2370,7 +2362,7 @@ fn service_deck_frame(
                     d.audio.seek_handle.seek_direct(cue_secs);
                 }
             }
-            cache.set(hash.clone(), cache_entry_for_deck(d));
+            track_data.set(hash.clone(), cache_entry_for_deck(d));
             d.tempo.analysis_hash      = Some(hash);
             if !is_fresh || d.tempo.redetecting { d.tempo.bpm_established = true; }
             d.tempo.redetecting        = false;
@@ -2493,7 +2485,7 @@ fn service_deck_frame(
         d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
         shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
         if let Some(ref hash) = d.tempo.analysis_hash {
-            cache.set(hash.clone(), cache_entry_for_deck(d));
+            track_data.set(hash.clone(), cache_entry_for_deck(d));
         }
     }
     d.tap.was_tap_active = tap_active_now;
@@ -2574,7 +2566,7 @@ mod tests {
         let incident = write_tags_verified(&file, &fields).unwrap();
         assert_eq!(incident, None, "a normal tag write must not change identity");
 
-        let base = state_dir().join("identity-mismatches");
+        let base = xdg::state_dir().join("identity-mismatches");
         let entries: Vec<_> = std::fs::read_dir(&base).map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default();
         assert!(entries.is_empty(), "staging/incident left behind: {entries:?}");
 

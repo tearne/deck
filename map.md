@@ -4,7 +4,8 @@
 [Down](#browser)
 [Down](#mixer)
 [Down](#keymap)
-[Down](#cache)
+[Down](#track-database)
+[Down](#session-state)
 [Down](#album-art)
 [Down](#audio-latency)
 
@@ -67,7 +68,8 @@ Application
 ├ Mixer
 │ └ PFL Monitor
 ├ Keymap
-├ Cache
+├ Track Database
+├ Session State
 ├ Album Art (TODO)
 └ Audio Latency
 ```
@@ -380,7 +382,7 @@ The active mode is stored in cache and restored on startup. Default is beat mode
 
 **See also**
 
-- [Cache](#cache) — stores and restores the active mode
+- [Session State](#session-state) — stores and restores the active mode
 
 
 # Nudge
@@ -512,7 +514,7 @@ Cache is keyed by audio hash, making it invariant of filename, tags, and contain
 **See also**
 
 - [Keymap](#keymap) — keys bound to BPM tap, re-detect, and manual adjust
-- [Cache](#cache) — BPM and offset persisted per track by audio hash
+- [Track Database](#track-database) — BPM and offset persisted per track by audio hash
 
 
 # Cue Point
@@ -529,7 +531,7 @@ Persisted to cache alongside BPM and offset.
 **See also**
 
 - [Click-free Seek](#click-free-seek) — cue play uses the same seek mechanism
-- [Cache](#cache) — cue position persisted per track
+- [Track Database](#track-database) — cue position persisted per track
 - [Keymap](#keymap) — keys bound to `cue` and `cue_play`
 
 
@@ -589,7 +591,7 @@ The limiter is a soft-knee curve (cubic Hermite) over the zone [1.0 − 0.3, 1.0
 
 - [PFL Monitor](#pfl-monitor) — the pre-fader monitor tap, taken raw ahead of this stage
 - [Keymap](#keymap) — keys bound to level and gain actions
-- [Cache](#cache) — gain persisted per track; level is session-only
+- [Track Database](#track-database) — gain persisted per track; level is session-only
 
 
 # Pitch Shift
@@ -642,7 +644,7 @@ The browser is modal, like a modal text editor. **Command mode** navigates (`j`/
 
 **See also**
 
-- [Cache](#cache) — where the last-visited directory and workspace persist
+- [Session State](#session-state) — where the last-visited directory and workspace persist
 - [File Operations](#file-operations) — editing and moving files from command mode
 - [Keymap](#keymap) — navigation and action keys
 
@@ -657,7 +659,7 @@ The workspace persists between sessions and is silently dropped if it no longer 
 
 **See also**
 
-- [Cache](#cache) — where the workspace persists
+- [Session State](#session-state) — where the workspace persists
 - [Keymap](#keymap) — workspace and search keys
 
 
@@ -747,19 +749,38 @@ Most keys are configurable via `config.toml` as action-name → key-string mappi
 - [keybindings.md](keybindings.md) — full action table, keyboard layout, fixed keys, config format
 
 
-# Cache
+# Track Database
 
 [Up](#application)
 
-A single JSON file (`~/.config/deck/cache.json`) that lets the player do expensive work once and remember user state between runs. Two kinds of content live in it.
+Per-track memory, keyed by a Blake3 hash of the decoded audio — so it follows the music, not the file. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset was deliberately placed, and the filename as a human-readable hint). Renaming, retagging, or re-containering a track keeps its analysis, because the key is the audio itself.
 
-**Per-track memory**, keyed by a Blake3 hash of the decoded audio — so it follows the music, not the file. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset has been deliberately placed, and the filename as a human-readable hint). Because the key is the audio itself, renaming, retagging, or re-containering a track keeps its analysis.
-
-**Global state** — last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
+Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache.
 
 **Detail**
 
-- Mutation marks the cache dirty; one flush runs after the cache has been idle for ~1 s, and quit always flushes — so a crash can lose at most the last second of trims. Keys the app didn't touch are never rewritten.
+- A flat `{hash: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+
+**See also**
+
+- [Session State](#session-state) — the other persisted store, in the state dir
+
+
+# Session State
+
+[Up](#application)
+
+Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
+
+Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and the tag editor's identity-mismatch dumps.
+
+**Detail**
+
+- Same save discipline as the [Track Database](#track-database): dirty-on-mutation, ~1 s idle flush, flush on quit, atomic temp-file rename.
+
+**See also**
+
+- [Track Database](#track-database) — the other persisted store, in the data dir
 
 
 # Album Art
@@ -784,4 +805,4 @@ A single global calibration (0–250 ms) compensating for the delay between audi
 
 - [Metronome](#metronome) — click timing depends on this calibration
 - [Keymap](#keymap) — keys bound to the latency actions
-- [Cache](#cache) — latency persisted as a global value
+- [Session State](#session-state) — latency persisted as a global value

@@ -1,9 +1,5 @@
 use crossterm::event::KeyCode;
 
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
-}
-
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Action {
     Quit, Help, VinylModeToggle,
@@ -199,7 +195,7 @@ pub(crate) fn resolve_config(use_local_config: bool) -> (String, Option<String>)
         let dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         return resolve_or_create(dir.join("config.toml"));
     }
-    // Check next to the binary first, then ~/.config/tj/config.toml, then auto-create.
+    // Check next to the binary first, then the XDG config dir, then auto-create.
     let adjacent = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("config.toml")))
@@ -207,11 +203,7 @@ pub(crate) fn resolve_config(use_local_config: bool) -> (String, Option<String>)
     if let Some(path) = adjacent {
         return (std::fs::read_to_string(&path).unwrap_or_default(), None);
     }
-    let user_path = match home_dir() {
-        Some(h) => h.join(".config/deck/config.toml"),
-        None => return (DEFAULT_CONFIG.to_string(), None),
-    };
-    resolve_or_create(user_path)
+    resolve_or_create(crate::xdg::config_dir().join("config.toml"))
 }
 
 /// Reads `path` if it exists, otherwise creates it from the embedded default.
