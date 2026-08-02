@@ -33,15 +33,17 @@ mod browser;
 mod cache;
 mod config;
 mod deck;
+mod error_reports;
 mod frame_stats;
 mod playlist;
 mod render;
+mod rekey;
 mod tags;
 mod xdg;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
 use browser::{BrowserMode, BrowserResult, BrowserState, EntryKind, handle_browser_key, render_browser};
-use cache::{hash_mono, SessionState, TrackDatabase, detect_bpm};
+use cache::{SessionState, TrackDatabase, detect_bpm};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
@@ -81,6 +83,10 @@ struct Cli {
     /// Record per-frame timing statistics to frame-stats.csv in the current directory
     #[arg(long)]
     frame_stats: bool,
+
+    /// One-off: re-key the track database from PCM hashes to content identities, then exit
+    #[arg(long, hide = true)]
+    rekey_track_data: bool,
 }
 
 fn main() {
@@ -109,6 +115,13 @@ fn main() {
     }));
 
     let cli = Cli::parse();
+
+    // One-off maintenance path: convert the track database and exit before the TUI.
+    if cli.rekey_track_data {
+        rekey::run();
+        return;
+    }
+
     let use_local_config = cli.local_config;
 
     let arg = cli.path;
@@ -302,10 +315,22 @@ fn build_deck(
 
     let (bpm_tx, bpm_rx) = mpsc::channel::<(String, f32, i64, bool)>();
     {
-        let mono_bg = Arc::clone(&mono);
         let entries = track_data.entries_snapshot();
+        let identity_path = path.to_path_buf();
         thread::spawn(move || {
-            let hash = hash_mono(&mono_bg);
+            // Key on content identity (audio payload, tags excluded) — the same identity
+            // playlists and the tag editor use. It is mandatory: a track that can't be
+            // hashed is unsupported app-wide, so record the fault and signal it with an
+            // empty hash (the sentinel the receiver treats as unhashable) rather than
+            // inventing a masquerading key.
+            let hash = match content_identity(&identity_path) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    record_identity_failure(&identity_path, &error);
+                    let _ = bpm_tx.send((String::new(), 120.0, 0, true));
+                    return;
+                }
+            };
             // is_fresh=false → applied immediately and marks bpm_established=true (confirmed).
             // is_fresh=true  → applied immediately only when bpm_established is false, leaves it false (unconfirmed).
             let (bpm, offset_ms, is_fresh) = if let Some(entry) = entries.get(&hash) {
@@ -396,11 +421,35 @@ fn notification(message: impl Into<String>, style: NotificationStyle) -> Notific
     Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
 }
 
+/// The file's content-identity hash, or the reason it can't be computed.
+fn content_identity(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read failed: {e}"))?;
+    resilient_playlists::content_hash(&bytes).map_err(|e| format!("hash failed: {e:?}"))
+}
+
 /// The file's content-identity hash, or `None` if it can't be read or hashed
 /// (an unverifiable identity — a different concern from a changed one).
 fn identity_of(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    resilient_playlists::content_hash(&bytes).ok()
+    content_identity(path).ok()
+}
+
+/// Record a load-time identity failure as a harmonised error report. The track
+/// is unsupported app-wide (no playlist can reference it), so this is surfaced,
+/// not swallowed. Called off the main thread.
+fn record_identity_failure(path: &Path, error: &str) {
+    let base = error_reports::dir();
+    let _ = std::fs::create_dir_all(&base);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
+    let report = base.join(format!("{}.txt", error_reports::stamped_name("identity-unhashable", stem)));
+    let body = format!(
+        "Content identity could not be computed for this track.\n\n\
+         file:  {}\n\
+         error: {error}\n\n\
+         The track loads and plays, but its analysis and edits are not saved, and it\n\
+         cannot be referenced by playlists (which key on content identity).\n",
+        path.display(),
+    );
+    let _ = std::fs::write(report, body);
 }
 
 /// Write tags to `path`, verifying the content identity is unchanged — tag edits
@@ -409,7 +458,7 @@ fn identity_of(path: &Path) -> Option<String> {
 /// and edited files plus details are preserved in the returned incident folder),
 /// or `Err` if the write itself failed.
 fn write_tags_verified(path: &Path, fields: &[(String, usize)]) -> Result<Option<PathBuf>, String> {
-    let base = xdg::state_dir().join("identity-mismatches");
+    let base = error_reports::dir();
     let _ = std::fs::create_dir_all(&base);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("track");
     let staged = base.join(format!(".staging-{filename}"));
@@ -435,7 +484,7 @@ fn write_tags_verified(path: &Path, fields: &[(String, usize)]) -> Result<Option
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-    let incident = base.join(format!("{ts}-{stem}"));
+    let incident = base.join(error_reports::stamped_name("identity-mismatch", stem));
     std::fs::create_dir_all(&incident).map_err(|e| e.to_string())?;
     let original = incident.join(format!("original.{ext}"));
     let edited = incident.join(format!("edited.{ext}"));
@@ -879,7 +928,7 @@ fn tui_loop(
                 1 => shared_renderer.display_pos_b.store(pos_interleaved, Ordering::Relaxed),
                 _ => shared_renderer.display_pos_c.store(pos_interleaved, Ordering::Relaxed),
             }
-            let spinner_active = d.tempo.analysis_hash.is_none();
+            let spinner_active = !d.tempo.analysis_settled || d.tempo.redetecting;
             let analysing      = vinyl_mode || spinner_active || !d.tempo.bpm_established;
             let beat_period    = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
             let flash_window   = beat_period.mul_f64(0.15);
@@ -1081,7 +1130,7 @@ fn tui_loop(
             // In vinyl mode: suppress ticks (analysing=true); the cue column stays visible.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
                 let (base_bpm, offset_ms, analysing, cue_sample) = deck.map(|d| {
-                    let analysing = vinyl_mode || d.tempo.analysis_hash.is_none() || !d.tempo.bpm_established;
+                    let analysing = vinyl_mode || !d.tempo.analysis_settled || d.tempo.redetecting || !d.tempo.bpm_established;
                     (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
@@ -2349,25 +2398,42 @@ fn service_deck_frame(
             d.tempo.base_bpm = new_bpm;
             shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
             d.tempo.offset_ms = (new_offset as f64 / 10.0).round() as i64 * 10;
-            // Restore cue_sample, offset_established, and gain_db from the track database if present.
-            d.cue_sample = track_data.get(hash.as_str()).and_then(|e| e.cue_sample);
-            d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
-            d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
-            d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
-            if !vinyl_mode {
-                if let Some(cue_samp) = d.cue_sample {
-                    let cue_secs = cue_samp as f64 / d.audio.sample_rate as f64;
-                    d.audio.seek_handle.seek_direct(cue_secs);
+            if hash.is_empty() {
+                // Unhashable track (content identity unavailable): it plays, but persists
+                // nothing and can't be referenced by a playlist. The load thread already
+                // recorded an error report; warn in this deck's notification row.
+                d.cue_sample = None;
+                d.tempo.offset_established = false;
+                d.mixer.gain_db = 0;
+                d.audio.gain_linear.store(1.0f32.to_bits(), Ordering::Relaxed);
+                d.active_notification = Some(notification(
+                    "Content identity unavailable — not saved, unusable in playlists",
+                    NotificationStyle::Error,
+                ));
+                d.tempo.analysis_hash = None;
+            } else {
+                // Restore cue_sample, offset_established, and gain_db from the track database if present.
+                d.cue_sample = track_data.get(hash.as_str()).and_then(|e| e.cue_sample);
+                d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
+                d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
+                d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
+                if !vinyl_mode {
+                    if let Some(cue_samp) = d.cue_sample {
+                        let cue_secs = cue_samp as f64 / d.audio.sample_rate as f64;
+                        d.audio.seek_handle.seek_direct(cue_secs);
+                    }
                 }
+                track_data.set(hash.clone(), cache_entry_for_deck(d));
+                d.tempo.analysis_hash = Some(hash);
             }
-            track_data.set(hash.clone(), cache_entry_for_deck(d));
-            d.tempo.analysis_hash      = Some(hash);
+            d.tempo.analysis_settled   = true;
             if !is_fresh || d.tempo.redetecting { d.tempo.bpm_established = true; }
             d.tempo.redetecting        = false;
             d.tempo.redetect_saved_hash = None;
             d.tempo.background_rx      = None;
         } else {
             d.tempo.analysis_hash      = Some(hash.clone());
+            d.tempo.analysis_settled   = true;
             d.tempo.redetecting        = false;
             d.tempo.redetect_saved_hash = None;
             d.tempo.background_rx      = None;
@@ -2516,7 +2582,7 @@ fn service_deck_frame(
     d.loop_tap.was_tap_active = loop_tap_active_now;
 
     // Spectrum analyser: chars every half beat, background glow every 8 beats.
-    let analysing   = d.tempo.analysis_hash.is_none();
+    let analysing   = !d.tempo.analysis_settled || d.tempo.redetecting;
     let half_period = if analysing { Duration::from_millis(250) } else { beat_period / 4 };
     let bar_period  = beat_period * 8;
     let chars_due   = d.spectrum.last_update.map_or(true,    |t| t.elapsed() >= half_period);
@@ -2564,7 +2630,7 @@ mod tests {
         let incident = write_tags_verified(&file, &fields).unwrap();
         assert_eq!(incident, None, "a normal tag write must not change identity");
 
-        let base = xdg::state_dir().join("identity-mismatches");
+        let base = error_reports::dir();
         let entries: Vec<_> = std::fs::read_dir(&base).map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect()).unwrap_or_default();
         assert!(entries.is_empty(), "staging/incident left behind: {entries:?}");
 

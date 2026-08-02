@@ -52,6 +52,10 @@ pub(crate) struct TempoState {
     pub(crate) offset_ms: i64,
     pub(crate) bpm_rx: std::sync::mpsc::Receiver<(String, f32, i64, bool)>,
     pub(crate) analysis_hash: Option<String>,
+    /// True once the initial load analysis has returned (identified or unhashable).
+    /// Drives the "analysing" spinner independently of whether a key was produced,
+    /// so an unhashable track settles instead of spinning forever.
+    pub(crate) analysis_settled: bool,
     pub(crate) bpm_established: bool,
     pub(crate) offset_established: bool,
     pub(crate) pending_bpm: Option<(String, f32, i64, Instant)>,
@@ -267,6 +271,7 @@ impl Deck {
                 offset_ms: 0,
                 bpm_rx,
                 analysis_hash: None,
+                analysis_settled: false,
                 bpm_established: false,
                 offset_established: false,
                 pending_bpm: None,

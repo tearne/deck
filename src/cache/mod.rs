@@ -91,6 +91,12 @@ impl TrackDatabase {
         self.entries.clone()
     }
 
+    /// Replace the whole entry set and persist. For the one-off re-key converter.
+    pub(crate) fn overwrite_and_save(&mut self, entries: TrackEntries) {
+        self.entries = entries;
+        self.save();
+    }
+
     pub(crate) fn flush_if_idle(&mut self) {
         if idle_elapsed(self.dirty_at) {
             self.save();
