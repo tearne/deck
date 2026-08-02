@@ -758,11 +758,12 @@ Most keys are configurable via `config.toml` as action-name → key-string mappi
 
 Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
 
-Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache.
+Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache. When a workspace is set, the database also mirrors to a copy in the workspace root (`track-data.json`, same filename), so it travels with the music.
 
 **Detail**
 
 - A flat `{identity: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+- The two copies reconcile whenever a workspace becomes active — at start-up if one is already configured, and when the operator sets or changes it: the workspace copy wins on shared identities, local-only entries are pushed out, and both are written at once. Every later save writes both, so the analysis follows the library between machines.
 - A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced (deck warning plus an [Error Reports](#error-reports) entry).
 
 **See also**

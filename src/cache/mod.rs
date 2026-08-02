@@ -5,8 +5,12 @@ use stratum_dsp::{analyze_audio, AnalysisConfig};
 
 fn default_art_bright_idx() -> u8 { 1 }
 
+/// Filename shared by the canonical `.local` database and its workspace mirror,
+/// so relocating one to the other is a plain file copy.
+const TRACK_DATA_FILE: &str = "track-data.json";
+
 fn track_data_path() -> PathBuf {
-    crate::xdg::data_dir().join("track-data.json")
+    crate::xdg::data_dir().join(TRACK_DATA_FILE)
 }
 
 fn session_path() -> PathBuf {
@@ -57,6 +61,9 @@ type TrackEntries = std::collections::HashMap<String, CacheEntry>;
 
 pub(crate) struct TrackDatabase {
     path: PathBuf,
+    /// The workspace copy (`<workspace>/track-data.json`), when a workspace is set.
+    /// Written on every save so the database travels with the music.
+    mirror_path: Option<PathBuf>,
     entries: TrackEntries,
     dirty_at: Option<std::time::Instant>,
 }
@@ -64,11 +71,8 @@ pub(crate) struct TrackDatabase {
 impl TrackDatabase {
     pub(crate) fn load() -> Self {
         let path = track_data_path();
-        let entries = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
-        Self { path, entries, dirty_at: None }
+        let entries = read_entries(&path);
+        Self { path, mirror_path: None, entries, dirty_at: None }
     }
 
     pub(crate) fn get(&self, hash: &str) -> Option<&CacheEntry> {
@@ -77,11 +81,34 @@ impl TrackDatabase {
 
     pub(crate) fn set(&mut self, hash: String, entry: CacheEntry) {
         self.entries.insert(hash, entry);
-        self.dirty_at = Some(std::time::Instant::now());
+        self.mark_dirty();
+    }
+
+    /// Point the workspace mirror at `workspace`'s copy, or clear it.
+    pub(crate) fn set_mirror(&mut self, workspace: Option<&Path>) {
+        self.mirror_path = workspace
+            .map(|w| w.join(TRACK_DATA_FILE))
+            .filter(|m| m != &self.path);
+    }
+
+    /// Reconcile with the workspace copy at attach time and write both copies now,
+    /// so they match immediately rather than at the next save. The carried library
+    /// wins on any shared identity (its entries are adopted); the local-only entries
+    /// are pushed out by the save. No-op without a mirror.
+    pub(crate) fn sync_with_mirror(&mut self) {
+        let Some(mirror) = self.mirror_path.clone() else { return };
+        for (identity, entry) in read_entries(&mirror) {
+            self.entries.insert(identity, entry);
+        }
+        self.save();
     }
 
     pub(crate) fn entries_snapshot(&self) -> TrackEntries {
         self.entries.clone()
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty_at = Some(std::time::Instant::now());
     }
 
     pub(crate) fn flush_if_idle(&mut self) {
@@ -93,6 +120,61 @@ impl TrackDatabase {
 
     pub(crate) fn save(&self) {
         write_json_atomic(&self.path, &self.entries);
+        if let Some(mirror) = &self.mirror_path {
+            write_json_atomic(mirror, &self.entries);
+        }
+    }
+}
+
+fn read_entries(path: &Path) -> TrackEntries {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(bpm: f32, name: &str) -> CacheEntry {
+        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0 }
+    }
+
+    #[test]
+    fn workspace_copy_wins_on_import_and_mirror_writes_both() {
+        let root = std::env::temp_dir().join(format!("deck-mirror-{}", std::process::id()));
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        // SAFETY: single-threaded test setup; no other test reads XDG_DATA_HOME.
+        unsafe { std::env::set_var("XDG_DATA_HOME", root.join("data")); }
+
+        // A library carried from elsewhere: its copy has a fresh X and a new Z.
+        let mut incoming = TrackEntries::new();
+        incoming.insert("X".into(), entry(140.0, "x-from-workspace"));
+        incoming.insert("Z".into(), entry(90.0, "z"));
+        std::fs::write(workspace.join(TRACK_DATA_FILE), serde_json::to_string(&incoming).unwrap()).unwrap();
+
+        // Local database: a local-only Y and a stale X.
+        let mut db = TrackDatabase::load();
+        db.set("Y".into(), entry(120.0, "y"));
+        db.set("X".into(), entry(100.0, "x-local-stale"));
+
+        db.set_mirror(Some(&workspace));
+        db.sync_with_mirror();
+
+        assert_eq!(db.get("Y").unwrap().bpm, 120.0, "local-only entry kept");
+        assert_eq!(db.get("Z").unwrap().bpm, 90.0, "workspace-only entry added");
+        assert_eq!(db.get("X").unwrap().name, "x-from-workspace", "workspace wins on conflict");
+
+        db.save();
+        let local = read_entries(&track_data_path());
+        let mirror = read_entries(&workspace.join(TRACK_DATA_FILE));
+        assert_eq!(local.len(), 3, "canonical copy holds the union");
+        assert_eq!(mirror.len(), 3, "mirror re-written with merged data");
+        assert_eq!(mirror.get("X").unwrap().name, "x-from-workspace");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

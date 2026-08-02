@@ -143,6 +143,12 @@ fn main() {
     let mut track_data = TrackDatabase::load();
     let mut session = SessionState::load();
 
+    // If a workspace is already attached, adopt the database copy that travels with it.
+    if let Some(workspace) = session.workspace() {
+        track_data.set_mirror(Some(workspace));
+        track_data.sync_with_mirror();
+    }
+
     // Compute the initial browser directory:
     //   CLI dir arg  → that directory (overrides last-visited for this first open only)
     //   CLI file arg → the file's parent directory
@@ -1551,9 +1557,13 @@ fn tui_loop(
                         }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             session.set_workspace(&path);
+                            // Adopt the newly-attached library's travelling database.
+                            track_data.set_mirror(Some(&path));
+                            track_data.sync_with_mirror();
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
                             session.clear_workspace();
+                            track_data.set_mirror(None);
                         }
                         None => {}
                     }
