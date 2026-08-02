@@ -11,6 +11,7 @@ pub(crate) enum Action {
     ArtCycle,
     // Selected-deck controls
     SelectDeck1, SelectDeck2, SelectDeck3,
+    SelectNextDeck, SelectPrevDeck,
     PlayPause, OpenBrowser,
     PitchUp, PitchDown, PitchReset,
     BpmTap, MetronomeToggle, DetectBpm,
@@ -66,6 +67,8 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("select_deck1",        Action::SelectDeck1),
     ("select_deck2",        Action::SelectDeck2),
     ("select_deck3",        Action::SelectDeck3),
+    ("select_next_deck",    Action::SelectNextDeck),
+    ("select_prev_deck",    Action::SelectPrevDeck),
     ("play_pause",          Action::PlayPause),
     ("open_browser",        Action::OpenBrowser),
     ("pitch_up",            Action::PitchUp),
@@ -146,12 +149,14 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
 #[derive(Hash, Eq, PartialEq)]
 pub(crate) enum KeyBinding {
     Key(KeyCode),
-    SpaceChord(KeyCode),
+    /// A chord: fires while a chord modifier (Alt, advertised; Space, legacy) is held.
+    Chord(KeyCode),
 }
 
 pub(crate) fn parse_key(s: &str) -> Option<KeyBinding> {
-    if let Some(rest) = s.strip_prefix("space+") {
-        return parse_bare_key(rest).map(KeyBinding::SpaceChord);
+    // `alt+` is the advertised form; `space+` still parses for existing configs.
+    if let Some(rest) = s.strip_prefix("alt+").or_else(|| s.strip_prefix("space+")) {
+        return parse_bare_key(rest).map(KeyBinding::Chord);
     }
     parse_bare_key(s).map(KeyBinding::Key)
 }

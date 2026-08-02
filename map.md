@@ -739,9 +739,9 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 [Up](#application)
 
-Three input layers on a split keyboard: plain keys, Shift-modified, and Space-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
+Three input layers on a split keyboard: plain keys, Shift-modified, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Space acts as a modifier: holding it and pressing another key fires a chord action. Released alone it has no effect. Space-chord bindings are reserved for one-time actions (set cue, open browser, select deck) because terminals cannot reliably detect Space being held, so continuous actions like nudge or fader movement use plain or Shift layers. Ctrl-C always quits unconditionally.
+Alt is the chord modifier: holding it and pressing another key fires a chord action. Alt arrives as a reliable per-keypress modifier bit, so — unlike a held Space — there's no held-state to track. By convention, chords are reserved for one-time actions (set cue, open browser, select/cycle deck); continuous actions like nudge or fader movement use the plain or Shift layers. Space still fires the same chords as an unadvertised legacy modifier. Ctrl-C always quits unconditionally.
 
 Esc is inherently ambiguous — it is both the dismiss/quit key and the byte that begins every terminal escape sequence — and some terminals report a single Esc keypress as two events. Esc is therefore debounced: a second Esc within ~200 ms of one that acted is ignored, so a single tap can't, for instance, dismiss an overlay and then quit.
 

@@ -682,7 +682,7 @@ pub(crate) fn notification_line_for_deck(deck: &Deck, content_width: usize, viny
 
 pub(crate) fn notification_line_empty() -> Line<'static> {
     Line::from(Span::styled(
-        "no track — Space+D to open the file browser",
+        "no track — Alt+D to open the file browser",
         Style::default().fg(Color::Rgb(60, 60, 60)),
     ))
 }
@@ -1825,7 +1825,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
 
     let sh = Style::default().fg(Color::Rgb(130, 100,  50));  // Shift layer: dim warm amber
     let ba = Style::default().fg(Color::Rgb(170, 170, 170));  // Bare layer:  medium gray
-    let sp = Style::default().fg(Color::Rgb( 60, 100, 160));  // Space layer: dim cool blue
+    let sp = Style::default().fg(Color::Rgb( 60, 100, 160));  // Alt (chord) layer: dim cool blue
     let gr = Style::default().fg(Color::Rgb( 80, 140,  70));  // nudge / BPM: muted sage
     let wh = Style::default().fg(Color::White);               // F-key bracket exception
 
@@ -1845,7 +1845,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("-BPM", gr),
         Span::styled("    G         ┆   J  K  L +Lvl", ba),
     ]);
-    // Row 9: Space — F's ╰ bracket stays white
+    // Row 9: Alt (chord) — F's ╰ bracket stays white
     let row9 = Line::from(vec![
         Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
         Span::styled("╰", wh),
@@ -1864,10 +1864,10 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("──────────────────────────────────────────────────────────────────── ", ba),
         Span::styled("╭ [Shift]", sh),
     ]);
-    // Row 15: second footer line — ╰ [Space] flush-right
+    // Row 15: second footer line — ╰ [Alt] flush-right
     let row15 = Line::from(vec![
-        Span::styled("/ art   p palette   Spc+= swap1↔2   Spc+- swap2↔3   Y/^ fps          ", ba),
-        Span::styled("╰ [Space]", sp),
+        Span::styled("/ art   p palette   Alt+= swap1↔2   Alt+- swap2↔3   Y/^ fps          ", ba),
+        Span::styled("╰ [Alt]", sp),
     ]);
 
     let lines: Vec<Line<'static>> = vec![

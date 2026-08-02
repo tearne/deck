@@ -1138,14 +1138,13 @@ fn tui_loop(
                     Some(NudgeMode::Warp) => "  [WARP]",
                     _ => "  [JUMP]",
                 };
-                let spc_label   = if space_held { "  [SPC]" } else { "" };
                 let vinyl_label = if vinyl_mode { "  [VINYL]" } else { "  [BEAT]" };
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
-                        format!("  zoom:{}s  lat:{}ms  fps:{}/{}/{}{}{}{}",
+                        format!("  zoom:{}s  lat:{}ms  fps:{}/{}/{}{}{}",
                             zoom_secs, audio_latency_ms,
                             fps_display.0, fps_display.1, fps_display.2,
-                            nudge_label, vinyl_label, spc_label),
+                            nudge_label, vinyl_label),
                         Style::default().fg(Color::DarkGray),
                     ))),
                     area_detail_info,
@@ -1569,6 +1568,9 @@ fn tui_loop(
                     }
                     continue; // block all player key handling while browser is open
                 }
+                // A chord fires while either modifier is held: Alt (advertised, arrives
+                // as a reliable per-press bit) or Space (legacy, tracked below).
+                let alt = key.modifiers.contains(KeyModifiers::ALT);
                 // Space modifier: track held state for chords.
                 if key.code == KeyCode::Char(' ') {
                     space_saw_event_this_frame = true;
@@ -1611,11 +1613,11 @@ fn tui_loop(
                             }
                         }
                     }
-                    // Cue play comes before nudge so that Space+nudge-key resolves to
-                    // cue (via SpaceChord lookup) rather than nudge.
-                    // Press guard requires space_held to avoid firing on bare nudge-key presses.
+                    // Cue play comes before nudge so that chord+nudge-key resolves to
+                    // cue (via Chord lookup) rather than nudge.
+                    // Press guard requires a chord modifier to avoid firing on bare nudge-key presses.
                     KeyEventKind::Press
-                        if space_held && keymap.get(&KeyBinding::SpaceChord(key.code)) == Some(&Action::CuePlay) =>
+                        if (space_held || alt) && keymap.get(&KeyBinding::Chord(key.code)) == Some(&Action::CuePlay) =>
                     {
                         if let Some(ref mut d) = decks[selected_deck] {
                             if let Some(cue_samp) = d.cue_sample {
@@ -1628,15 +1630,14 @@ fn tui_loop(
                                     d.audio.seek_handle.seek_to(target_samp as f64 / d.audio.sample_rate as f64);
                                 }
                             }
-                            space_held = false;
-                            space_repeat_suppressed = true;
+                            if space_held { space_held = false; space_repeat_suppressed = true; }
                         }
                         continue 'tui;
                     }
-                    // Nudge (selected deck) — guards exclude space_held so Space+nudge-key
-                    // resolves cleanly to its SpaceChord action without also nudging.
+                    // Nudge (selected deck) — guards exclude both chord modifiers so chord+nudge-key
+                    // resolves cleanly to its Chord action without also nudging.
                     KeyEventKind::Press | KeyEventKind::Repeat
-                        if !space_held && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeBackward) =>
+                        if !space_held && !alt && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeBackward) =>
                     {
                         let scrub_spc = [scrub_spc_a, scrub_spc_b, scrub_spc_c][selected_deck];
                         if let Some(ref mut d) = decks[selected_deck] {
@@ -1664,7 +1665,7 @@ fn tui_loop(
                         }
                     }
                     KeyEventKind::Press | KeyEventKind::Repeat
-                        if !space_held && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeForward) =>
+                        if !space_held && !alt && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeForward) =>
                     {
                         let scrub_spc = [scrub_spc_a, scrub_spc_b, scrub_spc_c][selected_deck];
                         if let Some(ref mut d) = decks[selected_deck] {
@@ -1708,6 +1709,7 @@ fn tui_loop(
                 // The ramp resets only when no base-BPM key has been seen for >500 ms,
                 // so a quick release-and-repress continues at the current tier.
                 if !vinyl_mode
+                    && !space_held && !alt
                     && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                     && matches!(keymap.get(&KeyBinding::Key(key.code)),
                         Some(&Action::BaseBpmIncrease) | Some(&Action::BaseBpmDecrease))
@@ -1809,10 +1811,9 @@ fn tui_loop(
                     }
                     if rename_offer_consumed { continue 'tui; }
 
-                    let action = if space_held && key.code != KeyCode::Char(' ') {
-                        if let Some(a) = keymap.get(&KeyBinding::SpaceChord(key.code)) {
-                            space_held = false;
-                            space_repeat_suppressed = true;
+                    let action = if (space_held || alt) && key.code != KeyCode::Char(' ') {
+                        if let Some(a) = keymap.get(&KeyBinding::Chord(key.code)) {
+                            if space_held { space_held = false; space_repeat_suppressed = true; }
                             Some(a)
                         } else {
                             keymap.get(&KeyBinding::Key(key.code))
@@ -1843,6 +1844,8 @@ fn tui_loop(
                     Some(Action::SelectDeck1) => { selected_deck = 0; }
                     Some(Action::SelectDeck2) => { selected_deck = 1; }
                     Some(Action::SelectDeck3) => { selected_deck = 2; }
+                    Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; }
+                    Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; }
                     Some(Action::OpenBrowser) => {
                         // Opening never interrupts anything; the load target defaults to
                         // the least-disruptive deck and is adjustable in the browser.
