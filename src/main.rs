@@ -138,8 +138,6 @@ fn main() {
     let release_events_supported = supports_keyboard_enhancement().unwrap_or(false);
 
     // Load persisted state early so we can read last_browser_path before the browser opens.
-    // Migrate any pre-split cache.json into the two new stores first.
-    cache::migrate_legacy_cache();
     let mut track_data = TrackDatabase::load();
     let mut session = SessionState::load();
 

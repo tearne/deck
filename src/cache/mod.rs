@@ -245,69 +245,6 @@ impl SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy migration — one bundled cache.json under ~/.config into the two stores
-// ---------------------------------------------------------------------------
-
-/// The pre-split `~/.config/deck/cache.json`: per-track entries and session
-/// state in one file. Read-only; retired after migration.
-#[derive(Deserialize)]
-struct LegacyCacheFile {
-    #[serde(default)]
-    last_browser_path: Option<String>,
-    #[serde(default)]
-    browser_workspace: Option<String>,
-    #[serde(default)]
-    audio_latency_ms: i64,
-    #[serde(default)]
-    vinyl_mode: bool,
-    #[serde(default = "default_art_bright_idx")]
-    art_bright_idx: u8,
-    #[serde(default)]
-    entries: TrackEntries,
-}
-
-/// Splits an existing bundled `cache.json` into the new data/state files, then
-/// deletes it. Skips writing either target if it already exists, so a partial
-/// prior migration is never clobbered. No-op once the old file is gone.
-pub(crate) fn migrate_legacy_cache() {
-    let legacy_path = crate::xdg::config_dir().join("cache.json");
-    let Some(legacy) = read_legacy(&legacy_path) else { return };
-
-    if !track_data_path().exists() {
-        write_json_atomic(&track_data_path(), &legacy.entries);
-    }
-    if !session_path().exists() {
-        let session = SessionFile {
-            last_browser_path: legacy.last_browser_path,
-            browser_workspace: legacy.browser_workspace,
-            audio_latency_ms: legacy.audio_latency_ms,
-            vinyl_mode: legacy.vinyl_mode,
-            art_bright_idx: legacy.art_bright_idx,
-        };
-        write_json_atomic(&session_path(), &session);
-    }
-    let _ = std::fs::remove_file(&legacy_path);
-}
-
-/// Reads the bundled file, tolerating both the wrapped object and the oldest
-/// flat `{hash: entry}` map that predated it.
-fn read_legacy(path: &Path) -> Option<LegacyCacheFile> {
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<LegacyCacheFile>(&text)
-        .ok()
-        .or_else(|| serde_json::from_str::<TrackEntries>(&text)
-            .ok()
-            .map(|entries| LegacyCacheFile {
-                last_browser_path: None,
-                browser_workspace: None,
-                audio_latency_ms: 0,
-                vinyl_mode: false,
-                art_bright_idx: default_art_bright_idx(),
-                entries,
-            }))
-}
-
-// ---------------------------------------------------------------------------
 // BPM detection
 // ---------------------------------------------------------------------------
 
