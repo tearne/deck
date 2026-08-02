@@ -6,6 +6,7 @@
 [Down](#keymap)
 [Down](#track-database)
 [Down](#session-state)
+[Down](#error-reports)
 [Down](#album-art)
 [Down](#audio-latency)
 
@@ -70,6 +71,7 @@ Application
 ├ Keymap
 ├ Track Database
 ├ Session State
+├ Error Reports
 ├ Album Art (TODO)
 └ Audio Latency
 ```
@@ -151,7 +153,7 @@ The modal that does the renaming, by way of editing the track's metadata. Seven 
 
 Reached two ways: by `e` on a highlighted file in the browser, or via the load-time rename offer (see Renaming).
 
-> [!IMPORTANT] A tag edit must never change the track's **content identity** — the hash of the audio payload, with tags excluded by design, so only tag/container bytes may shift, never the payload itself. The editor enforces this as a **required safeguard**: it computes the identity (over the audio payload) before and after every write and, on any change, raises a critical alert and preserves the original and edited files under `~/.local/state/deck/identity-mismatches/` for analysis. A changed identity silently breaks every playlist referencing the track, so this is not optional and never auto-undone (the original is kept for recovery).
+> [!IMPORTANT] A tag edit must never change the track's **content identity** — the hash of the audio payload, with tags excluded by design, so only tag/container bytes may shift, never the payload itself. The editor enforces this as a **required safeguard**: it computes the identity (over the audio payload) before and after every write and, on any change, raises a critical alert and preserves the original and edited files under the shared `~/.local/state/deck/error_reports/` (dated, type-tagged) for analysis. A changed identity silently breaks every playlist referencing the track, so this is not optional and never auto-undone (the original is kept for recovery).
 
 **Detail**
 
@@ -163,6 +165,7 @@ Reached two ways: by `e` on a highlighted file in the browser, or via the load-t
 
 - [Renaming](#renaming) — the load-time offer that also opens this
 - [Keymap](#keymap) — editor keys (fixed, not configurable)
+- [Error Reports](#error-reports) — where a payload-change mismatch is preserved
 
 
 # Move
@@ -753,17 +756,19 @@ Most keys are configurable via `config.toml` as action-name → key-string mappi
 
 [Up](#application)
 
-Per-track memory, keyed by a Blake3 hash of the decoded audio — so it follows the music, not the file. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset was deliberately placed, and the filename as a human-readable hint). Renaming, retagging, or re-containering a track keeps its analysis, because the key is the audio itself.
+Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
 
 Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache.
 
 **Detail**
 
-- A flat `{hash: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+- A flat `{identity: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+- A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced (deck warning plus an [Error Reports](#error-reports) entry).
 
 **See also**
 
 - [Session State](#session-state) — the other persisted store, in the state dir
+- [Metadata Editor](#metadata-editor) — defines content identity and its safeguard
 
 
 # Session State
@@ -772,7 +777,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
 
-Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and the tag editor's identity-mismatch dumps.
+Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and the [Error Reports](#error-reports).
 
 **Detail**
 
@@ -781,6 +786,24 @@ Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the pan
 **See also**
 
 - [Track Database](#track-database) — the other persisted store, in the data dir
+
+
+# Error Reports
+
+[Up](#application)
+
+A single directory where faults worth preserving are written for later inspection: `~/.local/state/deck/error_reports/`. Each report is named `YYYY-MM-DD_HHMMSS-<kind>-<label>` so a plain listing reads as a chronological log.
+
+Two kinds today:
+
+- **identity-mismatch** — a tag edit changed the audio payload (a folder holding the original, edited, and details).
+
+- **identity-unhashable** — a track's content identity couldn't be computed at load (a text file with the path and error).
+
+**See also**
+
+- [Metadata Editor](#metadata-editor) — writes identity-mismatch reports
+- [Track Database](#track-database) — the load-time identity-unhashable case
 
 
 # Album Art

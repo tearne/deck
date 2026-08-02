@@ -5,13 +5,6 @@ use stratum_dsp::{analyze_audio, AnalysisConfig};
 
 fn default_art_bright_idx() -> u8 { 1 }
 
-pub(crate) fn hash_mono(samples: &[f32]) -> String {
-    let bytes = unsafe {
-        std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4)
-    };
-    blake3::Hasher::new().update(bytes).finalize().to_hex().to_string()
-}
-
 fn track_data_path() -> PathBuf {
     crate::xdg::data_dir().join("track-data.json")
 }
@@ -89,12 +82,6 @@ impl TrackDatabase {
 
     pub(crate) fn entries_snapshot(&self) -> TrackEntries {
         self.entries.clone()
-    }
-
-    /// Replace the whole entry set and persist. For the one-off re-key converter.
-    pub(crate) fn overwrite_and_save(&mut self, entries: TrackEntries) {
-        self.entries = entries;
-        self.save();
     }
 
     pub(crate) fn flush_if_idle(&mut self) {

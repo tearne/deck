@@ -37,7 +37,6 @@ mod error_reports;
 mod frame_stats;
 mod playlist;
 mod render;
-mod rekey;
 mod tags;
 mod xdg;
 
@@ -83,10 +82,6 @@ struct Cli {
     /// Record per-frame timing statistics to frame-stats.csv in the current directory
     #[arg(long)]
     frame_stats: bool,
-
-    /// One-off: re-key the track database from PCM hashes to content identities, then exit
-    #[arg(long, hide = true)]
-    rekey_track_data: bool,
 }
 
 fn main() {
@@ -115,12 +110,6 @@ fn main() {
     }));
 
     let cli = Cli::parse();
-
-    // One-off maintenance path: convert the track database and exit before the TUI.
-    if cli.rekey_track_data {
-        rekey::run();
-        return;
-    }
 
     let use_local_config = cli.local_config;
 

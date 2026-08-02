@@ -11,3 +11,24 @@
 Strip the flag, the `rekey` module, and `hash_mono` out.
 
 Depends on [[rekey-track-data-to-content-identity]] having shipped and the conversion having been run. Same retire-after-use pattern as [[remove-cache-migration]].
+
+
+## Approach
+
+Straight deletion — every target is converter-only, confirmed by grep:
+
+- The `rekey` module, the hidden `--rekey-track-data` flag, and its startup branch.
+- `hash_mono` and the `TrackDatabase::overwrite_and_save` helper added for the converter — nothing else calls either.
+- The `blake3` dependency, whose only use was `hash_mono`.
+
+
+## Plan
+
+- [x] Remove the `rekey` module, the `--rekey-track-data` flag, and its startup branch
+- [x] Remove `hash_mono` and `TrackDatabase::overwrite_and_save`
+- [x] Drop the now-unused `blake3` dependency
+
+
+## Conclusion
+
+Completed.

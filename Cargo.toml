@@ -3,12 +3,11 @@ members = ["resilient-playlists"]
 
 [package]
 name = "deck"
-version = "0.11.45"
+version = "0.11.46"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [dependencies]
-blake3 = "1"
 resilient-playlists = { path = "resilient-playlists" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
