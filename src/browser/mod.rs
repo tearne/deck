@@ -18,10 +18,15 @@ pub(crate) fn is_audio(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn is_playlist(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("rpl")).unwrap_or(false)
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum EntryKind {
     Dir,
     Audio,
+    Playlist,
     Other,
 }
 
@@ -55,6 +60,8 @@ pub(crate) struct BrowserState {
     /// Flat list of all audio files under the workspace; populated on first search keystroke.
     workspace_files: Option<Vec<std::path::PathBuf>>,
     pub(crate) mode: BrowserMode,
+    /// When `Some`, a new-playlist name is being typed; captures input until Enter.
+    pub(crate) name_prompt: Option<String>,
     /// The file being relocated while in Move mode (the entry highlighted when `m`
     /// was pressed).
     pub(crate) move_source: Option<std::path::PathBuf>,
@@ -89,14 +96,17 @@ impl BrowserState {
         let mut raw: Vec<_> = std::fs::read_dir(&dir)?.filter_map(|e| e.ok()).collect();
         raw.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
 
-        let mut dirs  = Vec::new();
-        let mut audio = Vec::new();
-        let mut other = Vec::new();
+        let mut dirs      = Vec::new();
+        let mut playlists = Vec::new();
+        let mut audio     = Vec::new();
+        let mut other     = Vec::new();
         for entry in raw {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
                 dirs.push(BrowserEntry { name, path, kind: EntryKind::Dir, compliance: None });
+            } else if is_playlist(&path) {
+                playlists.push(BrowserEntry { name, path, kind: EntryKind::Playlist, compliance: None });
             } else if is_audio(&path) {
                 audio.push(BrowserEntry { name, path, kind: EntryKind::Audio, compliance: None });
             } else {
@@ -104,6 +114,7 @@ impl BrowserState {
             }
         }
         entries.extend(dirs);
+        entries.extend(playlists);
         entries.extend(audio);
         entries.extend(other);
 
@@ -114,11 +125,11 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, move_source: None, target_deck: 0, compliance_on: false, location_label: None, alert: None })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, name_prompt: None, move_source: None, target_deck: 0, compliance_on: false, location_label: None, alert: None })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
-        matches!(kind, EntryKind::Dir | EntryKind::Audio)
+        matches!(kind, EntryKind::Dir | EntryKind::Audio | EntryKind::Playlist)
     }
 
     /// The primary mode to restore on reopen — `Move` is transient and collapses
@@ -175,6 +186,17 @@ impl BrowserState {
                 if e.kind == EntryKind::Audio { Some(e.path.clone()) } else { None }
             })
         }
+    }
+
+    /// The highlighted entry's path and kind — for the context panel preview.
+    /// Respects the search-result list when a search is active.
+    pub(crate) fn highlighted_entry(&self) -> Option<(std::path::PathBuf, EntryKind)> {
+        if let Some(ref results) = self.search_results {
+            let path = results.get(self.cursor)?.clone();
+            let kind = if is_playlist(&path) { EntryKind::Playlist } else { EntryKind::Audio };
+            return Some((path, kind));
+        }
+        self.entries.get(self.cursor).map(|e| (e.path.clone(), e.kind.clone()))
     }
 
     /// Recompute the filtered result list from the current term. With a workspace
@@ -340,6 +362,9 @@ fn run_search(term: &str, files: &[std::path::PathBuf], workspace: &std::path::P
 
 pub(crate) enum BrowserResult {
     Selected(std::path::PathBuf),
+    PlaylistSelected(std::path::PathBuf),
+    /// Create a new empty playlist with this name in the current directory.
+    CreatePlaylist(String),
     DirectoryChosen(std::path::PathBuf),
     EditRequested(std::path::PathBuf),
     WorkspaceSet(std::path::PathBuf),
@@ -414,6 +439,16 @@ pub(crate) fn render_browser(
         top[0],
     );
     let right = top[1];
+    if let Some(name) = &state.name_prompt {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                ratatui::text::Span::styled("new playlist: ", Style::default().fg(theme.accent).bg(bg)),
+                ratatui::text::Span::styled(name.clone(), Style::default().fg(Color::White).bg(bg)),
+                ratatui::text::Span::styled("█  Enter: create  Esc: cancel ", Style::default().fg(theme.accent).bg(bg)),
+            ])).alignment(Alignment::Right).style(Style::default().bg(bg)),
+            right,
+        );
+    } else {
     match state.mode {
         BrowserMode::Search => {
             let mut spans = vec![
@@ -447,6 +482,7 @@ pub(crate) fn render_browser(
                 right,
             );
         }
+    }
     }
     // The jumped-to location label sits prominently at the top-left of the content,
     // over the mode hint, until the next manual navigation clears it.
@@ -485,18 +521,20 @@ pub(crate) fn render_browser(
             // while tracks and other files dim back to signal "not selectable".
             let (label, color) = if state.mode == BrowserMode::Move {
                 match e.kind {
-                    EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(120, 160, 230)),
-                    EntryKind::Audio => (e.name.clone(), Color::Rgb(60, 80, 120)),
-                    EntryKind::Other => (e.name.clone(), Color::Rgb(45, 55, 85)),
+                    EntryKind::Dir      => (format!("{}/", e.name), Color::Rgb(120, 160, 230)),
+                    EntryKind::Audio    => (e.name.clone(), Color::Rgb(60, 80, 120)),
+                    EntryKind::Playlist => (e.name.clone(), Color::Rgb(60, 100, 90)),
+                    EntryKind::Other    => (e.name.clone(), Color::Rgb(45, 55, 85)),
                 }
             } else if e.compliance == Some(true) {
                 // Non-compliant: a warning marker and amber, so it stands out for cleanup.
                 (format!("⚠ {}", e.name), Color::Rgb(230, 170, 60))
             } else {
                 match e.kind {
-                    EntryKind::Dir   => (format!("{}/", e.name), Color::Rgb(80, 110, 180)),
-                    EntryKind::Audio => (e.name.clone(), Color::Yellow),
-                    EntryKind::Other => (e.name.clone(), Color::Rgb(60, 60, 80)),
+                    EntryKind::Dir      => (format!("{}/", e.name), Color::Rgb(80, 110, 180)),
+                    EntryKind::Audio    => (e.name.clone(), Color::Yellow),
+                    EntryKind::Playlist => (format!("≡ {}", e.name), Color::Rgb(120, 210, 180)),
+                    EntryKind::Other    => (e.name.clone(), Color::Rgb(60, 60, 80)),
                 }
             };
             ListItem::new(label).style(Style::default().fg(color))
@@ -581,6 +619,19 @@ pub(crate) fn handle_browser_key(
     // Repeat counts as a press: terminals without key-release reporting deliver
     // auto-repeat as presses anyway, so held-key behaviour stays uniform.
     if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) { return Ok(None); }
+    // New-playlist name entry intercepts all keys until Enter (create) or Esc (cancel).
+    if state.name_prompt.is_some() {
+        match key.code {
+            KeyCode::Esc => { state.name_prompt = None; return Ok(None); }
+            KeyCode::Enter => {
+                let name = state.name_prompt.take().unwrap().trim().to_string();
+                return Ok((!name.is_empty()).then_some(BrowserResult::CreatePlaylist(name)));
+            }
+            KeyCode::Backspace => { state.name_prompt.as_mut().unwrap().pop(); return Ok(None); }
+            KeyCode::Char(c) => { state.name_prompt.as_mut().unwrap().push(c); return Ok(None); }
+            _ => return Ok(None),
+        }
+    }
     // `[`/`]` cycle the load target in every mode — non-letter keys, so they don't
     // collide with search typing.
     match key.code {
@@ -607,6 +658,7 @@ fn open_highlighted(state: &mut BrowserState) -> io::Result<Option<BrowserResult
             Ok(None)
         }
         EntryKind::Audio => Ok(Some(BrowserResult::Selected(entry.path.clone()))),
+        EntryKind::Playlist => Ok(Some(BrowserResult::PlaylistSelected(entry.path.clone()))),
         EntryKind::Other => Ok(None),
     }
 }
@@ -638,12 +690,13 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => { state.nav_up(); Ok(None) }
         KeyCode::Down | KeyCode::Char('j') => { state.nav_down(); Ok(None) }
-        KeyCode::Enter | KeyCode::Char('l') => open_highlighted(state),
-        KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => { go_up(state)?; Ok(None) }
+        KeyCode::Enter => open_highlighted(state),
+        KeyCode::Backspace | KeyCode::Left => { go_up(state)?; Ok(None) }
         KeyCode::Tab | KeyCode::Char('/') => { state.mode = BrowserMode::Search; Ok(None) }
         KeyCode::Char('@') => Ok(set_workspace(state)),
         KeyCode::Char('\'') => Ok(clear_workspace(state)),
-        // File operations on the highlighted audio entry; no-op on dirs/non-audio.
+        // `e` opens the tag editor for an audio file. On a playlist, `e` is consumed by
+        // the hover-preview editor (focus its pane), so it never reaches here.
         KeyCode::Char('e') => Ok(state.highlighted_audio_path().map(BrowserResult::EditRequested)),
         KeyCode::Char('m') => {
             if let Some(source) = state.highlighted_audio_path() {
@@ -654,6 +707,8 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
             Ok(None)
         }
         KeyCode::Char(d @ '1'..='3') => { state.target_deck = d as usize - '1' as usize; Ok(None) }
+        // `n` starts a new playlist (name prompt), which opens in the editor.
+        KeyCode::Char('n') => { state.name_prompt = Some(String::new()); Ok(None) }
         // Rotate through loaded-track locations.
         KeyCode::Char('`') => Ok(Some(BrowserResult::CycleLocation)),
         // Tag-compliance cleanup mode. Editing a flagged file auto-advances to the
@@ -728,6 +783,7 @@ mod tests {
             search_results: None,
             workspace_files: None,
             mode: BrowserMode::Command,
+            name_prompt: None,
             move_source: None,
             target_deck: 0,
             compliance_on: false,

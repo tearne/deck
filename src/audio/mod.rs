@@ -678,6 +678,26 @@ impl<S: Source<Item = f32>> Source for PitchSource<S> {
 // Audio decode
 // ---------------------------------------------------------------------------
 
+/// Duration in seconds without decoding — read from the container's frame count
+/// and sample rate. `None` if the file can't be probed or lacks a frame count.
+/// Used by playlist resolution to pre-filter candidates cheaply.
+pub(crate) fn probe_duration_secs(path: &Path) -> Option<f64> {
+    let src = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(src), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
+    let track = probed.format.tracks().iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)?;
+    let n_frames = track.codec_params.n_frames?;
+    let sample_rate = track.codec_params.sample_rate?;
+    Some(n_frames as f64 / sample_rate as f64)
+}
+
 /// Decode an audio file. Returns (mono_f32, interleaved_f32, sample_rate, channels).
 /// Updates `decoded_samples` and `estimated_total` atomics as decode progresses.
 pub(crate) fn decode_audio(

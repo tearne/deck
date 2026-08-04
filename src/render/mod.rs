@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 
 use crate::audio::WaveformData;
 use crate::deck::{
@@ -652,31 +652,48 @@ pub(crate) fn notification_line_for_deck(deck: &Deck, content_width: usize, viny
             ("⚠ rename? [y]".to_string(), dim)
         };
         let track_name = deck.track_name.clone();
+        let (badge, badge_w) = playlist_badge(deck);
         let indicators = cache_indicator_spans(deck, vinyl_mode);
         let indicators_w = 16; // "[BPM][Tick][Cue]"
-        let left_w  = track_name.chars().count();
+        let left_w  = badge_w + track_name.chars().count();
         let right_w = offer.chars().count() + 1 + indicators_w; // space + indicators
         let spacer_w = content_width.saturating_sub(left_w + right_w).max(1);
-        let mut spans = vec![
+        let mut spans = badge;
+        spans.extend([
             Span::styled(track_name, Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85))),
             Span::raw(" ".repeat(spacer_w)),
             Span::styled(offer, offer_style),
             Span::raw(" "),
-        ];
+        ]);
         spans.extend(indicators);
         Line::from(spans)
     } else {
         let track_name = deck.track_name.clone();
+        let (badge, badge_w) = playlist_badge(deck);
         let indicators = cache_indicator_spans(deck, vinyl_mode);
         let indicators_w = 16; // "[BPM][Tick][Cue]"
-        let left_w   = track_name.chars().count();
+        let left_w   = badge_w + track_name.chars().count();
         let spacer_w = content_width.saturating_sub(left_w + indicators_w).max(1);
-        let mut spans = vec![
+        let mut spans = badge;
+        spans.extend([
             Span::styled(track_name, Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85))),
             Span::raw(" ".repeat(spacer_w)),
-        ];
+        ]);
         spans.extend(indicators);
         Line::from(spans)
+    }
+}
+
+/// The `≡ x/y` position badge shown before the track name when a playlist is
+/// active on the deck. Returns the spans and their display width.
+fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
+    match &deck.playlist {
+        Some(pl) => {
+            let text = format!("≡ {}/{}  ", pl.index + 1, pl.playlist.entries.len());
+            let width = text.chars().count();
+            (vec![Span::styled(text, Style::default().fg(Color::Rgb(120, 210, 180)))], width)
+        }
+        None => (Vec::new(), 0),
     }
 }
 
@@ -1891,4 +1908,160 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),
         inner,
     );
+}
+
+/// The permanent context panel. Renders whichever state it's in: an empty frame,
+/// a track's metadata, or a playlist (preview / browse / edit).
+pub(crate) fn render_panel(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    panel: &crate::Panel,
+    playing_of: &dyn Fn(&crate::PlaylistPanel) -> Option<usize>,
+) {
+    use crate::{EditFocus, Panel, Preview};
+    frame.render_widget(Clear, area);
+    match panel {
+        Panel::Preview(Preview::Empty) => {
+            let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(55, 62, 78)));
+            frame.render_widget(Paragraph::new("").block(block), area);
+        }
+        Panel::Preview(Preview::Track { fields }) => render_track_meta(frame, area, fields),
+        Panel::Preview(Preview::Playlist(pp)) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Preview),
+        Panel::Browse(pp) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Browse),
+        Panel::Edit { panel: pp, focus } => {
+            let kind = match focus { EditFocus::Playlist => PanelKind::EditList, EditFocus::Browser => PanelKind::EditBrowser };
+            render_playlist_panel(frame, area, pp, playing_of(pp), kind);
+        }
+    }
+}
+
+enum PanelKind { Preview, Browse, EditList, EditBrowser }
+
+/// A playlist in the panel: entries with ▶ playing / ⇢ next-up markers and status.
+/// A wrapping hint sits below the frame; the border colour marks the active side.
+fn render_playlist_panel(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    pp: &crate::PlaylistPanel,
+    playing: Option<usize>,
+    kind: PanelKind,
+) {
+    let next_up = pp.next_up(playing);
+    let show_cursor = !matches!(kind, PanelKind::Preview);
+    let name = pp.path.file_stem().and_then(|s| s.to_str()).unwrap_or("playlist").to_string();
+
+    // Reserve two rows below the frame for the (wrapping) hint text.
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(2),
+        ratatui::layout::Constraint::Length(2),
+    ]).split(area);
+
+    let items: Vec<ListItem> = pp.playlist.entries.iter().enumerate().map(|(i, entry)| {
+        let available = pp.available.get(i).copied().unwrap_or(false);
+        let marker = if Some(i) == playing { "▶" } else if Some(i) == next_up { "⇢" } else { " " };
+        let desc = format!("{} - {}", entry.description.title, entry.description.artist);
+        let shown = if desc == " - " { entry.hints.relative_path.clone() } else { desc };
+        let tail = if available { String::new() } else { "   unavailable".to_string() };
+        let mut style = if available { Style::default().fg(Color::Rgb(200, 220, 255)) } else { Style::default().fg(Color::Rgb(90, 90, 110)) };
+        if show_cursor && i == pp.cursor {
+            style = style.bg(Color::Rgb(40, 50, 80)).add_modifier(Modifier::BOLD);
+        }
+        ListItem::new(format!("{marker} {:>2}. {shown}{tail}", i + 1)).style(style)
+    }).collect();
+
+    // Border colour marks which side is active: bright on the focused side, dim otherwise.
+    let (border, hint) = match kind {
+        PanelKind::Preview     => (Color::Rgb(70, 90, 110),   "l browse · e edit"),
+        PanelKind::Browse      => (Color::Rgb(120, 210, 180), "j/k move · Enter load · e edit · Esc back"),
+        PanelKind::EditList    => (Color::Rgb(240, 180, 60),  "K/J reorder · x remove · h/Tab → browser · Enter commit · Esc abort"),
+        PanelKind::EditBrowser => (Color::Rgb(130, 100, 40),  "browse left, then a insert-after (append) · A insert-before · l/Tab → list · Enter commit · Esc abort"),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title(format!(" ♫ {name}  ({}) ", pp.playlist.entries.len()));
+    frame.render_widget(List::new(items).block(block), rows[0]);
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
+        rows[1],
+    );
+}
+
+/// The tag editor rendered in the context panel: labelled fields with a caret on
+/// the active one, the resulting filename, and a hint. Input is the same handler
+/// as the full-screen modal.
+pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, editor: &crate::deck::TagEditorState) {
+    const LABELS: [&str; 7] = ["Artist", "Title", "Album", "Year", "Track", "Genre", "Comment"];
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(2),
+        ratatui::layout::Constraint::Length(2),
+    ]).split(area);
+
+    let label_style = Style::default().fg(Color::Rgb(90, 110, 150));
+    let mut lines: Vec<Line> = LABELS.iter().zip(&editor.fields).enumerate().map(|(i, (label, (value, cursor)))| {
+        let mut spans = vec![Span::styled(format!("{label:>7}: "), label_style)];
+        if i == editor.active_field {
+            // Caret: split the value at the cursor and reverse the char under it.
+            let at = (*cursor).min(value.chars().count());
+            let before: String = value.chars().take(at).collect();
+            let under: String = value.chars().nth(at).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+            let after: String = value.chars().skip(at + 1).collect();
+            spans.push(Span::styled(before, Style::default().fg(Color::White)));
+            spans.push(Span::styled(under, Style::default().fg(Color::Black).bg(Color::Rgb(240, 180, 60))));
+            spans.push(Span::styled(after, Style::default().fg(Color::White)));
+        } else {
+            spans.push(Span::styled(value.clone(), Style::default().fg(Color::Rgb(200, 220, 255))));
+        }
+        Line::from(spans)
+    }).collect();
+
+    let with_ext = |stem: &str| if editor.extension.is_empty() { stem.to_string() } else { format!("{stem}.{}", editor.extension) };
+    let proposed = editor.preview();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Filename", Style::default().fg(Color::Rgb(120, 140, 175)).add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(vec![
+        Span::styled(" current: ", label_style),
+        Span::styled(with_ext(&editor.current_stem), Style::default().fg(Color::Rgb(120, 140, 175))),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("proposed: ", label_style),
+        Span::styled(with_ext(&proposed), Style::default().fg(Color::Rgb(240, 200, 90))),
+    ]));
+    if let Some(err) = &editor.collision_error {
+        lines.push(Line::from(Span::styled(format!("  {err}"), Style::default().fg(Color::Rgb(240, 120, 120)))));
+    }
+
+    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(240, 180, 60))).title(" edit tags ");
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: false }), rows[0]);
+    frame.render_widget(
+        Paragraph::new("Tab/↑↓ field · type to edit · Enter save (Artist+Title required) · Esc cancel")
+            .style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
+        rows[1],
+    );
+}
+
+/// A track's tag fields, read-only, for the preview panel.
+fn render_track_meta(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, fields: &[String; 7]) {
+    const LABELS: [&str; 7] = ["Artist", "Title", "Album", "Year", "Track", "Genre", "Comment"];
+    let lines: Vec<Line> = LABELS.iter().zip(fields).map(|(label, value)| {
+        Line::from(vec![
+            Span::styled(format!("{label:>7}: "), Style::default().fg(Color::Rgb(90, 110, 150))),
+            Span::styled(value.clone(), Style::default().fg(Color::Rgb(200, 220, 255))),
+        ])
+    }).collect();
+    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(70, 90, 110))).title(" metadata ");
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: true }), area);
+}
+
+/// Dim every cell in `area` in place — used to de-emphasise the browser half while
+/// the playlist pane holds focus.
+pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+    let buf = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            let dimmed = cell.style().add_modifier(Modifier::DIM).fg(Color::Rgb(90, 90, 110));
+            cell.set_style(dimmed);
+        }
+    }
 }

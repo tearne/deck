@@ -23,6 +23,9 @@ select_deck3 = "alt+3"
 # Cycle the selected deck (Zellij-style): down/right advance, up/left retreat
 select_next_deck = ["alt+down", "alt+right"]
 select_prev_deck = ["alt+up", "alt+left"]
+# Skip the selected deck's playlist to the next / previous track
+playlist_next = "alt+n"
+playlist_prev = "alt+p"
 
 # Transport / browse (selected deck)
 play_pause   = "alt+g"

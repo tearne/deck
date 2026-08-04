@@ -3,7 +3,7 @@ members = ["resilient-playlists"]
 
 [package]
 name = "deck"
-version = "0.13.1"
+version = "0.14.19"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 

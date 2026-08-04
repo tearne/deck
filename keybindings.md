@@ -62,6 +62,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `select_deck3` | `alt+3` | Select deck 3 |
 | `select_next_deck` | `alt+down`, `alt+right` | Cycle to next deck (wraps) |
 | `select_prev_deck` | `alt+up`, `alt+left` | Cycle to previous deck (wraps) |
+| `playlist_next` | `alt+n` | Selected deck: skip to next playlist track |
+| `playlist_prev` | `alt+p` | Selected deck: skip to previous playlist track |
 | `swap_deck1_deck2` | `alt+=` | Swap decks 1 ↔ 2 |
 | `swap_deck2_deck3` | `alt+-` | Swap decks 2 ↔ 3 |
 
@@ -171,15 +173,26 @@ Not configurable — hardcoded in the application.
 
 | Key | Action |
 |-----|--------|
-| `Up` / `Down` | Navigate entries |
-| `Enter` | Load highlighted track |
+| `Up` / `Down` / `j` / `k` | Navigate entries |
+| `Enter` | Load highlighted track, or open highlighted playlist |
 | `Backspace` / `Left` | Go up a directory |
 | `@` | Set current directory as workspace |
 | `'` | Clear workspace |
 | `#` | Preview highlighted track |
+| `n` | New playlist (prompts for a name) |
 | `Esc` | Close browser / clear search term |
 | `q` | Close browser (when not searching) |
 | Printable chars | Search (when workspace is set) |
+
+### Playlist editor (right pane; opens on hovering a `.rpl`)
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `l` / `e` | Focus the playlist pane; `h` / `Esc` back to the browser |
+| `Enter` / `a` | (browser focus) append highlighted track |
+| `j` / `k` | (playlist focus) move cursor |
+| `K` / `J` | (playlist focus) reorder entry up / down |
+| `x` / `Delete` | (playlist focus) remove entry |
 
 ### Tag Editor
 
