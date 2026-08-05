@@ -130,6 +130,7 @@ pub struct Candidate {
     pub path: PathBuf,
     pub description: Description,
     pub duration_secs: f64,
+    pub file_size_bytes: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -219,20 +220,27 @@ fn changed_description(entry: &Entry, path: &Path, library: &dyn Library) -> Opt
     }
 }
 
-/// Library files ranked by description similarity to the entry, for the fallback.
+/// Library files similar to the entry in *both* duration and description, for the
+/// fallback: filtered to within the duration tolerance, ranked by description-field
+/// matches, then by closest duration.
 fn descriptive_candidates(entry: &Entry, library: &dyn Library) -> Vec<Candidate> {
-    let mut scored: Vec<(u32, Candidate)> = library
+    let target = entry.identity.duration_secs;
+    let mut scored: Vec<(u32, f64, Candidate)> = library
         .candidates()
         .into_iter()
         .filter_map(|path| {
-            let (duration, _) = library.cheap_probe(&path)?;
+            let (duration, size) = library.cheap_probe(&path)?;
+            let duration_delta = (duration - target).abs();
+            if duration_delta > DURATION_TOLERANCE_SECS {
+                return None;
+            }
             let description = library.read_description(&path)?;
             let score = description_similarity(&entry.description, &description);
-            (score > 0).then_some((score, Candidate { path, description, duration_secs: duration }))
+            (score > 0).then_some((score, duration_delta, Candidate { path, description, duration_secs: duration, file_size_bytes: size }))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().map(|(_, c)| c).collect()
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)));
+    scored.into_iter().map(|(_, _, c)| c).collect()
 }
 
 /// A deliberately simple similarity: count of matching non-empty fields. The map
@@ -273,7 +281,7 @@ pub fn adopt_candidate(
 /// Express `target` relative to `base_dir` using `../` as needed. Both are
 /// treated as-is (callers pass canonical absolute paths); falls back to the
 /// target's string form when no relation can be computed.
-fn relative_to(base_dir: &Path, target: &Path) -> String {
+pub(crate) fn relative_to(base_dir: &Path, target: &Path) -> String {
     use std::path::Component;
     let base: Vec<Component> = base_dir.components().collect();
     let targ: Vec<Component> = target.components().collect();

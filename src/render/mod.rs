@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::audio::WaveformData;
 use crate::deck::{
@@ -1932,7 +1932,194 @@ pub(crate) fn render_panel(
             let kind = match focus { EditFocus::Playlist => PanelKind::EditList, EditFocus::Browser => PanelKind::EditBrowser };
             render_playlist_panel(frame, area, pp, playing_of(pp), kind);
         }
+        Panel::Confirm { panel: pp, entry, candidates, cursor, layout } => render_confirm(frame, area, pp, *entry, candidates, *cursor, layout),
     }
+}
+
+/// A byte count rendered compactly (MB/KB/B) for the picker's size fields.
+fn human_size(bytes: u64) -> String {
+    const MB: f64 = 1_048_576.0;
+    const KB: f64 = 1024.0;
+    let b = bytes as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Greedy word-wrap into lines of at most `width` columns, for the picker's explanatory note.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if line.is_empty() {
+            line = word.to_string();
+        } else if line.chars().count() + 1 + word.chars().count() <= width {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line = word.to_string();
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// The descriptive-fallback candidate picker: a frozen header for the original entry, then a
+/// scrolling list of variable-height candidate cards for the operator to confirm a re-link.
+fn render_confirm(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    pp: &crate::PlaylistPanel,
+    entry: usize,
+    candidates: &[crate::playlist::Candidate],
+    cursor: usize,
+    layout: &std::cell::RefCell<crate::ConfirmLayout>,
+) {
+    use ratatui::layout::{Constraint, Layout};
+    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(area);
+
+    let dim = Style::default().fg(Color::Rgb(120, 140, 175));
+    let label = Style::default().fg(Color::Rgb(90, 110, 150));
+    let val = Style::default().fg(Color::Rgb(200, 220, 255));
+    let amber_bold = Style::default().fg(Color::Rgb(230, 190, 100)).add_modifier(Modifier::BOLD);
+    let match_green = Style::default().fg(Color::Rgb(120, 210, 150));
+    let miss = Style::default().fg(Color::Rgb(150, 130, 120));
+    let orig = pp.playlist.entries.get(entry);
+
+    // Place the block first so the list width (which the path wraps to) is known before the
+    // header height is computed — the width doesn't depend on the header, only the height does.
+    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(230, 190, 100))).title(" confirm re-link ");
+    let inner = block.inner(rows[0]);
+    frame.render_widget(block, rows[0]);
+    let scrollbar_col = 1u16;
+    let path_indent = 6usize;
+    let path_width = (inner.width.saturating_sub(scrollbar_col) as usize).saturating_sub(path_indent);
+
+    // A field line marked ✓ (matches the original) or · (differs), showing the value.
+    let field_line = |name: &str, orig_val: &str, cand_val: &str| {
+        let matches = !orig_val.is_empty() && orig_val.eq_ignore_ascii_case(cand_val);
+        let style = if matches { match_green } else { miss };
+        let shown = if cand_val.is_empty() { "—" } else { cand_val };
+        Line::from(vec![Span::styled(format!("    {} {name:<7} ", if matches { "✓" } else { "·" }), style), Span::styled(shown.to_string(), style)])
+    };
+    // Hard-wrap a path across as many lines as it needs (at least one) so it stays fully
+    // visible; the card simply grows to fit.
+    let wrap_path = |path: &str| -> Vec<String> {
+        let chars: Vec<char> = path.chars().collect();
+        if path_width == 0 || chars.is_empty() {
+            return vec![path.to_string()];
+        }
+        chars.chunks(path_width).map(|c| c.iter().collect()).collect()
+    };
+
+    // Build each candidate as a variable-height card, recording its start line so the input's
+    // line-scroll can map an offset back to a card. Heights differ: album/year lines appear only
+    // when present, and the path wraps to however many lines it needs.
+    let mut clines: Vec<Line> = Vec::new();
+    let mut card_starts: Vec<usize> = Vec::new();
+    for (i, c) in candidates.iter().enumerate() {
+        card_starts.push(clines.len());
+        let (orig_year, orig_title, orig_artist, orig_album, orig_dur, orig_size) = match orig {
+            Some(e) => (e.description.year.as_str(), e.description.title.as_str(), e.description.artist.as_str(), e.description.album.as_str(), e.identity.duration_secs, e.hints.file_size_bytes),
+            None => ("", "", "", "", c.duration_secs, c.file_size_bytes),
+        };
+        clines.push(Line::from(Span::styled(format!("  candidate {}", i + 1), Style::default().fg(Color::Rgb(180, 200, 230)))));
+        clines.push(field_line("title", orig_title, &c.description.title));
+        clines.push(field_line("artist", orig_artist, &c.description.artist));
+        if !orig_album.is_empty() || !c.description.album.is_empty() {
+            clines.push(field_line("album", orig_album, &c.description.album));
+        }
+        if !orig_year.is_empty() || !c.description.year.is_empty() {
+            clines.push(field_line("year", orig_year, &c.description.year));
+        }
+        let delta = (c.duration_secs - orig_dur).abs();
+        let len_ok = delta <= 2.0;
+        clines.push(Line::from(Span::styled(format!("    {} length  {:.0}s (Δ{:.1}s)", if len_ok { "✓" } else { "·" }, c.duration_secs, delta), if len_ok { match_green } else { miss })));
+        // Size is the cheap proxy for the audio payload: a re-encode changes it (·), so it's the
+        // visible evidence of why confirmation is needed even when every tag field matches.
+        let size_ok = orig_size != 0 && c.file_size_bytes == orig_size;
+        clines.push(Line::from(Span::styled(format!("    {} {:<7} {}", if size_ok { "✓" } else { "·" }, "size", human_size(c.file_size_bytes)), if size_ok { match_green } else { miss })));
+        // Show the path relative to the playlist dir — the same basis as the stored hint, and
+        // exactly what the hint becomes on adopt — rather than the raw absolute workspace path.
+        let rel = crate::playlist::relative_to(pp.path.parent().unwrap_or(std::path::Path::new(".")), &c.path);
+        for path_line in wrap_path(&rel) {
+            clines.push(Line::from(Span::styled(format!("{:indent$}{path_line}", "", indent = path_indent), dim)));
+        }
+    }
+    let total = clines.len();
+
+    // The active card is the topmost one whose header line is still on screen; highlight its head.
+    let active = crate::confirm_active_card(cursor, &card_starts);
+    if let Some(&start) = card_starts.get(active) {
+        clines[start] = Line::from(Span::styled(format!("▶ candidate {}", active + 1), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+    }
+    // Publish the layout so the input handler's line-scroll can map its offset back to a card.
+    *layout.borrow_mut() = crate::ConfirmLayout { card_starts, total_lines: total };
+
+    // Frozen header: a note on why confirmation is needed, the original entry, then a label.
+    let note_style = Style::default().fg(Color::Rgb(230, 190, 100));
+    let note = "Audio fingerprint changed — confirm the right file.";
+    let mut header: Vec<Line> = wrap_words(note, inner.width.saturating_sub(1) as usize)
+        .into_iter()
+        .map(|l| Line::from(Span::styled(l, note_style)))
+        .collect();
+    header.push(Line::from(""));
+    header.push(Line::from(Span::styled("Original entry", amber_bold)));
+    if let Some(e) = orig {
+        header.push(Line::from(vec![Span::styled("  title  ", label), Span::styled(e.description.title.clone(), val)]));
+        header.push(Line::from(vec![Span::styled("  artist ", label), Span::styled(e.description.artist.clone(), val)]));
+        if !e.description.album.is_empty() {
+            header.push(Line::from(vec![Span::styled("  album  ", label), Span::styled(e.description.album.clone(), val)]));
+        }
+        if !e.description.year.is_empty() {
+            header.push(Line::from(vec![Span::styled("  year   ", label), Span::styled(e.description.year.clone(), val)]));
+        }
+        header.push(Line::from(vec![Span::styled("  hint   ", label), Span::styled(e.hints.relative_path.clone(), dim)]));
+        header.push(Line::from(vec![Span::styled("  size   ", label), Span::styled(human_size(e.hints.file_size_bytes), dim)]));
+        header.push(Line::from(vec![Span::styled("  length ", label), Span::styled(format!("{:.0}s", e.identity.duration_secs), dim)]));
+    }
+    header.push(Line::from(""));
+    header.push(Line::from(vec![
+        Span::styled(format!("Candidates ({})", candidates.len()), amber_bold),
+        Span::styled(if candidates.is_empty() { String::new() } else { format!("   #{} of {}", active + 1, candidates.len()) }, dim),
+    ]));
+    let header_h = header.len() as u16;
+
+    let split = Layout::vertical([Constraint::Length(header_h), Constraint::Min(1)]).split(inner);
+    frame.render_widget(Paragraph::new(header), split[0]);
+
+    if candidates.is_empty() {
+        frame.render_widget(Paragraph::new(Span::styled("  (no candidates)", dim)), split[1]);
+    } else {
+        let cols = Layout::horizontal([Constraint::Min(1), Constraint::Length(scrollbar_col)]).split(split[1]);
+        // Scroll straight to the line offset; cards fall off the top/bottom edges by line.
+        let offset = cursor.min(total.saturating_sub(1));
+        frame.render_widget(Paragraph::new(clines).scroll((offset as u16, 0)), cols[0]);
+        let mut sb = ScrollbarState::new(total).position(offset);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight).begin_symbol(None).end_symbol(None),
+            cols[1],
+            &mut sb,
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new("j/k select · Enter confirm · Esc cancel").style(dim).wrap(ratatui::widgets::Wrap { trim: true }),
+        rows[1],
+    );
 }
 
 enum PanelKind { Preview, Browse, EditList, EditBrowser }
@@ -1956,13 +2143,17 @@ fn render_playlist_panel(
         ratatui::layout::Constraint::Length(2),
     ]).split(area);
 
+    use crate::EntryStatus;
     let items: Vec<ListItem> = pp.playlist.entries.iter().enumerate().map(|(i, entry)| {
-        let available = pp.available.get(i).copied().unwrap_or(false);
+        let status = pp.status_at(i);
         let marker = if Some(i) == playing { "▶" } else if Some(i) == next_up { "⇢" } else { " " };
         let desc = format!("{} - {}", entry.description.title, entry.description.artist);
         let shown = if desc == " - " { entry.hints.relative_path.clone() } else { desc };
-        let tail = if available { String::new() } else { "   unavailable".to_string() };
-        let mut style = if available { Style::default().fg(Color::Rgb(200, 220, 255)) } else { Style::default().fg(Color::Rgb(90, 90, 110)) };
+        let (tail, mut style) = match status {
+            EntryStatus::Found => (String::new(), Style::default().fg(Color::Rgb(200, 220, 255))),
+            EntryStatus::NeedsConfirmation => ("   ? confirm".to_string(), Style::default().fg(Color::Rgb(230, 190, 100))),
+            EntryStatus::Unavailable => ("   unavailable".to_string(), Style::default().fg(Color::Rgb(90, 90, 110))),
+        };
         if show_cursor && i == pp.cursor {
             style = style.bg(Color::Rgb(40, 50, 80)).add_modifier(Modifier::BOLD);
         }
@@ -1980,7 +2171,10 @@ fn render_playlist_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border))
         .title(format!(" ♫ {name}  ({}) ", pp.playlist.entries.len()));
-    frame.render_widget(List::new(items).block(block), rows[0]);
+    // Select the cursor so the List scrolls to keep it visible when entries overflow the panel.
+    let mut state = ListState::default();
+    state.select((!pp.playlist.entries.is_empty()).then(|| pp.cursor.min(pp.playlist.entries.len() - 1)));
+    frame.render_stateful_widget(List::new(items).block(block), rows[0], &mut state);
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
         rows[1],

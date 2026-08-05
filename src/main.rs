@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
+use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -243,28 +245,52 @@ enum BrowserLoad {
 /// A playlist shown in the context panel: its entries, a cursor, and cached
 /// availability (recomputed on structural change, not every frame). Used for the
 /// read-only preview/browse views and as the working buffer in edit mode.
+/// Per-entry resolution status, from `resolve`. `NeedsConfirmation` entries can be
+/// repaired via the candidate picker; only `Found` entries are playable.
+#[derive(Clone, Copy, PartialEq)]
+enum EntryStatus { Found, NeedsConfirmation, Unavailable }
+
 #[derive(Clone)]
 struct PlaylistPanel {
     path: PathBuf,
     playlist: playlist::Playlist,
     cursor: usize,
-    available: Vec<bool>,
+    status: Vec<EntryStatus>,
 }
 
 impl PlaylistPanel {
     fn open(path: PathBuf, workspace: Option<&Path>) -> Self {
         let playlist = playlist::read_playlist(&path).map(|(p, _)| p).unwrap_or_else(|_| playlist::Playlist::empty());
-        let mut p = Self { path, playlist, cursor: 0, available: Vec::new() };
-        p.recompute_availability(workspace);
+        let mut p = Self { path, playlist, cursor: 0, status: Vec::new() };
+        // Opening for view heals in place: relocated hints and refreshed tags persist.
+        p.recompute_status(workspace, true);
         p
     }
 
-    fn recompute_availability(&mut self, workspace: Option<&Path>) {
+    /// Recompute per-entry status. Applies `resolve`'s healing (relocated hints, tag
+    /// refresh) to the in-memory entries; when `persist` and anything changed, rewrites
+    /// the `.rpl`. `persist` is false during transactional edit so the buffer isn't written.
+    fn recompute_status(&mut self, workspace: Option<&Path>, persist: bool) {
         let dir = self.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let library = WorkspaceLibrary::new(workspace);
-        self.available = self.playlist.entries.iter()
-            .map(|e| matches!(playlist::resolve(e, &dir, &library), playlist::Resolution::Found { .. }))
+        let mut changed = false;
+        self.status = self.playlist.entries.iter_mut()
+            .map(|e| match playlist::resolve(e, &dir, &library) {
+                playlist::Resolution::Found { updated_entry, .. } => {
+                    if let Some(updated) = updated_entry { *e = updated; changed = true; }
+                    EntryStatus::Found
+                }
+                playlist::Resolution::NeedsConfirmation { .. } => EntryStatus::NeedsConfirmation,
+                playlist::Resolution::Unavailable => EntryStatus::Unavailable,
+            })
             .collect();
+        if changed && persist {
+            let _ = playlist::write_playlist(&self.path, &self.playlist);
+        }
+    }
+
+    fn status_at(&self, i: usize) -> EntryStatus {
+        self.status.get(i).copied().unwrap_or(EntryStatus::Unavailable)
     }
 
     fn cursor_up(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
@@ -275,7 +301,7 @@ impl PlaylistPanel {
     fn remove_at_cursor(&mut self) {
         if self.cursor < self.playlist.entries.len() {
             self.playlist.entries.remove(self.cursor);
-            self.available.remove(self.cursor);
+            self.status.remove(self.cursor);
             self.cursor = self.cursor.min(self.playlist.entries.len().saturating_sub(1));
         }
     }
@@ -283,33 +309,34 @@ impl PlaylistPanel {
     fn move_up(&mut self) {
         if self.cursor > 0 {
             self.playlist.entries.swap(self.cursor, self.cursor - 1);
-            self.available.swap(self.cursor, self.cursor - 1);
+            self.status.swap(self.cursor, self.cursor - 1);
             self.cursor -= 1;
         }
     }
     fn move_down(&mut self) {
         if self.cursor + 1 < self.playlist.entries.len() {
             self.playlist.entries.swap(self.cursor, self.cursor + 1);
-            self.available.swap(self.cursor, self.cursor + 1);
+            self.status.swap(self.cursor, self.cursor + 1);
             self.cursor += 1;
         }
     }
 
     /// Insert `entries` at position `at` (edit mode), leaving the cursor on the first.
-    fn insert_at(&mut self, at: usize, entries: Vec<playlist::Entry>, available: Vec<bool>) {
+    /// Inserted entries are marked unavailable until the next `recompute_status`.
+    fn insert_at(&mut self, at: usize, entries: Vec<playlist::Entry>) {
         let at = at.min(self.playlist.entries.len());
-        for (offset, (entry, avail)) in entries.into_iter().zip(available).enumerate() {
+        for (offset, entry) in entries.into_iter().enumerate() {
             self.playlist.entries.insert(at + offset, entry);
-            self.available.insert(at + offset, avail);
+            self.status.insert(at + offset, EntryStatus::Unavailable);
         }
         self.cursor = at;
     }
 
-    /// The entry auto-advance would pick next: first available strictly after
-    /// `current` (the playing index), or the first available when nothing plays yet.
+    /// The entry auto-advance would pick next: first `Found` strictly after `current`
+    /// (the playing index), or the first `Found` when nothing plays yet.
     fn next_up(&self, current: Option<usize>) -> Option<usize> {
         let start = current.map(|c| c + 1).unwrap_or(0);
-        (start..self.playlist.entries.len()).find(|&i| self.available.get(i).copied().unwrap_or(false))
+        (start..self.playlist.entries.len()).find(|&i| self.status_at(i) == EntryStatus::Found)
     }
 }
 
@@ -323,6 +350,25 @@ enum Panel {
     /// just drops it. `focus` toggles between picking tracks in the browser and
     /// reordering in the playlist.
     Edit { panel: PlaylistPanel, focus: EditFocus },
+    /// Descriptive-fallback candidate picker for entry `entry` of `panel`. `cursor` is a
+    /// line-scroll offset; the active candidate is the one at the top of the view. `layout`
+    /// is filled by the renderer (variable-height cards) for the input's line-scroll to read.
+    Confirm { panel: PlaylistPanel, entry: usize, candidates: Vec<playlist::Candidate>, cursor: usize, layout: Rc<RefCell<ConfirmLayout>> },
+}
+
+/// The picker's variable-height card layout, published by the renderer for the input's
+/// line-scroll to read: each card's start line, plus the total line count.
+#[derive(Default)]
+struct ConfirmLayout {
+    card_starts: Vec<usize>,
+    total_lines: usize,
+}
+
+/// The active candidate at line-scroll `offset`: the topmost card whose header line is still
+/// visible — the first whose start is at or below the top, so once a card's header scrolls off
+/// the top the next takes over.
+fn confirm_active_card(offset: usize, card_starts: &[usize]) -> usize {
+    card_starts.partition_point(|&start| start < offset).min(card_starts.len().saturating_sub(1))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -339,13 +385,14 @@ impl Panel {
     /// (Browse, or Edit with the playlist focused). In Edit-Browser you're picking tracks,
     /// so the browser stays bright.
     fn dim_browser(&self) -> bool {
-        matches!(self, Panel::Browse(_) | Panel::Edit { focus: EditFocus::Playlist, .. })
+        matches!(self, Panel::Browse(_) | Panel::Confirm { .. } | Panel::Edit { focus: EditFocus::Playlist, .. })
     }
 
     /// The playlist the panel is showing/editing, if any.
     fn playlist_mut(&mut self) -> Option<&mut PlaylistPanel> {
         match self {
-            Panel::Preview(Preview::Playlist(pp)) | Panel::Browse(pp) | Panel::Edit { panel: pp, .. } => Some(pp),
+            Panel::Preview(Preview::Playlist(pp)) | Panel::Browse(pp)
+            | Panel::Edit { panel: pp, .. } | Panel::Confirm { panel: pp, .. } => Some(pp),
             _ => None,
         }
     }
@@ -1792,14 +1839,18 @@ fn tui_loop(
                 }
             }
             Event::Key(key) => {
-                // Swallow the phantom second Esc: if an acting Esc happened within the
-                // window, drop this one without refreshing the window, so only the
-                // phantom is caught and a deliberate re-press soon after still acts.
-                if key.code == KeyCode::Esc && key.kind == KeyEventKind::Press {
-                    if last_esc_press.is_some_and(|t| t.elapsed() < ESC_PHANTOM_WINDOW) {
+                // A single physical Esc can produce a burst of events — a Repeat under the kitty
+                // protocol, or a phantom second Press on some terminals — that would cascade:
+                // deselect the playlist, then close the whole browser. Collapse any burst to one
+                // action. Stamp the time on *every* Esc event (Press, Repeat, Release) so the
+                // window keeps sliding while events keep arriving, and act only on a Press whose
+                // gap since the previous Esc exceeds the window — i.e. a deliberate, separate press.
+                if key.code == KeyCode::Esc {
+                    let within_burst = last_esc_press.is_some_and(|t| t.elapsed() < ESC_PHANTOM_WINDOW);
+                    last_esc_press = Some(Instant::now());
+                    if within_burst || key.kind != KeyEventKind::Press {
                         continue 'tui;
                     }
-                    last_esc_press = Some(Instant::now());
                 }
                 // Ctrl-C: unconditional quit.
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1884,13 +1935,65 @@ fn tui_loop(
                                 KeyCode::Esc | KeyCode::Char('h') => transition = Some(Panel::Preview(Preview::Empty)),
                                 KeyCode::Up | KeyCode::Char('k') => pp.cursor_up(),
                                 KeyCode::Down | KeyCode::Char('j') => pp.cursor_down(),
-                                KeyCode::Enter => {
-                                    if let Some(n) = play_panel_entry(pp, pp.cursor, target_deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
-                                        global_notification = Some(n);
+                                // Enter: play a resolved entry, open the picker on a needs-confirmation
+                                // one (it can't be played), or nudge for a workspace on an unavailable one.
+                                KeyCode::Enter => match pp.status_at(pp.cursor) {
+                                    EntryStatus::Found => {
+                                        if let Some(n) = play_panel_entry(pp, pp.cursor, target_deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                                            global_notification = Some(n);
+                                        }
                                     }
-                                }
+                                    EntryStatus::NeedsConfirmation => {
+                                        let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        let library = WorkspaceLibrary::new(workspace.as_deref());
+                                        if let playlist::Resolution::NeedsConfirmation { candidates } = playlist::resolve(&pp.playlist.entries[pp.cursor], &dir, &library) {
+                                            transition = Some(Panel::Confirm { panel: pp.clone(), entry: pp.cursor, candidates, cursor: 0, layout: Rc::new(RefCell::new(ConfirmLayout::default())) });
+                                        }
+                                    }
+                                    EntryStatus::Unavailable => {
+                                        if workspace.is_none() {
+                                            global_notification = Some(notification("Set a workspace (@) to find candidates for missing tracks", NotificationStyle::Warning));
+                                        }
+                                    }
+                                },
                                 KeyCode::Char('e') => {
                                     transition = Some(Panel::Edit { panel: pp.clone(), focus: EditFocus::Playlist });
+                                }
+                                _ => {} // swallow
+                            }
+                        }
+                        Panel::Confirm { panel: pp, entry, candidates, cursor, layout } => {
+                            consumed = true;
+                            // `cursor` is a line offset; scroll by line and adopt the card at the top.
+                            // The renderer publishes the variable-height card layout into `layout`.
+                            let published = layout.borrow();
+                            let max_offset = published.total_lines.saturating_sub(1);
+                            let active = confirm_active_card(*cursor, &published.card_starts);
+                            drop(published);
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('h') => transition = Some(Panel::Browse(pp.clone())),
+                                KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+                                KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(max_offset),
+                                KeyCode::Enter => {
+                                    if let Some(cand) = candidates.get(active) {
+                                        let cand_path = cand.path.clone();
+                                        let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        match track_facts(&cand_path) {
+                                            Some(facts) => {
+                                                let mut new_pp = pp.clone();
+                                                match playlist::adopt_candidate(&mut new_pp.playlist.entries[*entry], &cand_path, &dir, &facts) {
+                                                    Ok(()) => {
+                                                        commit_playlist(&new_pp, &mut decks);
+                                                        new_pp.recompute_status(workspace.as_deref(), false);
+                                                        global_notification = Some(notification("Track re-linked", NotificationStyle::Success));
+                                                        transition = Some(Panel::Browse(new_pp));
+                                                    }
+                                                    Err(e) => global_notification = Some(notification(format!("re-link failed: {e:?}"), NotificationStyle::Error)),
+                                                }
+                                            }
+                                            None => global_notification = Some(notification("couldn't read candidate file", NotificationStyle::Error)),
+                                        }
+                                    }
                                 }
                                 _ => {} // swallow
                             }
@@ -1927,9 +2030,8 @@ fn tui_loop(
                                         match gather_insert_entries(&path, kind, &dir) {
                                             Ok(entries) if !entries.is_empty() => {
                                                 let at = if c == 'a' && !pp.playlist.entries.is_empty() { pp.cursor + 1 } else { pp.cursor };
-                                                let avails = vec![false; entries.len()];
-                                                pp.insert_at(at, entries, avails);
-                                                pp.recompute_availability(workspace.as_deref());
+                                                pp.insert_at(at, entries);
+                                                pp.recompute_status(workspace.as_deref(), false);
                                             }
                                             Ok(_) => {}
                                             Err(e) => global_notification = Some(notification(e, NotificationStyle::Error)),
@@ -2054,7 +2156,7 @@ fn tui_loop(
                             }
                             if let Some(pp) = panel.playlist_mut() {
                                 heal_playlist(&mut pp.playlist, &pp.path, ws);
-                                pp.recompute_availability(ws);
+                                pp.recompute_status(ws, false);
                             }
                             if healed {
                                 global_notification = Some(notification("Relocated moved tracks in open playlists", NotificationStyle::Success));
