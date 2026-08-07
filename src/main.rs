@@ -128,7 +128,14 @@ fn main() {
         io::stdout()
             .execute(EnterAlternateScreen)?
             .execute(EnableMouseCapture)?
-            .execute(PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES))?;
+            // DISAMBIGUATE_ESCAPE_CODES is load-bearing, not cosmetic. Without it Esc keeps
+            // its legacy bare-`\x1b` encoding, which cannot express an event type — so the
+            // release REPORT_EVENT_TYPES asks for arrives as a second, identical Press and
+            // every Esc tap acts twice.
+            .execute(PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+            ))?;
         Terminal::new(CrosstermBackend::new(frame_stats::MeteredStdout::new(metering)))
     })();
     let mut terminal = match setup {
@@ -1185,13 +1192,6 @@ fn tui_loop(
     let mut pending_quit: Option<Instant> = None;
     let mut bpm_ramp_started: Option<Instant> = None;
     let mut bpm_ramp_last: Option<Instant> = None;
-    // One Esc tap arrives as two Press events ~100 ms apart (a Kitty decode quirk;
-    // Esc uniquely sends no Release). The second is the phantom. Only an *acting*
-    // Esc starts this window and the phantom that follows within it is swallowed —
-    // the window is never refreshed by swallowed presses, so a deliberate re-press
-    // (e.g. impatiently pressing Esc to quit) always gets through once it clears.
-    let mut last_esc_press: Option<Instant> = None;
-    const ESC_PHANTOM_WINDOW: Duration = Duration::from_millis(200);
 
     'tui: loop {
         frame_count += 1;
@@ -1839,18 +1839,12 @@ fn tui_loop(
                 }
             }
             Event::Key(key) => {
-                // A single physical Esc can produce a burst of events — a Repeat under the kitty
-                // protocol, or a phantom second Press on some terminals — that would cascade:
-                // deselect the playlist, then close the whole browser. Collapse any burst to one
-                // action. Stamp the time on *every* Esc event (Press, Repeat, Release) so the
-                // window keeps sliding while events keep arriving, and act only on a Press whose
-                // gap since the previous Esc exceeds the window — i.e. a deliberate, separate press.
-                if key.code == KeyCode::Esc {
-                    let within_burst = last_esc_press.is_some_and(|t| t.elapsed() < ESC_PHANTOM_WINDOW);
-                    last_esc_press = Some(Instant::now());
-                    if within_burst || key.kind != KeyEventKind::Press {
-                        continue 'tui;
-                    }
+                // Esc steps up one level per physical press, so only the initial press acts.
+                // A held Esc repeats every ~30 ms, which would otherwise race through every
+                // level of the cascade — deselecting a playlist and closing the browser in
+                // one hold. Other keys keep their repeats; holding j to scroll is wanted.
+                if key.code == KeyCode::Esc && key.kind != KeyEventKind::Press {
+                    continue;
                 }
                 // Ctrl-C: unconditional quit.
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {

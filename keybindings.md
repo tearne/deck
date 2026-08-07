@@ -38,7 +38,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `quit` | `esc` | Quit (with confirmation) |
+| `quit` | `esc` | Quit (confirmation only while a deck is playing) |
 | `help` | `?` | Toggle keyboard help overlay |
 | `vinyl_mode_toggle` | `` ` `` | Toggle vinyl/beat mode |
 | `nudge_mode_toggle` | `¬` | Toggle nudge jump/warp |

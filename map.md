@@ -69,6 +69,7 @@ Application
 ├ Mixer
 │ └ PFL Monitor
 ├ Keymap
+│ └ Key Reporting
 ├ Track Database
 ├ Session State
 ├ Error Reports
@@ -397,11 +398,12 @@ Fine position adjustment with two sub-modes (jump and warp):
 - **While playing** — jump mode seeks ±10ms per press; warp mode applies a continuous ±10% speed offset while held, returning to normal on release
 - **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump fires on each press; warp fires continuously at half-column intervals as the position drifts
 
-Warp needs the terminal to report key releases (the kitty keyboard protocol); where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
+Warp needs the terminal to report key releases; where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
 
 **See also**
 
 - [Click-free Seek](#click-free-seek) — shared seek mechanism used by nudge and beat jump
+- [Key Reporting](#key-reporting) — what makes release detection available, and the fallback when it isn't
 
 
 # Beat Jump
@@ -738,18 +740,36 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 # Keymap
 
 [Up](#application)
+[Down](#key-reporting)
 
 Three input layers on a split keyboard: plain keys, Shift-modified, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
 Alt is the chord modifier: holding it and pressing another key fires a chord action. Alt arrives as a reliable per-keypress modifier bit, so — unlike a held Space — there's no held-state to track. By convention, chords are reserved for one-time actions (set cue, open browser, select/cycle deck); continuous actions like nudge or fader movement use the plain or Shift layers. Space still fires the same chords as an unadvertised legacy modifier. Ctrl-C always quits unconditionally.
 
-Esc is inherently ambiguous — it is both the dismiss/quit key and the byte that begins every terminal escape sequence — and some terminals report a single Esc keypress as two events. Esc is therefore debounced: a second Esc within ~200 ms of one that acted is ignored, so a single tap can't, for instance, dismiss an overlay and then quit.
+Esc steps up one level per press — dismiss the overlay, leave the panel, close the browser — one physical tap at a time. Repeats and releases are ignored, so holding it doesn't race through the levels.
 
 Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser command-mode and search keys, tag editor input, and confirmation prompts.
 
 **See also**
 
 - [keybindings.md](keybindings.md) — full action table, keyboard layout, fixed keys, config format
+
+
+# Key Reporting
+
+[Up](#keymap)
+
+Terminals differ in how much they say about a keystroke. On startup deck configures two things: that key events carry their kind — press, repeat or release — and that keys are encoded unambiguously, rather than in the legacy forms that collide with escape sequences.
+
+Two features rest on this. Warp nudge ends on release, so without release reporting it would latch on with no way to stop it. Esc's legacy encoding is the bare escape byte, which has no room for a kind, so its release would arrive as an identical second press and one tap would act twice.
+
+**Detail**
+
+The kitty keyboard protocol; support is detected at startup. Where it is absent, warp nudge is refused with a notification and Esc arrives as a single unlabelled press per tap.
+
+**See also**
+
+- [Nudge](#nudge) — warp mode is the feature that needs release reporting
 
 
 # Track Database
