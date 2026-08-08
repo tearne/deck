@@ -24,7 +24,16 @@ pub struct Identity {
     pub hash_algorithm: String,
     pub payload_extraction_version: u32,
     pub content_hash: String,
+    #[serde(serialize_with = "write_duration_rounded")]
     pub duration_secs: f64,
+}
+
+/// Duration is only ever compared within the ±2 s resolution tolerance, never for
+/// equality (format map: Identity), so full f64 precision — `198.86666666666667` —
+/// is pure noise in a file meant to be read and hand-edited. Two decimal places sit
+/// well inside the spec's bound and are finer than anything displayed.
+fn write_duration_rounded<S: serde::Serializer>(secs: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64((secs * 100.0).round() / 100.0)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -442,6 +451,25 @@ mod tests {
         // An entry carrying a future unknown field still parses.
         let with_extra = json.replacen("\"settings\":{}", "\"settings\":{},\"future\":42", 1);
         assert!(serde_json::from_str::<Playlist>(&with_extra).is_ok());
+    }
+
+    #[test]
+    fn duration_is_written_rounded_but_still_resolves() {
+        let bytes = wav(&[1, 2, 3]);
+        let noisy = 198.86666666666667;
+        let entry = entry_for(&bytes, noisy, bytes.len() as u64, "a.wav", desc("A", "T"));
+        let json = serde_json::to_string(&Playlist { version: 1, entries: vec![entry] }).unwrap();
+        assert!(json.contains("\"duration_secs\":198.87"), "{json}");
+
+        // The rounded value still screens the real file in: rounding error is
+        // orders of magnitude inside the tolerance.
+        let reread: Playlist = serde_json::from_str(&json).unwrap();
+        let mut lib = FakeLibrary::default();
+        lib.add("/lib/a.wav", bytes, noisy, desc("A", "T"));
+        match resolve(&reread.entries[0], Path::new("/lib"), &lib) {
+            Resolution::Found { .. } => {}
+            other => panic!("expected Found, got {other:?}"),
+        }
     }
 
     #[test]

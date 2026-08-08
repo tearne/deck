@@ -72,7 +72,9 @@ The same track may appear more than once in a playlist with different settings �
 
 [Up](#entry-structure)
 
-The content-derived, unambiguous identifier for the track — stable across moves, renames, and retags. Immutable except on a confirmed descriptive re-link (see [File Resolution](#file-resolution)).
+The content-derived, unambiguous identifier for the track — stable across moves, renames, and retags.
+
+Two separable things live here: *which* track the entry denotes, and *how* that identity is encoded. The denoted track is immutable except on a confirmed descriptive re-link (see [File Resolution](#file-resolution)). The encoding — which hash function, which extraction rules, and how precisely `duration_secs` is written — may be normalised forward at any time, since none of it changes which track is meant.
 
 **Detail**
 
@@ -86,13 +88,14 @@ The content-derived, unambiguous identifier for the track — stable across move
 ```
 
 - `duration_secs` lives here rather than in hints because it is content-derived and participates in candidate pre-filtering during resolution.
+- `duration_secs` is compared only within tolerance, never for equality — decoders legitimately disagree on the same file by more than that comparison cares about. An implementation may therefore write it rounded, provided rounding error stays at least an order of magnitude below the resolution tolerance (see [File Resolution](#file-resolution)).
 - Two independent axes describe how `content_hash` was produced. `hash_algorithm` names the hash function; `payload_extraction_version` names the byte-range rules that selected the bytes fed into it. Either can change without the other — a new hash function, or a correction to which bytes count as audio — so they are versioned separately. Both are recorded per entry, so a partially-migrated playlist (some files present and re-hashed, some missing and not) can hold a mix.
 - An implementation encountering a value it does not implement — an unknown `hash_algorithm`, or a `payload_extraction_version` it cannot reproduce — must treat the entry as unresolvable by hash rather than computing a wrong result silently. See [Method Migration](#method-migration) for how an entry made by an older version is healed forward.
 
 **See also**
 
 - [Track Identity](#track-identity) — how `content_hash` is computed
-- [File Resolution](#file-resolution) — the one sanctioned mutation of identity
+- [File Resolution](#file-resolution) — when the denoted track may change
 
 
 # Description
@@ -236,7 +239,7 @@ How an implementation locates the audio file for a given entry and keeps locatio
 
 When no hash match exists anywhere, the track may have been re-encoded — its compressed bytes are entirely new so its identity can never match. The fallback offers library files whose duration and description are similar, for the user to confirm.
 
-On confirmed re-link: rewrite hints *and* overwrite `identity` (`hash_algorithm`, `payload_extraction_version`, `content_hash`, and `duration_secs`, all from the new file computed with the implementation's current method) and refresh `description` from its tags. This is the only sanctioned mutation of identity.
+On confirmed re-link: rewrite hints *and* overwrite `identity` (`hash_algorithm`, `payload_extraction_version`, `content_hash`, and `duration_secs`, all from the new file computed with the implementation's current method) and refresh `description` from its tags. This is the only sanctioned change to the track an entry denotes.
 
 No match and no confirmed re-link → the entry is kept and shown unavailable.
 
