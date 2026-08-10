@@ -6,6 +6,7 @@
 //! Consumed by the editor (a later change); dead in the binary until then.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use resilient_playlists::{content_hash, HASH_ALGORITHM, PAYLOAD_EXTRACTION_VERSION};
@@ -16,6 +17,9 @@ use serde::{Deserialize, Serialize};
 const DURATION_TOLERANCE_SECS: f64 = 2.0;
 /// Allowed file-size deviation for a candidate, as a fraction.
 const FILE_SIZE_TOLERANCE: f64 = 0.01;
+/// Most candidates the descriptive fallback offers. If neither description nor
+/// duration puts the right file in the top few, a longer list won't help.
+const MAX_FALLBACK_CANDIDATES: usize = 10;
 
 // ---- Data model (map: Entry Structure) ----
 
@@ -229,12 +233,13 @@ fn changed_description(entry: &Entry, path: &Path, library: &dyn Library) -> Opt
     }
 }
 
-/// Library files similar to the entry in *both* duration and description, for the
-/// fallback: filtered to within the duration tolerance, ranked by description-field
-/// matches, then by closest duration.
+/// Library files within the duration tolerance, ranked by how alike their
+/// descriptions are and then by closest duration. Description only orders the
+/// offers — a file that matches no tag at all is still offered, because a
+/// re-encode is usually retagged too and the operator confirms every re-link.
 fn descriptive_candidates(entry: &Entry, library: &dyn Library) -> Vec<Candidate> {
     let target = entry.identity.duration_secs;
-    let mut scored: Vec<(u32, f64, Candidate)> = library
+    let mut scored: Vec<(f64, f64, Candidate)> = library
         .candidates()
         .into_iter()
         .filter_map(|path| {
@@ -245,21 +250,69 @@ fn descriptive_candidates(entry: &Entry, library: &dyn Library) -> Vec<Candidate
             }
             let description = library.read_description(&path)?;
             let score = description_similarity(&entry.description, &description);
-            (score > 0).then_some((score, duration_delta, Candidate { path, description, duration_secs: duration, file_size_bytes: size }))
+            Some((score, duration_delta, Candidate { path, description, duration_secs: duration, file_size_bytes: size }))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)));
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    scored.truncate(MAX_FALLBACK_CANDIDATES);
     scored.into_iter().map(|(_, _, c)| c).collect()
 }
 
-/// A deliberately simple similarity: count of matching non-empty fields. The map
-/// leaves ranking implementation-defined.
-fn description_similarity(a: &Description, b: &Description) -> u32 {
-    let field = |x: &str, y: &str| (!x.is_empty() && x.eq_ignore_ascii_case(y)) as u32;
-    field(&a.artist, &b.artist)
-        + field(&a.title, &b.title)
-        + field(&a.album, &b.album)
-        + field(&a.year, &b.year)
+/// Weighted field similarity in 0.0..=1.0. Title and artist identify the track;
+/// album identifies only its release, so it counts weakly. Year is excluded
+/// entirely — every track of the same year matches it perfectly, which dilutes
+/// the fields that actually discriminate. The map leaves ranking
+/// implementation-defined.
+fn description_similarity(a: &Description, b: &Description) -> f64 {
+    0.4 * field_similarity(&a.title, &b.title)
+        + 0.4 * field_similarity(&a.artist, &b.artist)
+        + 0.2 * field_similarity(&a.album, &b.album)
+}
+
+/// Proportion of tokens two fields share. An empty field on either side scores
+/// zero: a missing tag is not evidence of a match.
+fn field_similarity(a: &str, b: &str) -> f64 {
+    let (a, b) = (comparison_tokens(a), comparison_tokens(b));
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    a.intersection(&b).count() as f64 / a.union(&b).count() as f64
+}
+
+/// Comparison tokens for a field: lowercased, accent-folded, split on anything
+/// non-alphanumeric, with a leading "the" dropped. Comparing sets of these rather
+/// than whole strings is what lets `01 - Closer` and `Closer`, or `The Beatles`
+/// and `Beatles`, recognise each other.
+fn comparison_tokens(field: &str) -> BTreeSet<String> {
+    let folded: String = field.to_lowercase().chars().map(fold_accent).collect();
+    let mut tokens = folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .peekable();
+    if tokens.peek() == Some(&"the") {
+        tokens.next();
+    }
+    tokens.map(str::to_string).collect()
+}
+
+/// Common accented forms to their ASCII base, so `Beyoncé` and `Beyonce` compare
+/// equal. Deliberately small — the accents that turn up in artist names, not a
+/// general Unicode normalisation.
+fn fold_accent(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'ø' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        'ý' | 'ÿ' => 'y',
+        other => other,
+    }
 }
 
 /// Adopt a confirmed descriptive-fallback candidate: overwrite identity from the
@@ -532,6 +585,67 @@ mod tests {
             }
             other => panic!("expected NeedsConfirmation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn retagged_re_encode_ranks_above_unrelated_tracks() {
+        let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.flac", desc("The Beatles", "Come Together"));
+        let mut lib = FakeLibrary::default();
+        // The re-encode: same track, retagged in a different house style.
+        lib.add("/lib/right.mp3", wav(&[9, 9]), 100.4, desc("Beatles", "01 - Come Together"));
+        // Decoys of near-identical length with unrelated tags.
+        lib.add("/lib/wrong-a.mp3", wav(&[8, 8]), 100.1, desc("Miles Davis", "So What"));
+        lib.add("/lib/wrong-b.mp3", wav(&[7, 7]), 99.9, desc("Portishead", "Roads"));
+        match resolve(&entry, Path::new("/lib"), &lib) {
+            Resolution::NeedsConfirmation { candidates } => {
+                assert_eq!(candidates[0].path, PathBuf::from("/lib/right.mp3"));
+                // The decoys are still offered — the operator confirms either way.
+                assert_eq!(candidates.len(), 3);
+            }
+            other => panic!("expected NeedsConfirmation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn candidates_are_offered_when_no_tag_matches_at_all() {
+        let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.flac", desc("Aphex Twin", "Xtal"));
+        let mut lib = FakeLibrary::default();
+        lib.add("/lib/relabelled.mp3", wav(&[9, 9]), 100.2, desc("", "track 07"));
+        match resolve(&entry, Path::new("/lib"), &lib) {
+            Resolution::NeedsConfirmation { candidates } => {
+                assert_eq!(candidates.len(), 1);
+            }
+            other => panic!("expected an offer despite no tag overlap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offers_are_capped() {
+        let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.flac", desc("A", "T"));
+        let mut lib = FakeLibrary::default();
+        for i in 0..25 {
+            lib.add(&format!("/lib/f{i}.mp3"), wav(&[i as u8]), 100.0, desc("Someone", "Something"));
+        }
+        match resolve(&entry, Path::new("/lib"), &lib) {
+            Resolution::NeedsConfirmation { candidates } => {
+                assert_eq!(candidates.len(), MAX_FALLBACK_CANDIDATES);
+            }
+            other => panic!("expected NeedsConfirmation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn near_miss_forms_score_as_matches() {
+        // Leading article, punctuation, accents and track-number prefixes are noise.
+        assert_eq!(field_similarity("The Beatles", "beatles"), 1.0);
+        assert_eq!(field_similarity("Beyoncé", "Beyonce"), 1.0);
+        assert_eq!(field_similarity("Sigur Rós", "sigur ros"), 1.0);
+        assert_eq!(field_similarity("Closer", "closer!"), 1.0);
+        // Extra tokens cost, but still score far above unrelated text.
+        assert!(field_similarity("01 - Come Together", "Come Together") > 0.5);
+        assert_eq!(field_similarity("Come Together", "So What"), 0.0);
+        // A missing tag is not evidence of a match.
+        assert_eq!(field_similarity("", ""), 0.0);
     }
 
     #[test]
