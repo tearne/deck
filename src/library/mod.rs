@@ -42,7 +42,7 @@ impl Library for WorkspaceLibrary {
     }
 
     fn read_description(&self, path: &Path) -> Option<Description> {
-        let [artist, title, album, year, ..] = read_tags_for_editor(path);
+        let [artist, title, album, year, ..] = read_tags_for_editor(path)?;
         Some(Description { artist, title, album, year })
     }
 }

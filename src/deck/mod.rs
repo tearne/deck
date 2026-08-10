@@ -157,15 +157,17 @@ pub(crate) struct TagEditorState {
 
 impl TagEditorState {
     /// Open the editor for an existing track, seeded from its tags and filename.
-    pub(crate) fn for_track(path: &std::path::Path) -> Self {
-        let fields = crate::tags::read_tags_for_editor(path)
+    /// `None` when the tags can't be read — opening with blank fields would invite
+    /// the operator to save those blanks over the file's real tags.
+    pub(crate) fn for_track(path: &std::path::Path) -> Option<Self> {
+        let fields = crate::tags::read_tags_for_editor(path)?
             .into_iter()
             .map(|v| (v, 0))
             .collect();
         let dir = path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
         let current_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        TagEditorState { fields, active_field: 0, dir, current_stem, extension, collision_error: None }
+        Some(TagEditorState { fields, active_field: 0, dir, current_stem, extension, collision_error: None })
     }
 
     /// The file's current full path (before any pending rename).

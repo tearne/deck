@@ -22,23 +22,19 @@ pub(crate) fn collect_tags(probed: &mut symphonia::core::probe::ProbeResult) -> 
     })
 }
 
-pub(crate) fn read_tags_for_editor(path: &Path) -> [String; 7] {
-    let empty = || std::array::from_fn(|_| String::new());
-    let src = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return empty(),
-    };
+/// `None` when the file couldn't be opened or its container couldn't be parsed —
+/// distinct from a file that parsed fine and carries no tags, which yields empty
+/// strings. Callers that conflate the two overwrite real tags with blanks.
+pub(crate) fn read_tags_for_editor(path: &Path) -> Option<[String; 7]> {
+    let src = std::fs::File::open(path).ok()?;
     let mss = MediaSourceStream::new(Box::new(src), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
-    let mut probed = match symphonia::default::get_probe().format(
-        &hint, mss, &FormatOptions::default(), &MetadataOptions::default(),
-    ) {
-        Ok(p) => p,
-        Err(_) => return empty(),
-    };
+    let mut probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .ok()?;
     let tags = collect_tags(&mut probed);
     let find = |key: StandardTagKey| {
         tags.iter()
@@ -46,7 +42,7 @@ pub(crate) fn read_tags_for_editor(path: &Path) -> [String; 7] {
             .map(|t| t.value.to_string())
             .unwrap_or_default()
     };
-    [
+    Some([
         find(StandardTagKey::Artist),
         find(StandardTagKey::TrackTitle),
         find(StandardTagKey::Album),
@@ -54,7 +50,7 @@ pub(crate) fn read_tags_for_editor(path: &Path) -> [String; 7] {
         find(StandardTagKey::TrackNumber),
         find(StandardTagKey::Genre),
         find(StandardTagKey::Comment),
-    ]
+    ])
 }
 
 pub(crate) fn propose_rename_stem(path: &Path) -> String {
@@ -195,6 +191,19 @@ mod tests {
         fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
     }
 
+    /// An unreadable file must report failure, not "no tags". Callers treat the
+    /// latter as truth and overwrite real tags with blanks.
+    #[test]
+    fn unreadable_file_is_distinct_from_untagged() {
+        let dir = TempDir::new();
+
+        let unparseable = dir.path().join("not-really-audio.mp3");
+        std::fs::write(&unparseable, b"this is not an audio container").unwrap();
+        assert_eq!(read_tags_for_editor(&unparseable), None);
+
+        assert_eq!(read_tags_for_editor(&dir.path().join("absent.mp3")), None);
+    }
+
     /// Reads all audio files from `TEST_AUDIO_DIR`, copies them to a temp directory under
     /// their proposed names, then asserts:
     ///   1. Output count and total byte size match the input.
@@ -316,7 +325,7 @@ mod tests {
         if let Some(path) = first_audio(&dir) {
             let stem = propose_rename_stem(&path);
             assert!(!stem.is_empty(), "propose_rename_stem returned empty for {}", path.display());
-            let tags = read_tags_for_editor(&path);
+            let tags = read_tags_for_editor(&path).expect("corpus file should be readable");
             let artist = &tags[0];
             let title  = &tags[1];
             if !artist.is_empty() && !title.is_empty() {

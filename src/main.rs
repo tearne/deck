@@ -476,7 +476,7 @@ fn track_facts(path: &Path) -> Option<playlist::TrackFacts> {
     let bytes = std::fs::read(path).ok()?;
     let file_size_bytes = bytes.len() as u64;
     let duration_secs = audio::probe_duration_secs(path)?;
-    let [artist, title, album, year, ..] = tags::read_tags_for_editor(path);
+    let [artist, title, album, year, ..] = tags::read_tags_for_editor(path)?;
     Some(playlist::TrackFacts {
         bytes, duration_secs, file_size_bytes,
         description: playlist::Description { artist, title, album, year },
@@ -1389,7 +1389,10 @@ fn tui_loop(
                 panel_source = source;
                 let ws = session.workspace().map(|p| p.to_path_buf());
                 panel = Panel::Preview(match highlighted {
-                    Some((path, EntryKind::Audio)) => Preview::Track { fields: read_tags_for_editor(&path) },
+                    Some((path, EntryKind::Audio)) => match read_tags_for_editor(&path) {
+                        Some(fields) => Preview::Track { fields },
+                        None => Preview::Empty,
+                    },
                     Some((path, EntryKind::Playlist)) => Preview::Playlist(PlaylistPanel::open(path, ws.as_deref())),
                     _ => Preview::Empty,
                 });
@@ -2097,7 +2100,10 @@ fn tui_loop(
                             create_playlist_request = Some((name, bs.cwd.clone()));
                         }
                         Some(BrowserResult::EditRequested(path)) => {
-                            tag_editor = Some(TagEditorState::for_track(&path));
+                            tag_editor = TagEditorState::for_track(&path);
+                            if tag_editor.is_none() {
+                                global_notification = Some(notification("Couldn't read that file's tags", NotificationStyle::Warning));
+                            }
                             // Cleanup mode: remember the entry below this one so a save
                             // resumes there (stable across the rename), wrapping to top.
                             if bs.compliance_on {
@@ -2422,7 +2428,10 @@ fn tui_loop(
                             if d.rename_offer_active() {
                                 match key.code {
                                     KeyCode::Char('y') => {
-                                        tag_editor = Some(TagEditorState::for_track(&d.path));
+                                        tag_editor = TagEditorState::for_track(&d.path);
+                                        if tag_editor.is_none() {
+                                            global_notification = Some(notification("Couldn't read that file's tags", NotificationStyle::Warning));
+                                        }
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
                                     }
