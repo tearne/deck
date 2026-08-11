@@ -278,11 +278,23 @@ impl PlaylistPanel {
     /// refresh) to the in-memory entries; when `persist` and anything changed, rewrites
     /// the `.rpl`. `persist` is false during transactional edit so the buffer isn't written.
     fn recompute_status(&mut self, workspace: Option<&Path>, persist: bool) {
-        let dir = self.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let library = WorkspaceLibrary::new(workspace);
+        let snapshot = playlist::LibrarySnapshot::probe(&library);
+        self.recompute_status_against(&library, &snapshot, persist);
+    }
+
+    /// As `recompute_status`, against a library already probed by the caller — so a
+    /// pass over several playlists screens the library once rather than once each.
+    fn recompute_status_against(
+        &mut self,
+        library: &dyn playlist::Library,
+        snapshot: &playlist::LibrarySnapshot,
+        persist: bool,
+    ) {
+        let dir = self.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let mut changed = false;
         self.status = self.playlist.entries.iter_mut()
-            .map(|e| match playlist::resolve(e, &dir, &library) {
+            .map(|e| match playlist::resolve(e, &dir, library, snapshot) {
                 playlist::Resolution::Found { updated_entry, .. } => {
                     if let Some(updated) = updated_entry { *e = updated; changed = true; }
                     EntryStatus::Found
@@ -512,7 +524,8 @@ fn play_panel_entry(
     let Some(entry) = pp.playlist.entries.get(index) else { return None };
     let dir = pp.path.parent().unwrap_or_else(|| Path::new("."));
     let library = WorkspaceLibrary::new(workspace);
-    let playlist::Resolution::Found { path, .. } = playlist::resolve(entry, dir, &library) else {
+    let snapshot = playlist::LibrarySnapshot::probe(&library);
+    let playlist::Resolution::Found { path, .. } = playlist::resolve(entry, dir, &library, &snapshot) else {
         return Some(notification("That entry is unavailable", NotificationStyle::Warning));
     };
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
@@ -524,14 +537,19 @@ fn play_panel_entry(
 }
 
 /// Re-resolve every entry against the (now-available) library, adopting relocated
-/// hints. Rewrites the `.rpl` and returns true if anything changed.
-fn heal_playlist(playlist: &mut playlist::Playlist, rpl_path: &Path, workspace: Option<&Path>) -> bool {
+/// hints. Rewrites the `.rpl` and returns true if anything changed. Takes the probed
+/// library so a pass over several playlists screens it once.
+fn heal_playlist(
+    playlist: &mut playlist::Playlist,
+    rpl_path: &Path,
+    library: &dyn playlist::Library,
+    snapshot: &playlist::LibrarySnapshot,
+) -> bool {
     let dir = rpl_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    let library = WorkspaceLibrary::new(workspace);
     let mut changed = false;
     for entry in &mut playlist.entries {
         if let playlist::Resolution::Found { updated_entry: Some(updated), .. } =
-            playlist::resolve(entry, &dir, &library)
+            playlist::resolve(entry, &dir, library, snapshot)
         {
             *entry = updated;
             changed = true;
@@ -555,13 +573,14 @@ fn play_playlist_step(
     let Some(active) = decks[slot].as_ref().and_then(|d| d.playlist.as_ref()) else { return };
     let dir = active.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
     let library = WorkspaceLibrary::new(workspace);
+    let snapshot = playlist::LibrarySnapshot::probe(&library);
     let current = active.index;
     let order: Vec<usize> = if forward {
         ((current + 1)..active.playlist.entries.len()).collect()
     } else {
         (0..current).rev().collect()
     };
-    let found = order.into_iter().find_map(|i| match playlist::resolve(&active.playlist.entries[i], &dir, &library) {
+    let found = order.into_iter().find_map(|i| match playlist::resolve(&active.playlist.entries[i], &dir, &library, &snapshot) {
         playlist::Resolution::Found { path, .. } => Some((i, path)),
         _ => None,
     });
@@ -592,9 +611,10 @@ fn resolve_and_heal(
 ) -> Option<(usize, PathBuf)> {
     let dir = rpl_path.parent().unwrap_or_else(|| Path::new("."));
     let library = WorkspaceLibrary::new(workspace);
+    let snapshot = playlist::LibrarySnapshot::probe(&library);
     for index in start..playlist.entries.len() {
         if let playlist::Resolution::Found { path, updated_entry } =
-            playlist::resolve(&playlist.entries[index], dir, &library)
+            playlist::resolve(&playlist.entries[index], dir, &library, &snapshot)
         {
             if let Some(entry) = updated_entry {
                 playlist.entries[index] = entry;
@@ -1943,7 +1963,8 @@ fn tui_loop(
                                     EntryStatus::NeedsConfirmation => {
                                         let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
                                         let library = WorkspaceLibrary::new(workspace.as_deref());
-                                        if let playlist::Resolution::NeedsConfirmation { candidates } = playlist::resolve(&pp.playlist.entries[pp.cursor], &dir, &library) {
+                                        let snapshot = playlist::LibrarySnapshot::probe(&library);
+                                        if let playlist::Resolution::NeedsConfirmation { candidates } = playlist::resolve(&pp.playlist.entries[pp.cursor], &dir, &library, &snapshot) {
                                             transition = Some(Panel::Confirm { panel: pp.clone(), entry: pp.cursor, candidates, cursor: 0, layout: Rc::new(RefCell::new(ConfirmLayout::default())) });
                                         }
                                     }
@@ -2147,16 +2168,20 @@ fn tui_loop(
                             track_data.set_mirror(Some(&path));
                             track_data.sync_with_mirror();
                             // Heal open playlists: relocate moved tracks against the new library.
+                            // One screening of the library serves every playlist here.
                             let ws = Some(path.as_path());
+                            let library = WorkspaceLibrary::new(ws);
+                            let snapshot = playlist::LibrarySnapshot::probe(&library);
                             let mut healed = false;
                             for d in decks.iter_mut().flatten() {
                                 if let Some(active) = d.playlist.as_mut() {
-                                    healed |= heal_playlist(&mut active.playlist, &active.path, ws);
+                                    healed |= heal_playlist(&mut active.playlist, &active.path, &library, &snapshot);
                                 }
                             }
+                            // Status recomputation heals as it goes, so the panel needs
+                            // one pass, not a heal followed by a recompute.
                             if let Some(pp) = panel.playlist_mut() {
-                                heal_playlist(&mut pp.playlist, &pp.path, ws);
-                                pp.recompute_status(ws, false);
+                                pp.recompute_status_against(&library, &snapshot, true);
                             }
                             if healed {
                                 global_notification = Some(notification("Relocated moved tracks in open playlists", NotificationStyle::Success));
