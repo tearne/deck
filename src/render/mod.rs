@@ -691,7 +691,14 @@ fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
         Some(pl) => {
             let text = format!("≡ {}/{}  ", pl.index + 1, pl.playlist.entries.len());
             let width = text.chars().count();
-            (vec![Span::styled(text, Style::default().fg(Color::Rgb(120, 210, 180)))], width)
+            // Amber when the set carries tracks the deck can't play — the same amber the
+            // browser's non-compliant marker uses.
+            let color = if pl.unplayable > 0 {
+                Color::Rgb(230, 170, 60)
+            } else {
+                Color::Rgb(120, 210, 180)
+            };
+            (vec![Span::styled(text, Style::default().fg(color))], width)
         }
         None => (Vec::new(), 0),
     }

@@ -214,6 +214,9 @@ pub(crate) struct ActivePlaylist {
     pub(crate) playlist: crate::playlist::Playlist,
     pub(crate) path: std::path::PathBuf,
     pub(crate) index: usize,
+    /// How many entries couldn't be played as of the last resolution — the deck's
+    /// answer to "is there a problem in this set?". The browser says which.
+    pub(crate) unplayable: usize,
     /// One-shot: set at end-of-track when a next entry exists, consumed by the
     /// main loop to trigger the auto-advance load.
     pub(crate) advance_requested: bool,

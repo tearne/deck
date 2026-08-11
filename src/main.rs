@@ -307,6 +307,12 @@ impl PlaylistPanel {
         self.status.get(i).copied().unwrap_or(EntryStatus::Unavailable)
     }
 
+    /// How many entries a deck couldn't play — everything auto-advance would skip.
+    /// Needs-confirmation entries count: repairable, but not playable as they stand.
+    fn unplayable(&self) -> usize {
+        self.status.iter().filter(|s| **s != EntryStatus::Found).count()
+    }
+
     fn cursor_up(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
     fn cursor_down(&mut self) {
         if self.cursor + 1 < self.playlist.entries.len() { self.cursor += 1; }
@@ -424,6 +430,9 @@ fn commit_playlist(panel: &PlaylistPanel, decks: &mut [Option<Deck>; 3]) {
         active.index = playing_hash
             .and_then(|h| active.playlist.entries.iter().position(|e| e.identity.content_hash == h))
             .unwrap_or_else(|| active.index.min(active.playlist.entries.len().saturating_sub(1)));
+        // The panel has just resolved these entries; the deck takes its answer rather
+        // than screening the library again.
+        active.unplayable = panel.unplayable();
     }
 }
 
@@ -456,15 +465,35 @@ fn open_playlist_on_deck(
         Ok((playlist, _migrated)) => playlist,
         Err(e) => return Some(notification(format!("Playlist read failed: {e}"), NotificationStyle::Error)),
     };
-    let Some((index, track_path)) = resolve_and_heal(&mut playlist, rpl_path, workspace, 0) else {
+    let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
+    let Some((index, track_path)) = resolved.first_playable else {
         return Some(notification("No playable tracks in playlist", NotificationStyle::Warning));
     };
-    let nudge = (workspace.is_none() && playlist_has_missing(&playlist, rpl_path))
-        .then(|| notification("Some tracks are missing — set a workspace (@) to relocate moved files", NotificationStyle::Warning));
+    let warning = unplayable_warning(resolved.unplayable, workspace);
     let mut load = start_load(&track_path);
-    load.attach_playlist = Some(ActivePlaylist { playlist, path: rpl_path.to_path_buf(), index, advance_requested: false });
+    load.attach_playlist = Some(ActivePlaylist {
+        playlist,
+        path: rpl_path.to_path_buf(),
+        index,
+        unplayable: resolved.unplayable,
+        advance_requested: false,
+    });
     pending_loads[deck] = Some(load);
-    nudge
+    warning
+}
+
+/// The deck's warning for a set carrying tracks it can't play. Without a workspace the
+/// news is that setting one may relocate them; with one set, the count is the news.
+fn unplayable_warning(unplayable: usize, workspace: Option<&Path>) -> Option<Notification> {
+    if unplayable == 0 { return None; }
+    let message = match workspace {
+        None => "Some tracks are missing — set a workspace (@) to relocate moved files".to_string(),
+        Some(_) => {
+            let plural = if unplayable == 1 { "" } else { "s" };
+            format!("{unplayable} track{plural} unavailable — open the playlist to see which")
+        }
+    };
+    Some(notification(message, NotificationStyle::Warning))
 }
 
 /// Create an empty `.rpl` named `name` in `dir`. Errs if a file already exists.
@@ -526,33 +555,15 @@ fn play_panel_entry(
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
     let mut load = start_load(&path);
-    load.attach_playlist = Some(ActivePlaylist { playlist: pp.playlist.clone(), path: pp.path.clone(), index, advance_requested: false });
+    load.attach_playlist = Some(ActivePlaylist {
+        playlist: pp.playlist.clone(),
+        path: pp.path.clone(),
+        index,
+        unplayable: pp.unplayable(),
+        advance_requested: false,
+    });
     pending_loads[deck] = Some(load);
     None
-}
-
-/// Re-resolve every entry against the (now-available) library, adopting relocated
-/// hints. Rewrites the `.rpl` and returns true if anything changed. Takes the probed
-/// library so a pass over several playlists screens it once.
-fn heal_playlist(
-    playlist: &mut playlist::Playlist,
-    rpl_path: &Path,
-    search: &playlist::LibrarySearch,
-) -> bool {
-    let dir = rpl_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    let mut changed = false;
-    for entry in &mut playlist.entries {
-        if let playlist::Resolution::Found { updated_entry: Some(updated), .. } =
-            playlist::resolve(entry, &dir, search)
-        {
-            *entry = updated;
-            changed = true;
-        }
-    }
-    if changed {
-        let _ = playlist::write_repaired_playlist(rpl_path, playlist);
-    }
-    changed
 }
 
 /// Skip the selected deck's playlist to the next (`forward`) or previous resolvable
@@ -581,18 +592,62 @@ fn play_playlist_step(
     let Some((index, track_path)) = found else { return };
     let playlist = active.playlist.clone();
     let rpl_path = active.path.clone();
+    let unplayable = active.unplayable;
     if let Some(ref d) = decks[slot] { d.audio.player.stop(); }
     decks[slot] = None;
     let mut load = start_load(&track_path);
-    load.attach_playlist = Some(ActivePlaylist { playlist, path: rpl_path, index, advance_requested: false });
+    load.attach_playlist = Some(ActivePlaylist { playlist, path: rpl_path, index, unplayable, advance_requested: false });
     pending_loads[slot] = Some(load);
 }
 
-/// True when the playlist has an entry whose hinted file is missing — used to nudge
-/// the operator to set a workspace so moved tracks can be relocated.
-fn playlist_has_missing(playlist: &playlist::Playlist, rpl_path: &Path) -> bool {
+/// What resolving a whole playlist found: where a deck can start playing, how many
+/// entries it couldn't play at all, and whether any hint was relocated on the way.
+struct PlaylistResolution {
+    first_playable: Option<(usize, PathBuf)>,
+    unplayable: usize,
+    relocated: bool,
+}
+
+/// Resolve every entry, adopting relocated hints and persisting them back to the
+/// `.rpl`. One screening of the library serves the whole playlist, so counting the
+/// unplayable entries costs no more than finding the first playable one.
+fn resolve_playlist(
+    playlist: &mut playlist::Playlist,
+    rpl_path: &Path,
+    workspace: Option<&Path>,
+) -> PlaylistResolution {
+    let library = WorkspaceLibrary::new(workspace);
+    let search = playlist::LibrarySearch::new(&library);
+    resolve_playlist_against(playlist, rpl_path, &search)
+}
+
+/// As `resolve_playlist`, against a library already probed by the caller — so a pass
+/// over several playlists screens it once rather than once each.
+fn resolve_playlist_against(
+    playlist: &mut playlist::Playlist,
+    rpl_path: &Path,
+    search: &playlist::LibrarySearch,
+) -> PlaylistResolution {
     let dir = rpl_path.parent().unwrap_or_else(|| Path::new("."));
-    playlist.entries.iter().any(|e| !dir.join(&e.hints.relative_path).exists())
+    let mut first_playable = None;
+    let mut unplayable = 0;
+    let mut healed = false;
+    for index in 0..playlist.entries.len() {
+        match playlist::resolve(&playlist.entries[index], dir, &search) {
+            playlist::Resolution::Found { path, updated_entry } => {
+                if let Some(entry) = updated_entry {
+                    playlist.entries[index] = entry;
+                    healed = true;
+                }
+                first_playable.get_or_insert((index, path));
+            }
+            _ => unplayable += 1,
+        }
+    }
+    if healed {
+        let _ = playlist::write_repaired_playlist(rpl_path, playlist);
+    }
+    PlaylistResolution { first_playable, unplayable, relocated: healed }
 }
 
 /// Resolve entries from `start`, returning the first that locates a file (and its
@@ -1309,7 +1364,13 @@ fn tui_loop(
                 resolve_and_heal(&mut active.playlist, &active.path, workspace.as_deref(), active.index + 1)
             {
                 let mut load = start_load(&track_path);
-                load.attach_playlist = Some(ActivePlaylist { playlist: active.playlist, path: active.path, index, advance_requested: false });
+                load.attach_playlist = Some(ActivePlaylist {
+                    playlist: active.playlist,
+                    path: active.path,
+                    index,
+                    unplayable: active.unplayable,
+                    advance_requested: false,
+                });
                 if let Some(ref d) = decks[slot] { d.audio.player.stop(); }
                 decks[slot] = None;
                 pending_loads[slot] = Some(load);
@@ -2168,8 +2229,14 @@ fn tui_loop(
                             let search = playlist::LibrarySearch::new(&library);
                             let mut healed = false;
                             for d in decks.iter_mut().flatten() {
-                                if let Some(active) = d.playlist.as_mut() {
-                                    healed |= heal_playlist(&mut active.playlist, &active.path, &search);
+                                let Some(active) = d.playlist.as_mut() else { continue };
+                                let resolved = resolve_playlist_against(&mut active.playlist, &active.path, &search);
+                                active.unplayable = resolved.unplayable;
+                                healed |= resolved.relocated;
+                                // Silent when the heal fixed everything — the badge going
+                                // back to teal is the signal, and the global message covers it.
+                                if let Some(warning) = unplayable_warning(resolved.unplayable, ws) {
+                                    d.active_notification = Some(warning);
                                 }
                             }
                             // Status recomputation heals as it goes, so the panel needs
@@ -3333,5 +3400,58 @@ mod tests {
         }
         println!("--- details.txt ---\n{}", std::fs::read_to_string(incident.join("details.txt")).unwrap());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A playlist directory holding `names` copied from the corpus, and a `set.rpl`
+    /// listing them in order. Returns the directory and the written playlist.
+    fn playlist_fixture(tag: &str, names: &[&str]) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("deck-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = concat!(env!("CARGO_MANIFEST_DIR"), "/resilient-playlists/corpus/clean.flac");
+
+        let mut playlist = playlist::Playlist::empty();
+        for name in names {
+            let track = dir.join(name);
+            std::fs::copy(src, &track).unwrap();
+            playlist.entries.push(build_entry_for(&track, &dir).unwrap());
+        }
+        let rpl = dir.join("set.rpl");
+        playlist::write_playlist(&rpl, &playlist).unwrap();
+        (dir, rpl)
+    }
+
+    /// Opening a set counts every entry it can't play, not just the first — that count
+    /// is what turns the deck's badge amber.
+    #[test]
+    fn resolving_a_playlist_counts_unplayable_entries() {
+        let (dir, rpl) = playlist_fixture("unplayable-count", &["present.flac", "gone.flac"]);
+        std::fs::remove_file(dir.join("gone.flac")).unwrap();
+
+        let mut playlist = playlist::read_playlist(&rpl).unwrap().0;
+        let resolved = resolve_playlist(&mut playlist, &rpl, None);
+
+        assert_eq!(resolved.unplayable, 1, "the deleted track should be counted");
+        assert_eq!(resolved.first_playable.map(|(i, _)| i), Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Re-linking an entry in the browser drops the panel's count to zero — the value
+    /// `commit_playlist` hands to every deck carrying the set, clearing its warning.
+    #[test]
+    fn relinking_clears_the_unplayable_count() {
+        let (dir, rpl) = playlist_fixture("unplayable-relink", &["present.flac", "gone.flac"]);
+        std::fs::remove_file(dir.join("gone.flac")).unwrap();
+
+        let mut panel = PlaylistPanel::open(rpl, None);
+        assert_eq!(panel.unplayable(), 1, "the deleted track should be counted");
+
+        let replacement = dir.join("present.flac");
+        let facts = track_facts(&replacement).unwrap();
+        playlist::adopt_candidate(&mut panel.playlist.entries[1], &replacement, &dir, &facts).unwrap();
+        panel.recompute_status(None, false);
+
+        assert_eq!(panel.unplayable(), 0, "a re-linked entry is playable again");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
