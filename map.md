@@ -2,6 +2,7 @@
 
 [Down](#deck)
 [Down](#browser)
+[Down](#playlists)
 [Down](#mixer)
 [Down](#keymap)
 [Down](#track-database)
@@ -63,9 +64,16 @@ Application
 │ ├ Load Target
 │ ├ Jump to Loaded
 │ ├ Tag Compliance
+│ ├ Context Panel
 │ └ File Operations
 │   ├ Metadata Editor
 │   └ Move
+├ Playlists
+│ ├ Loaded Playlist
+│ ├ Playlist Editing
+│ └ Finding Tracks
+│   ├ Library Scan Cost
+│   └ Candidate Picker
 ├ Mixer
 │ └ PFL Monitor
 ├ Keymap
@@ -97,6 +105,10 @@ The waveforms are the primary visual feedback — the DJ reads track structure, 
 
 Three deck instances share one conceptual model. The map describes the deck, not each instance.
 
+**See also**
+
+- [Loaded Playlist](#loaded-playlist) — a deck can be carrying a whole running order, not just a track
+
 
 # Deck Selection
 
@@ -117,6 +129,10 @@ Two decks can be swapped wholesale — their entire state trades places, and sel
 Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and BPM analysis follow on a further background pass (see Beat Grid).
 
 Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
+
+**See also**
+
+- [Loaded Playlist](#loaded-playlist) — a set queues the next track up this way, still paused
 
 
 # Renaming
@@ -640,6 +656,7 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#load-target)
 [Down](#tag-compliance)
 [Down](#jump-to-loaded)
+[Down](#context-panel)
 
 A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
@@ -666,6 +683,7 @@ The workspace persists between sessions and is silently dropped if it no longer 
 
 - [Session State](#session-state) — where the workspace persists
 - [Keymap](#keymap) — workspace and search keys
+- [Finding Tracks](#finding-tracks) — the same workspace is the search root for relocating a playlist's tracks
 
 
 # Preview
@@ -709,6 +727,127 @@ Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the curs
 
 - [File Operations](#file-operations) — `e` opens the editor that fixes a flagged file
 - [Renaming](#renaming) — the same non-conformance check, at load time
+
+
+# Context Panel
+
+[Up](#browser)
+
+The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's tags, or a playlist's entries. It follows the highlight passively until the operator focuses it.
+
+Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to a deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. While the panel has focus the browser dims, so which list is being driven is never in doubt.
+
+**See also**
+
+- [Playlist Editing](#playlist-editing) — the edit state, and what a commit does
+
+- [Candidate Picker](#candidate-picker) — the state an unconfirmed entry opens
+
+- [Loaded Playlist](#loaded-playlist) — where an entry sent from browsing arrives
+
+
+# Playlists
+
+[Up](#application)
+[Down](#loaded-playlist)
+[Down](#playlist-editing)
+[Down](#finding-tracks)
+
+A saved running order. An `.rpl` file lists its tracks by **content identity** — the hash of the audio payload — and keeps the file path only as a hint, so a set survives its tracks being moved, renamed, or retagged.
+
+Three things happen to a set: it **plays** on a deck, it is **edited** in the browser's context panel, and its entries are **resolved** to real files whenever either of those happens. Resolution is the load-bearing one — an entry that can't be matched to a file can't be played, and the operator has to be told before they reach it mid-mix.
+
+Deck implements the format; it doesn't define it. The `.rpl` spec — byte ranges, hashing, the write procedure and its backups — has its own map.
+
+**See also**
+
+- [Resilient Playlists](resilient-playlists/map.md#resilient-playlists) — the format itself: identity rules, resolution steps, write procedure
+- [Track Database](#track-database) — the same content identity, keyed per track for BPM and cue
+
+
+# Loaded Playlist
+
+[Up](#playlists)
+
+A set attached to a deck. Loading an `.rpl` plays the first entry that resolves and attaches the rest, so the deck works through the running order without further browsing. A `≡ x/y` badge before the track name gives the position in the set.
+
+At end of track the deck loads the next entry that resolves, skipping any it can't play; `alt+n` / `alt+p` step the selected deck the same way. Each arrives **loaded but paused**, like any other load — the running order queues the next track up, it never starts it. The entry on the deck is tracked by identity rather than by index, so an edit committed in the browser doesn't lose the deck's place.
+
+A set carrying entries the deck can't play says so on load and turns the badge amber, and it stays amber until they are fixed. That is the whole of the deck's answer — which entries, and why, is the browser's.
+
+**See also**
+
+- [Finding Tracks](#finding-tracks) — what "can't play" means, and when it is decided
+
+- [Playlist Editing](#playlist-editing) — a committed edit reaches every deck carrying the set
+
+- [Keymap](#keymap) — the skip keys
+
+
+# Playlist Editing
+
+[Up](#playlists)
+
+Building and reordering a set, in the browser's context panel. `n` creates an empty `.rpl` in the current directory; `e` on a highlighted one opens it for editing.
+
+Editing is **transactional** — a working buffer that only reaches the file on commit. `Enter` commits and writes; `Esc` drops the buffer and the set is untouched. Focus moves between the browser, where entries are picked, and the list, where they are reordered and removed. Inserting from the browser takes a track, or splices in another playlist's entries wholesale.
+
+A commit reaches decks as well as the file: any deck carrying the same set adopts the new running order in place, keeping the track it is playing.
+
+**See also**
+
+- [Context Panel](#context-panel) — the pane this happens in, and its other states
+
+- [Loaded Playlist](#loaded-playlist) — what a committed set does to a deck already carrying it
+
+- [Keymap](#keymap) — the editor keys
+
+
+# Finding Tracks
+
+[Up](#playlists)
+[Down](#library-scan-cost)
+[Down](#candidate-picker)
+
+Turning an entry into a file on disk. Every entry resolves to one of three outcomes: **found** and playable, **needs confirmation**, or **unavailable**. Only found entries play.
+
+Resolution needs somewhere to look. With no **workspace** set an entry can only be checked where its hint says it is — relative to the `.rpl` itself, so a set kept alongside its music still resolves. The workspace is the search root that makes relocating a *moved* track possible at all. Setting one re-resolves every open set, repairing what it can and leaving the rest to be reported.
+
+Repairs found on the way are written back to the `.rpl`.
+
+**See also**
+
+- [File Resolution](resilient-playlists/map.md#file-resolution) — the matching rules themselves: hint, then size, then hash
+
+- [Search](#search) — where the workspace is set, and what else it serves
+
+
+# Library Scan Cost
+
+[Up](#finding-tracks)
+
+Searching is the expensive part: a walk of the library and a probe per file. It happens **at most once per operation**, and only when something actually needs looking for — a set whose tracks are all where it left them never triggers it.
+
+> [!IMPORTANT] The unit is the operation, not the entry. Resolving fifty entries screens the library once; anything that resolves per entry instead pays that cost fifty times.
+
+**Detail**
+
+A whole set resolves when it is opened on a deck or in the panel, when a workspace is set, and after an edit. Stepping to the next entry on a deck resolves lazily instead, one entry at a time.
+
+
+# Candidate Picker
+
+[Up](#finding-tracks)
+
+Where the operator settles an entry the rules can't. When nothing in the library hashes to the entry's identity the track was most likely re-encoded — new bytes, so no hash can ever match it again — and the fallback offers library files that resemble it by duration and description. They appear as cards, closest first; choosing one re-links the entry to that file.
+
+Confirming rewrites the entry's identity to the chosen file's, so the set follows the new encoding from then on. That is why it is never automatic: nothing but the operator can tell a re-encode of the same track from a different recording of it.
+
+**See also**
+
+- [Descriptive Fallback](resilient-playlists/map.md#descriptive-fallback) — how candidates are found and ranked
+
+- [Context Panel](#context-panel) — the pane the picker occupies
 
 
 # Mixer
