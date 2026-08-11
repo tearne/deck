@@ -858,6 +858,24 @@ fn sync_deck_path(decks: &mut [Option<Deck>; 3], old_path: &Path, new_path: &Pat
     }
 }
 
+/// The display name of a key bound to `action`, chords as `Alt+X`. Prefers a
+/// chord when both layers bind the action (the advertised form).
+fn bound_key_name(keymap: &HashMap<KeyBinding, Action>, action: Action) -> Option<String> {
+    let label = |code: &KeyCode| match code {
+        KeyCode::Char(c) => c.to_uppercase().to_string(),
+        other => format!("{other:?}"),
+    };
+    let mut bare: Option<String> = None;
+    for (binding, bound) in keymap {
+        if *bound != action { continue; }
+        match binding {
+            KeyBinding::Chord(code) => return Some(format!("Alt+{}", label(code))),
+            KeyBinding::Key(code) => bare = Some(label(code)),
+        }
+    }
+    bare
+}
+
 /// The file's content-identity hash, or the reason it can't be computed.
 fn content_identity(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read failed: {e}"))?;
@@ -1179,19 +1197,30 @@ fn tui_loop(
         warning_active:   bool,
         warn_beat_on:     bool,
     }
-    let (keymap, display_cfg, config_notice) = load_config(use_local_config);
+    let (keymap, display_cfg, retention_days, config_notice) = load_config(use_local_config);
     let mut target_fps: u32 = display_cfg.target_fps;
+    let utc_offset_secs = messages::local_utc_offset_secs();
+    // Seed history from previous sessions (pruned to retention), then attach the
+    // file and open this session with its delimiting first line.
+    let log_path = xdg::state_dir().join("messages.log");
     let mut stream = MessageStream::new();
+    stream.seed(messages::load_and_prune(&log_path, retention_days, utc_offset_secs));
+    stream.attach_log_file(&log_path, utc_offset_secs);
+    stream.emit(Message::new(Source::App, Severity::Info, format!("deck v{} started", env!("CARGO_PKG_VERSION"))));
+    let had_config_notice = config_notice.is_some();
     if let Some(msg) = config_notice {
         stream.emit(Message::new(Source::App, Severity::Success, msg));
     }
     let mut decks: [Option<Deck>; 3] = [None, None, None];
     let mut pending_loads: [Option<PendingLoad>; 3] = [initial_load, None, None];
-    if pending_loads[0].is_none() && stream.showing().is_none() {
-        stream.emit_showing_for(
-            Message::new(Source::App, Severity::Info, "No track loaded — press z to open the file browser"),
-            Duration::from_secs(60),
-        );
+    if pending_loads[0].is_none() && !had_config_notice {
+        // Name the key actually bound to the browser — bindings are configurable,
+        // so a hardcoded key name goes stale.
+        let hint = match bound_key_name(&keymap, Action::OpenBrowser) {
+            Some(key) => format!("No track loaded — {key} opens the file browser"),
+            None => "No track loaded".to_string(),
+        };
+        stream.show_hint(hint, Duration::from_secs(60));
     }
     const DET_MIN: u16 = 3;
     let mut audio_latency_ms: i64 = ((session.get_latency() as f64 / 10.0).round() as i64 * 10).clamp(0, 250);
@@ -1211,7 +1240,7 @@ fn tui_loop(
     let mut history_open = false;
     // Lines scrolled back from the newest message while the history is open.
     let mut history_scroll: usize = 0;
-    let utc_offset_secs = messages::local_utc_offset_secs();
+    let log_path_display = log_path.display().to_string();
     // The tag editor is a standalone overlay (may sit over the browser or the
     // player), not attached to a deck.
     let mut tag_editor: Option<TagEditorState> = None;
@@ -1767,6 +1796,9 @@ fn tui_loop(
                 } else if let Some((m, until)) = stream.showing() {
                     let (fg, bg, cd) = severity_colors(m.severity);
                     notification_bar(&m.display_text(), Some(until), fg, bg, cd)
+                } else if let Some((hint, until)) = stream.hint_showing() {
+                    let (fg, bg, cd) = severity_colors(Severity::Info);
+                    notification_bar(hint, Some(until), fg, bg, cd)
                 } else {
                     let version = format!(" {} ", env!("CARGO_PKG_VERSION"));
                     let dir     = format!("  {}", browser_dir.display());
@@ -1848,7 +1880,7 @@ fn tui_loop(
             // Message history overlay — same space and rules as help. Adopt the
             // renderer's clamped scroll so overscroll doesn't accumulate.
             if history_open && browser_state.is_none() {
-                history_scroll = render_message_history(frame, c[16], stream.entries(), history_scroll, utc_offset_secs);
+                history_scroll = render_message_history(frame, c[16], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
             }
 
             // Tag editor overlay — a standalone modal only when the browser is closed
@@ -2474,8 +2506,9 @@ fn tui_loop(
                         }
                         continue 'tui;
                     }
-                    // Esc dismisses the message on the global bar (it stays in the log).
-                    if stream.showing().is_some() && key.code == KeyCode::Esc {
+                    // Esc dismisses the message or hint on the global bar
+                    // (messages stay in the log).
+                    if (stream.showing().is_some() || stream.hint_showing().is_some()) && key.code == KeyCode::Esc {
                         stream.dismiss();
                         continue 'tui;
                     }

@@ -699,7 +699,7 @@ fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
 
 pub(crate) fn title_line_empty() -> Line<'static> {
     Line::from(Span::styled(
-        "no track — Alt+D to open the file browser",
+        "no track",
         Style::default().fg(Color::Rgb(60, 60, 60)),
     ))
 }
@@ -1925,6 +1925,7 @@ pub(crate) fn render_message_history(
     entries: &[Message],
     scroll_from_tail: usize,
     utc_offset_secs: i64,
+    log_path: &str,
 ) -> usize {
     const H_MARGIN: u16 = 2;
 
@@ -1984,7 +1985,7 @@ pub(crate) fn render_message_history(
         (older, 0) => format!("  ({older} older)"),
         (older, newer) => format!("  ({older} older, {newer} newer)"),
     };
-    let header = format!("Messages — k/j scroll, Esc close{position}");
+    let header = format!("Messages — k/j scroll, Esc close{position}  ·  {log_path}");
     let mut lines = vec![Line::from(Span::styled(header, Style::default().fg(Color::Rgb(110, 110, 130))))];
     lines.extend(all.drain(start..end));
     if entries.is_empty() {

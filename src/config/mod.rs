@@ -232,13 +232,22 @@ fn resolve_or_create(path: std::path::PathBuf) -> (String, Option<String>) {
     }
 }
 
-pub(crate) fn load_config(use_local_config: bool) -> (std::collections::HashMap<KeyBinding, Action>, DisplayConfig, Option<String>) {
+pub(crate) fn load_config(use_local_config: bool) -> (std::collections::HashMap<KeyBinding, Action>, DisplayConfig, u64, Option<String>) {
     let (text, notice) = resolve_config(use_local_config);
     // Seed with defaults so any keys absent from the user config still work.
     let mut map = parse_keymap(DEFAULT_CONFIG, &mut std::collections::HashMap::new());
     let keymap = parse_keymap(&text, &mut map);
     let display = parse_display_config(&text);
-    (keymap, display, notice)
+    let retention_days = parse_retention_days(&text);
+    (keymap, display, retention_days, notice)
+}
+
+/// `[messages] retention_days` — how long `messages.log` keeps history.
+pub(crate) fn parse_retention_days(text: &str) -> u64 {
+    toml::from_str::<toml::Value>(text).ok()
+        .and_then(|v| v.get("messages").and_then(|m| m.get("retention_days")).and_then(|d| d.as_integer()))
+        .map(|d| d.clamp(1, 36_500) as u64)
+        .unwrap_or(90)
 }
 
 pub(crate) fn snap_to_fps_level(fps: u32) -> u32 {

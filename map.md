@@ -7,6 +7,7 @@
 [Down](#keymap)
 [Down](#track-database)
 [Down](#session-state)
+[Down](#messages)
 [Down](#error-reports)
 [Down](#album-art)
 [Down](#audio-latency)
@@ -80,6 +81,9 @@ Application
 │ └ Key Reporting
 ├ Track Database
 ├ Session State
+├ Messages
+│ ├ History View
+│ └ Event Log
 ├ Error Reports
 ├ Album Art (TODO)
 └ Audio Latency
@@ -139,7 +143,7 @@ Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
 
 [Up](#track-loading)
 
-Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's notification row — accept it to open the metadata editor, or carry on and the offer fades but lingers. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
+Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's title row — accept it to open the metadata editor, or carry on and the offer fades but lingers. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
 
 **See also**
 
@@ -948,6 +952,64 @@ Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the pan
 - [Track Database](#track-database) — the other persisted store, in the data dir
 
 
+# Messages
+
+[Up](#application)
+[Down](#history-view)
+[Down](#event-log)
+
+Application messages have three kinds, told apart by what happens after they are seen:
+
+- **Prompts** await a keypress — never recorded. BPM confirmation, rename offer, quit and load confirmations.
+
+- **Events** are things that happened — moves, playlist warnings, identity alerts. One stream feeds every surface; expiring off screen never loses one.
+
+- **Hints** are transient guidance — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere.
+
+Three surfaces: the **global bar** (top row, always visible) shows one thing at a time — prompt beats event beats hint, and idle it shows directory and version; **deck rows** carry only their own prompts — deck events go to the bar, named ("Deck 2: …"); the **history view** looks back over every event.
+
+**Detail**
+
+- Esc dismisses whatever the bar shows; events stay in the log.
+- Severity (info/success/warning/error) colours the bar; display time is per-event — 5 s usual, 30 s for the identity alert.
+
+
+# History View
+
+[Up](#messages)
+
+The look-back over every event, this session and previous ones. `N` opens it over the album-art space (mutually exclusive with the browser, like help); each line is clock time plus the event, severity-coloured, long lines wrapping under a hanging indent. `k`/`j` scroll older/newer — the header counts what lies beyond each edge — and Esc or `N` closes it.
+
+Sessions read as one continuous scroll: on startup the log file's retained history seeds the view, and every session opens with a "deck v… started" line, so the boundaries are visible. Seeded history never appears on the global bar.
+
+**Detail**
+
+- The header names the log file's path.
+- Copying text out is the terminal's own selection — Shift+drag bypasses the app's mouse capture.
+
+**See also**
+
+- [Keymap](#keymap) — `message_history` is configurable; `N` is the default
+
+
+# Event Log
+
+[Up](#messages)
+
+The persistent record: every event appends a line to `messages.log` in the state dir, beside the panic log and error reports. Human-readable — `2026-08-11 14:03 warn deck2 3 tracks unavailable…` — local time, written and flushed as it happens, so a crash loses nothing. This file seeds the History View, and it's the one to read when diagnosing after the fact.
+
+The file prunes itself at startup: lines older than the retention window (`[messages] retention_days`, default 90) are dropped, as are lines that no longer parse. One file, no rotation suffixes.
+
+**Detail**
+
+- Line format: `YYYY-MM-DD HH:MM:SS <severity> <source>  <text>`; sources are `deck1`–`deck3`, `playlist`, `tags`, `files`, `app`. Text is single-line by construction.
+- Local time uses the zone offset queried from the system once at startup (`date +%z`), falling back to UTC.
+
+**See also**
+
+- [Error Reports](#error-reports) — the identity-mismatch event names its report, so the log indexes the directory chronologically
+
+
 # Error Reports
 
 [Up](#application)
@@ -964,6 +1026,7 @@ Two kinds today:
 
 - [Metadata Editor](#metadata-editor) — writes identity-mismatch reports
 - [Track Database](#track-database) — the load-time identity-unhashable case
+- [Event Log](#event-log) — the identity-mismatch event names its report, so the log indexes this directory chronologically
 
 
 # Album Art
