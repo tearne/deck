@@ -218,14 +218,13 @@ The corpus covers one clean file per supported format, plus tag-placement edge c
 How an implementation locates the audio file for a given entry and keeps location hints up to date.
 
 1. Resolve `hints.relative_path` against the playlist's directory. If a file exists there, confirm by content hash. Match → done; update nothing.
-2. If miss, search the implementation's library root. Screen candidates cheapest-first: `duration_secs` within tolerance and `file_size_bytes` within 1% (no decode) → content hash confirm. First match wins → rewrite hints.
+2. If miss, search the implementation's library root, confirming candidates by content hash. Try files whose `file_size_bytes` matches exactly first — a file that was only moved preserves it — then widen to files within the duration tolerance, which survives retagging when size does not. Screening must not require decoding audio. First hash match wins → rewrite hints.
 3. If no hash match anywhere, see [Descriptive Fallback](#descriptive-fallback).
 4. If no match and no confirmed re-link, keep the entry and mark it unavailable. Never silently drop; never silently re-link.
 
 **Detail**
 
-- Duration tolerance: **±2 seconds**.
-- File-size tolerance: 1% — accommodates minor container rewrites that don't change the audio payload.
+- Duration tolerance: **±2 seconds** — used for the widened pass and by the descriptive fallback.
 
 **See also**
 

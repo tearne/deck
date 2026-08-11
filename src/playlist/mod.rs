@@ -6,6 +6,7 @@
 //! Consumed by the editor (a later change); dead in the binary until then.
 #![allow(dead_code)]
 
+use std::cell::OnceCell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -15,8 +16,6 @@ use serde::{Deserialize, Serialize};
 /// A candidate whose duration is within this many seconds of the entry's is
 /// eligible for hash confirmation (map: File Resolution).
 const DURATION_TOLERANCE_SECS: f64 = 2.0;
-/// Allowed file-size deviation for a candidate, as a fraction.
-const FILE_SIZE_TOLERANCE: f64 = 0.01;
 /// Most candidates the descriptive fallback offers. If neither description nor
 /// duration puts the right file in the top few, a longer list won't help.
 const MAX_FALLBACK_CANDIDATES: usize = 10;
@@ -136,27 +135,33 @@ pub trait Library {
     fn read_description(&self, path: &Path) -> Option<Description>;
 }
 
-/// The library screened once, ready to resolve many entries against. Holds only
-/// what screening needs; descriptions cost a tag read each and are fetched later,
-/// for the few candidates the fallback actually ranks.
-pub struct LibrarySnapshot {
-    files: Vec<(PathBuf, f64, u64)>,
+/// The library, ready to be searched. Screening it costs a walk plus a probe per
+/// file, so that happens at most once — and only if some entry actually needs
+/// looking for. A playlist whose tracks are all where it left them never triggers
+/// it. Descriptions cost a tag read each and are fetched later, for the few
+/// candidates the fallback ranks.
+pub struct LibrarySearch<'a> {
+    library: &'a dyn Library,
+    screened: OnceCell<Vec<(PathBuf, f64, u64)>>,
 }
 
-impl LibrarySnapshot {
-    /// Walk and probe the library. Costly in proportion to library size, which is
-    /// why callers take one snapshot per operation and resolve every entry against
-    /// it rather than repeating this per entry.
-    pub fn probe(library: &dyn Library) -> Self {
-        let files = library
-            .candidates()
-            .into_iter()
-            .filter_map(|path| {
-                let (duration, size) = library.cheap_probe(&path)?;
-                Some((path, duration, size))
-            })
-            .collect();
-        LibrarySnapshot { files }
+impl<'a> LibrarySearch<'a> {
+    pub fn new(library: &'a dyn Library) -> Self {
+        LibrarySearch { library, screened: OnceCell::new() }
+    }
+
+    /// Every library file with its length and size, screened on first need.
+    fn screened(&self) -> &[(PathBuf, f64, u64)] {
+        self.screened.get_or_init(|| {
+            self.library
+                .candidates()
+                .into_iter()
+                .filter_map(|path| {
+                    let (duration, size) = self.library.cheap_probe(&path)?;
+                    Some((path, duration, size))
+                })
+                .collect()
+        })
     }
 }
 
@@ -184,42 +189,60 @@ pub enum Resolution {
 /// Locate the file for `entry`, per the map's File Resolution steps, searching the
 /// already-probed `snapshot`. Read-only: it never writes, returning any updated
 /// entry for the caller to persist.
-pub fn resolve(
-    entry: &Entry,
-    playlist_dir: &Path,
-    library: &dyn Library,
-    snapshot: &LibrarySnapshot,
-) -> Resolution {
+pub fn resolve(entry: &Entry, playlist_dir: &Path, search: &LibrarySearch) -> Resolution {
     // Step 1: the hinted path, confirmed by hash.
     let hinted = playlist_dir.join(&entry.hints.relative_path);
-    if entry_matches_file(entry, &hinted, library) {
-        let updated = refresh_description(entry, &hinted, library);
+    if entry_matches_file(entry, &hinted, search.library) {
+        let updated = refresh_description(entry, &hinted, search.library);
         return Resolution::Found { path: hinted, updated_entry: updated };
     }
 
-    // Step 2: search the library, cheapest-first, then confirm by hash.
-    for (path, duration, size) in &snapshot.files {
-        if !within_tolerance(entry, *duration, *size) {
-            continue;
-        }
-        if entry_matches_file(entry, path, library) {
-            let mut updated = entry.clone();
-            updated.hints.relative_path = relative_to(playlist_dir, path);
-            updated.hints.file_size_bytes = *size;
-            if let Some(desc) = changed_description(&updated, path, library) {
-                updated.description = desc;
-            }
-            return Resolution::Found { path: path.clone(), updated_entry: Some(updated) };
-        }
+    // Step 2: a file that was only moved still matches its recorded size to the
+    // byte, so those are worth reading first. Widening to similar length costs
+    // more reads but is what finds a file that was re-tagged as well as moved.
+    let same_size = |size: u64| entry.hints.file_size_bytes != 0 && size == entry.hints.file_size_bytes;
+    let found = first_confirmed(entry, playlist_dir, search, |_, size| same_size(size))
+        .or_else(|| {
+            first_confirmed(entry, playlist_dir, search, |duration, size| {
+                !same_size(size) && within_duration(entry, duration)
+            })
+        });
+    if let Some(found) = found {
+        return found;
     }
 
     // Step 3: descriptive fallback — rank by description similarity.
-    let candidates = descriptive_candidates(entry, library, snapshot);
+    let candidates = descriptive_candidates(entry, search);
     if candidates.is_empty() {
         Resolution::Unavailable
     } else {
         Resolution::NeedsConfirmation { candidates }
     }
+}
+
+/// The first library file `admit` allows whose hash confirms the entry, with its
+/// hints brought up to date.
+fn first_confirmed(
+    entry: &Entry,
+    playlist_dir: &Path,
+    search: &LibrarySearch,
+    admit: impl Fn(f64, u64) -> bool,
+) -> Option<Resolution> {
+    for (path, duration, size) in search.screened() {
+        if !admit(*duration, *size) {
+            continue;
+        }
+        if entry_matches_file(entry, path, search.library) {
+            let mut updated = entry.clone();
+            updated.hints.relative_path = relative_to(playlist_dir, path);
+            updated.hints.file_size_bytes = *size;
+            if let Some(desc) = changed_description(&updated, path, search.library) {
+                updated.description = desc;
+            }
+            return Some(Resolution::Found { path: path.clone(), updated_entry: Some(updated) });
+        }
+    }
+    None
 }
 
 /// Whether `entry`'s stored hash confirms the file at `path`. Only attempted
@@ -238,11 +261,8 @@ fn entry_matches_file(entry: &Entry, path: &Path, library: &dyn Library) -> bool
     }
 }
 
-fn within_tolerance(entry: &Entry, duration: f64, size: u64) -> bool {
-    let duration_ok = (duration - entry.identity.duration_secs).abs() <= DURATION_TOLERANCE_SECS;
-    let want = entry.hints.file_size_bytes as f64;
-    let size_ok = want == 0.0 || (size as f64 - want).abs() <= want * FILE_SIZE_TOLERANCE;
-    duration_ok && size_ok
+fn within_duration(entry: &Entry, duration: f64) -> bool {
+    (duration - entry.identity.duration_secs).abs() <= DURATION_TOLERANCE_SECS
 }
 
 /// A description refresh for a *located* entry (map: Tags Refresh), or `None` if
@@ -266,14 +286,10 @@ fn changed_description(entry: &Entry, path: &Path, library: &dyn Library) -> Opt
 /// descriptions are and then by closest duration. Description only orders the
 /// offers — a file that matches no tag at all is still offered, because a
 /// re-encode is usually retagged too and the operator confirms every re-link.
-fn descriptive_candidates(
-    entry: &Entry,
-    library: &dyn Library,
-    snapshot: &LibrarySnapshot,
-) -> Vec<Candidate> {
+fn descriptive_candidates(entry: &Entry, search: &LibrarySearch) -> Vec<Candidate> {
     let target = entry.identity.duration_secs;
-    let mut scored: Vec<(f64, f64, Candidate)> = snapshot
-        .files
+    let mut scored: Vec<(f64, f64, Candidate)> = search
+        .screened()
         .iter()
         .filter_map(|(path, duration, size)| {
             let duration_delta = (duration - target).abs();
@@ -282,7 +298,7 @@ fn descriptive_candidates(
             }
             // Only now is a tag read worth paying for — the duration screen has
             // already cut the library down to a handful.
-            let description = library.read_description(path)?;
+            let description = search.library.read_description(path)?;
             let score = description_similarity(&entry.description, &description);
             Some((score, duration_delta, Candidate { path: path.clone(), description, duration_secs: *duration, file_size_bytes: *size }))
         })
@@ -491,6 +507,7 @@ mod tests {
         /// screened once per operation rather than once per entry.
         walks: std::cell::Cell<usize>,
         probes: std::cell::Cell<usize>,
+        reads: std::cell::Cell<usize>,
     }
     impl FakeLibrary {
         fn add(&mut self, path: &str, bytes: Vec<u8>, duration: f64, desc: Description) {
@@ -507,6 +524,7 @@ mod tests {
             self.files.get(path).map(|(b, d, _)| (*d, b.len() as u64))
         }
         fn read_bytes(&self, path: &Path) -> Option<Vec<u8>> {
+            self.reads.set(self.reads.get() + 1);
             self.files.get(path).map(|(b, _, _)| b.clone())
         }
         fn read_description(&self, path: &Path) -> Option<Description> {
@@ -559,7 +577,7 @@ mod tests {
         let reread: Playlist = serde_json::from_str(&json).unwrap();
         let mut lib = FakeLibrary::default();
         lib.add("/lib/a.wav", bytes, noisy, desc("A", "T"));
-        match resolve(&reread.entries[0], Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&reread.entries[0], Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::Found { .. } => {}
             other => panic!("expected Found, got {other:?}"),
         }
@@ -572,7 +590,7 @@ mod tests {
         let mut lib = FakeLibrary::default();
         lib.add("/lib/song.wav", bytes, 5.0, desc("A", "T"));
         // playlist_dir is /lib so the hint resolves directly.
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::Found { path, updated_entry } => {
                 assert_eq!(path, PathBuf::from("/lib/song.wav"));
                 assert_eq!(updated_entry, None); // exact hit, tags unchanged
@@ -588,7 +606,7 @@ mod tests {
         let entry = entry_for(&bytes, 8.0, bytes.len() as u64, "old/moved.wav", desc("A", "T"));
         let mut lib = FakeLibrary::default();
         lib.add("/lib/new/moved.wav", bytes, 8.0, desc("A", "T"));
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::Found { path, updated_entry } => {
                 assert_eq!(path, PathBuf::from("/lib/new/moved.wav"));
                 let e = updated_entry.expect("relocation should update hints");
@@ -604,7 +622,7 @@ mod tests {
         let entry = entry_for(&bytes, 2.0, bytes.len() as u64, "t.wav", desc("Old", "Name"));
         let mut lib = FakeLibrary::default();
         lib.add("/lib/t.wav", bytes, 2.0, desc("New", "Name"));
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::Found { updated_entry: Some(e), .. } => {
                 assert_eq!(e.description, desc("New", "Name"));
             }
@@ -618,7 +636,7 @@ mod tests {
         let mut lib = FakeLibrary::default();
         // A re-encode: different bytes (so no hash match) but same description.
         lib.add("/lib/reencoded.wav", wav(&[9, 9, 9, 9, 9]), 100.5, desc("Artist", "Song"));
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::NeedsConfirmation { candidates } => {
                 assert_eq!(candidates.len(), 1);
                 assert_eq!(candidates[0].path, PathBuf::from("/lib/reencoded.wav"));
@@ -636,7 +654,7 @@ mod tests {
         // Decoys of near-identical length with unrelated tags.
         lib.add("/lib/wrong-a.mp3", wav(&[8, 8]), 100.1, desc("Miles Davis", "So What"));
         lib.add("/lib/wrong-b.mp3", wav(&[7, 7]), 99.9, desc("Portishead", "Roads"));
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::NeedsConfirmation { candidates } => {
                 assert_eq!(candidates[0].path, PathBuf::from("/lib/right.mp3"));
                 // The decoys are still offered — the operator confirms either way.
@@ -651,7 +669,7 @@ mod tests {
         let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.flac", desc("Aphex Twin", "Xtal"));
         let mut lib = FakeLibrary::default();
         lib.add("/lib/relabelled.mp3", wav(&[9, 9]), 100.2, desc("", "track 07"));
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::NeedsConfirmation { candidates } => {
                 assert_eq!(candidates.len(), 1);
             }
@@ -663,10 +681,12 @@ mod tests {
     fn offers_are_capped() {
         let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.flac", desc("A", "T"));
         let mut lib = FakeLibrary::default();
+        // Distinct from the entry's own bytes, so none of them hash-confirms and
+        // resolution genuinely reaches the fallback.
         for i in 0..25 {
-            lib.add(&format!("/lib/f{i}.mp3"), wav(&[i as u8]), 100.0, desc("Someone", "Something"));
+            lib.add(&format!("/lib/f{i}.mp3"), wav(&[100 + i as u8]), 100.0, desc("Someone", "Something"));
         }
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::NeedsConfirmation { candidates } => {
                 assert_eq!(candidates.len(), MAX_FALLBACK_CANDIDATES);
             }
@@ -700,25 +720,76 @@ mod tests {
             .map(|i| entry_for(&wav(&[200 + i as u8]), 300.0, 999, "gone.wav", desc("Nobody", "Nothing")))
             .collect();
 
-        let snapshot = LibrarySnapshot::probe(&lib);
-        let (walks_after_probe, probes_after_probe) = (lib.walks.get(), lib.probes.get());
-        assert_eq!(walks_after_probe, 1);
-        assert_eq!(probes_after_probe, 20);
-
+        let search = LibrarySearch::new(&lib);
         for entry in &entries {
-            let _ = resolve(entry, Path::new("/lib"), &lib, &snapshot);
+            let _ = resolve(entry, Path::new("/lib"), &search);
         }
 
-        // Resolving 15 entries adds no walk and no probe of its own.
-        assert_eq!(lib.walks.get(), walks_after_probe);
-        assert_eq!(lib.probes.get(), probes_after_probe);
+        // 15 entries, all needing a search: the library is walked and probed once.
+        assert_eq!(lib.walks.get(), 1);
+        assert_eq!(lib.probes.get(), 20);
+    }
+
+    #[test]
+    fn a_playlist_with_nothing_missing_never_searches() {
+        let bytes = wav(&[4, 5, 6]);
+        let entry = entry_for(&bytes, 5.0, bytes.len() as u64, "here.wav", desc("A", "T"));
+        let mut lib = FakeLibrary::default();
+        lib.add("/lib/here.wav", bytes, 5.0, desc("A", "T"));
+
+        let search = LibrarySearch::new(&lib);
+        assert!(matches!(resolve(&entry, Path::new("/lib"), &search), Resolution::Found { .. }));
+
+        // The hint was good, so the library was never walked at all.
+        assert_eq!(lib.walks.get(), 0);
+        assert_eq!(lib.probes.get(), 0);
+    }
+
+    #[test]
+    fn a_moved_file_is_found_without_reading_other_files() {
+        let bytes = wav(&[7, 7, 7, 7]);
+        let size = bytes.len() as u64;
+        let entry = entry_for(&bytes, 8.0, size, "old/moved.wav", desc("A", "T"));
+        let mut lib = FakeLibrary::default();
+        lib.add("/lib/new/moved.wav", bytes, 8.0, desc("A", "T"));
+        // Same length, different size: only reached if the same-size pass fails.
+        lib.add("/lib/decoy.wav", wav(&[1; 40]), 8.0, desc("A", "T"));
+
+        let search = LibrarySearch::new(&lib);
+        match resolve(&entry, Path::new("/lib"), &search) {
+            Resolution::Found { path, .. } => assert_eq!(path, PathBuf::from("/lib/new/moved.wav")),
+            other => panic!("expected Found, got {other:?}"),
+        }
+        // Two reads: the stale hint, then the one same-size candidate. The decoy
+        // of matching length is never opened — the widened pass isn't reached.
+        assert_eq!(lib.reads.get(), 2);
+    }
+
+    #[test]
+    fn a_moved_and_retagged_file_is_still_found() {
+        // Artwork added: the payload is untouched so the hash still matches, but
+        // the file is far bigger than the size recorded in the playlist.
+        let bytes = wav(&[3, 3, 3]);
+        let entry = entry_for(&bytes, 12.0, 40, "old/art.wav", desc("A", "T"));
+        let mut lib = FakeLibrary::default();
+        lib.add("/lib/art.wav", bytes, 12.0, desc("A", "T"));
+
+        let search = LibrarySearch::new(&lib);
+        match resolve(&entry, Path::new("/lib"), &search) {
+            Resolution::Found { path, updated_entry } => {
+                assert_eq!(path, PathBuf::from("/lib/art.wav"));
+                let updated = updated_entry.expect("size and path both changed");
+                assert_ne!(updated.hints.file_size_bytes, 40);
+            }
+            other => panic!("expected the widened pass to find it, got {other:?}"),
+        }
     }
 
     #[test]
     fn unavailable_when_nothing_matches() {
         let entry = entry_for(&wav(&[1]), 100.0, 999, "gone.wav", desc("Artist", "Song"));
         let lib = FakeLibrary::default();
-        assert_eq!(resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)), Resolution::Unavailable);
+        assert_eq!(resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)), Resolution::Unavailable);
     }
 
     #[test]
@@ -730,7 +801,7 @@ mod tests {
         lib.add("/lib/v.wav", bytes, 4.0, desc("A", "T"));
         // The file is right there, but the version mismatch blocks hash confirm,
         // so it degrades to the descriptive fallback rather than a silent match.
-        match resolve(&entry, Path::new("/lib"), &lib, &LibrarySnapshot::probe(&lib)) {
+        match resolve(&entry, Path::new("/lib"), &LibrarySearch::new(&lib)) {
             Resolution::NeedsConfirmation { .. } => {}
             other => panic!("expected fallback, got {other:?}"),
         }
