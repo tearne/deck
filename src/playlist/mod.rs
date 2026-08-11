@@ -414,10 +414,26 @@ pub(crate) fn relative_to(base_dir: &Path, target: &Path) -> String {
 
 // ---- Resilient writes (map: Resilient Writes, Backup Scheme) ----
 
-/// Write `playlist` to `path` per the map's Write Procedure: serialise, validate
-/// by re-parse, rotate backups, then atomically rename a same-directory temp
-/// file over the primary.
+/// Save an operator's edit: the map's Write Procedure in full, backups rotated so
+/// the previous state is recoverable.
 pub fn write_playlist(path: &Path, playlist: &Playlist) -> std::io::Result<()> {
+    write_validated(path, playlist, Backups::Rotate)
+}
+
+/// Save a repair Deck made on its own — a relocated hint, a refreshed description.
+/// Identical except that the backups are left alone: three slots spent on
+/// housekeeping would push out the state the operator last chose, which is the
+/// only state worth recovering.
+pub fn write_repaired_playlist(path: &Path, playlist: &Playlist) -> std::io::Result<()> {
+    write_validated(path, playlist, Backups::Keep)
+}
+
+enum Backups {
+    Rotate,
+    Keep,
+}
+
+fn write_validated(path: &Path, playlist: &Playlist, backups: Backups) -> std::io::Result<()> {
     let json = serde_json::to_vec_pretty(playlist)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if serde_json::from_slice::<Playlist>(&json).is_err() {
@@ -434,7 +450,9 @@ pub fn write_playlist(path: &Path, playlist: &Playlist) -> std::io::Result<()> {
     ));
     std::fs::write(&tmp, &json)?;
 
-    rotate_backups(path);
+    if matches!(backups, Backups::Rotate) {
+        rotate_backups(path);
+    }
     std::fs::rename(&tmp, path)
 }
 
@@ -805,6 +823,37 @@ mod tests {
             Resolution::NeedsConfirmation { .. } => {}
             other => panic!("expected fallback, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn repairs_do_not_consume_backup_slots() {
+        let dir = std::env::temp_dir().join(format!("deck-rpl-repair-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("set.rpl");
+
+        let edited = Playlist {
+            version: 1,
+            entries: vec![entry_for(&wav(&[1]), 1.0, 50, "chosen.wav", desc("A", "B"))],
+        };
+        write_playlist(&path, &Playlist::empty()).unwrap();
+        write_playlist(&path, &edited).unwrap();
+
+        // Three repairs in a row — the kind an operator never asked for.
+        for i in 0..3 {
+            let repaired = Playlist {
+                version: 1,
+                entries: vec![entry_for(&wav(&[1]), 1.0, 50, &format!("moved{i}.wav"), desc("A", "B"))],
+            };
+            write_repaired_playlist(&path, &repaired).unwrap();
+        }
+
+        // The newest backup is still the playlist as it was before the last edit,
+        // not one of the repairs.
+        let (backed_up, _) = read_playlist(&backup_path(&path, 1)).unwrap();
+        assert_eq!(backed_up, Playlist::empty());
+        assert!(!backup_path(&path, 2).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

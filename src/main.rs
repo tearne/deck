@@ -299,7 +299,7 @@ impl PlaylistPanel {
             })
             .collect();
         if changed && persist {
-            let _ = playlist::write_playlist(&self.path, &self.playlist);
+            let _ = playlist::write_repaired_playlist(&self.path, &self.playlist);
         }
     }
 
@@ -550,7 +550,7 @@ fn heal_playlist(
         }
     }
     if changed {
-        let _ = playlist::write_playlist(rpl_path, playlist);
+        let _ = playlist::write_repaired_playlist(rpl_path, playlist);
     }
     changed
 }
@@ -612,7 +612,7 @@ fn resolve_and_heal(
         {
             if let Some(entry) = updated_entry {
                 playlist.entries[index] = entry;
-                let _ = playlist::write_playlist(rpl_path, playlist);
+                let _ = playlist::write_repaired_playlist(rpl_path, playlist);
             }
             return Some((index, path));
         }

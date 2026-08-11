@@ -293,7 +293,7 @@ Required behaviour for every write to a `.rpl` file:
 
 1. Serialise to JSON and validate that the result re-parses cleanly. If validation fails, abort — no partial write.
 2. Write to a temporary file in the **same directory** as the `.rpl` file.
-3. Rotate the backup set: shift `.bak2` → `.bak3` (drop oldest), `.bak1` → `.bak2`, current primary → `.bak1`.
+3. If the write records a change the user made, rotate the backup set: shift `.bak2` → `.bak3` (drop oldest), `.bak1` → `.bak2`, current primary → `.bak1`. Writes the implementation makes on its own — a relocated hint, a refreshed description — skip this step.
 4. Rename the temporary file to the primary filename.
 
 **Detail**
@@ -310,5 +310,7 @@ Required behaviour for every write to a `.rpl` file:
 [Up](#resilient-writes)
 
 Up to **3** hidden sibling backups per playlist, named `.<stem>.rpl.bak1`, `.<stem>.rpl.bak2`, `.<stem>.rpl.bak3`. Hidden naming (leading `.`) keeps them out of directory listings that filter for `.rpl`.
+
+Backups capture the states the user chose, not the implementation's repairs, so the newest is always the playlist as it stood before the last edit.
 
 If the primary `.rpl` file fails to parse on load, attempt each backup in slot order (`.bak1` first) and use the first that parses. Surface the fallback to the user — silent recovery is acceptable; silent recovery with no indication is not.
