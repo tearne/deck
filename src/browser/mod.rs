@@ -74,9 +74,6 @@ pub(crate) struct BrowserState {
     /// Label naming a location the operator just jumped to (`` ` `` cycle), shown at
     /// the top. Cleared on the next manual navigation.
     pub(crate) location_label: Option<String>,
-    /// A critical alert (message, expiry) shown as a banner across the header —
-    /// used for the identity-mismatch warning, near where the eyes are.
-    pub(crate) alert: Option<(String, std::time::Instant)>,
 }
 
 impl BrowserState {
@@ -125,7 +122,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, name_prompt: None, move_source: None, target_deck: 0, compliance_on: false, location_label: None, alert: None })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, name_prompt: None, move_source: None, target_deck: 0, compliance_on: false, location_label: None })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -495,19 +492,6 @@ pub(crate) fn render_browser(
             right,
         );
     }
-    // A live critical alert takes over the whole header row.
-    if let Some((msg, expiry)) = &state.alert {
-        if std::time::Instant::now() < *expiry {
-            frame.render_widget(
-                Paragraph::new(Line::from(ratatui::text::Span::styled(
-                    format!(" {msg} "),
-                    Style::default().fg(Color::White).bg(Color::Rgb(150, 25, 25)).add_modifier(Modifier::BOLD),
-                ))).style(Style::default().bg(Color::Rgb(150, 25, 25))),
-                chunks[0],
-            );
-        }
-    }
-
     // List: search results or directory entries.
     let items: Vec<ListItem> = if let Some(ref results) = state.search_results {
         let base = state.workspace.as_deref().unwrap_or(&state.cwd);
@@ -788,7 +772,6 @@ mod tests {
             target_deck: 0,
             compliance_on: false,
             location_label: None,
-            alert: None,
         }
     }
 

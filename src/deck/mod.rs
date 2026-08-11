@@ -127,17 +127,6 @@ pub(crate) struct SpectrumState {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum NudgeMode { Jump, Warp }
 
-#[allow(dead_code)]
-pub(crate) enum NotificationStyle { Info, Warning, Error, Success }
-
-pub(crate) struct Notification {
-    pub(crate) message: String,
-    pub(crate) style:   NotificationStyle,
-    pub(crate) expires: Instant,
-}
-
-pub(crate) const NOTIFICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 pub(crate) const TAG_FIELD_LABELS: &[&str] = &[
     " Artist", "  Title", "  Album", "   Year", "  Track", "  Genre", "Comment",
 ];
@@ -232,7 +221,6 @@ pub(crate) struct Deck {
     pub(crate) nudge_mode: NudgeMode,
     pub(crate) metronome_mode: bool,
     pub(crate) last_metro_beat: Option<i128>,
-    pub(crate) active_notification: Option<Notification>,
     pub(crate) cue_sample: Option<usize>,
     pub(crate) rename_hint: Option<String>,
     pub(crate) rename_offer_started: Option<Instant>,
@@ -276,7 +264,6 @@ impl Deck {
             nudge_mode: NudgeMode::Jump,
             metronome_mode: false,
             last_metro_beat: None,
-            active_notification: None,
             cue_sample: None,
             rename_offer_started: rename_hint.as_ref().map(|_| Instant::now()),
             rename_hint,
@@ -339,7 +326,6 @@ impl Deck {
         self.rename_offer_started.is_some()
             && self.rename_hint.is_some()
             && self.tempo.pending_bpm.is_none()
-            && self.active_notification.is_none()
             && self.rename_accepted.is_none()
     }
 }

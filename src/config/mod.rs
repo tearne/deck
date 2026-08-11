@@ -2,7 +2,7 @@ use crossterm::event::KeyCode;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Action {
-    Quit, Help, VinylModeToggle,
+    Quit, Help, MessageHistory, VinylModeToggle,
     ZoomIn, ZoomOut, HeightIncrease, HeightDecrease,
     LatencyIncrease, LatencyDecrease,
     FpsIncrease, FpsDecrease,
@@ -51,6 +51,7 @@ pub(crate) enum Action {
 pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("quit",              Action::Quit),
     ("help",              Action::Help),
+    ("message_history",   Action::MessageHistory),
 
     ("vinyl_mode_toggle",   Action::VinylModeToggle),
     ("zoom_in",           Action::ZoomIn),

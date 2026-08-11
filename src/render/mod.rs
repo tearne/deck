@@ -9,9 +9,10 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::audio::WaveformData;
 use crate::deck::{
-    Deck, NotificationStyle, SpecPalette, TagEditorState,
+    Deck, SpecPalette, TagEditorState,
     TAG_EDITOR_MAX_WIDTH, TAG_EDITOR_MIN_WIDTH, TAG_FIELD_LABELS,
 };
+use crate::messages::{Message, Severity};
 
 pub(crate) const ZOOM_LEVELS: &[f32] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
@@ -619,7 +620,7 @@ fn cache_indicator_spans(deck: &Deck, vinyl_mode: bool) -> Vec<Span<'static>> {
     ]
 }
 
-pub(crate) fn notification_line_for_deck(deck: &Deck, content_width: usize, vinyl_mode: bool) -> Line<'static> {
+pub(crate) fn title_line_for_deck(deck: &Deck, content_width: usize, vinyl_mode: bool) -> Line<'static> {
     let dim = Style::default().fg(Color::DarkGray);
     if let Some((_, p_bpm, _, received_at)) = &deck.tempo.pending_bpm {
         let secs_left = 15u64.saturating_sub(received_at.elapsed().as_secs());
@@ -634,14 +635,6 @@ pub(crate) fn notification_line_for_deck(deck: &Deck, content_width: usize, viny
             Span::styled(format!("{secs_left}s"), countdown_style),
             Span::styled(")", yellow),
         ])
-    } else if let Some(ref n) = deck.active_notification {
-        let color = match n.style {
-            NotificationStyle::Info    => Color::DarkGray,
-            NotificationStyle::Warning => Color::Yellow,
-            NotificationStyle::Error   => Color::Red,
-            NotificationStyle::Success => Color::Green,
-        };
-        Line::from(Span::styled(n.message.clone(), Style::default().fg(color)))
     } else if deck.rename_offer_active() {
         let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
         let (offer, offer_style) = if elapsed < 10 {
@@ -704,7 +697,7 @@ fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
     }
 }
 
-pub(crate) fn notification_line_empty() -> Line<'static> {
+pub(crate) fn title_line_empty() -> Line<'static> {
     Line::from(Span::styled(
         "no track — Alt+D to open the file browser",
         Style::default().fg(Color::Rgb(60, 60, 60)),
@@ -1819,7 +1812,7 @@ pub(crate) fn render_shared_tick_row(
 }
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-    const TEXT_W: u16 = 78;
+    const TEXT_W: u16 = 79;
     const TEXT_H: u16 = 15;
     const H_PAD:  u16 = 2;
     const V_PAD:  u16 = 1;
@@ -1908,13 +1901,97 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         row11,
         Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%", sp),
         row13,
-        Line::styled("` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]", ba),
+        Line::from(vec![
+            Span::styled("` vinyl  ¬ nudge  -/= zoom  {/} height  [/] latency  ", ba),
+            Span::styled("N msgs", sh),
+            Span::styled("  Esc quit  │ [Bare]", ba),
+        ]),
         row15,
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),
         inner,
     );
+}
+
+/// The message-history overlay: the stream's log over the album-art area,
+/// newest at the bottom, long messages wrapped with a hanging indent.
+/// `scroll_from_tail` is how many display lines the view has been scrolled
+/// back toward the start (0 = showing the latest); the value actually used
+/// is clamped to the content and returned so the caller can adopt it.
+pub(crate) fn render_message_history(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    entries: &[Message],
+    scroll_from_tail: usize,
+    utc_offset_secs: i64,
+) -> usize {
+    const H_MARGIN: u16 = 2;
+
+    // Like the help overlay, sit one row below the top of the spacer to clear
+    // the deck-3 margin.
+    let available_h = area.height.saturating_sub(1);
+    if available_h == 0 { return scroll_from_tail; }
+
+    let outer_w = area.width.saturating_sub(H_MARGIN * 2);
+    let outer = ratatui::layout::Rect { x: area.x + H_MARGIN, y: area.y + 1, width: outer_w, height: available_h };
+
+    // Clear replaces halfblock art characters with spaces; Block then fills with
+    // dark bg (without Clear the art ▀ characters would comb through).
+    let bg = Style::default().bg(Color::Rgb(15, 15, 15));
+    frame.render_widget(Clear, outer);
+    frame.render_widget(Block::default().style(bg), outer);
+
+    let inner = ratatui::layout::Rect {
+        x:      outer.x + 1,
+        y:      outer.y,
+        width:  outer.width.saturating_sub(2),
+        height: outer.height,
+    };
+    let rows = inner.height.saturating_sub(1) as usize; // header takes one
+    let width = inner.width as usize;
+
+    let severity_fg = |severity| match severity {
+        Severity::Error   => Color::Rgb(255, 180, 180),
+        Severity::Warning => Color::Rgb(255, 220, 120),
+        Severity::Info    => Color::Rgb(160, 200, 255),
+        Severity::Success => Color::Rgb(140, 230, 160),
+    };
+
+    // Every display line, oldest first: "HH:MM:SS  text", wrapped continuations
+    // indented under the text column.
+    const INDENT: usize = 10; // "HH:MM:SS  "
+    let body_width = width.saturating_sub(INDENT).max(8);
+    let mut all: Vec<Line> = Vec::new();
+    for m in entries {
+        let fg = severity_fg(m.severity);
+        for (i, segment) in wrap_words(&m.display_text(), body_width).into_iter().enumerate() {
+            let prefix = if i == 0 { format!("{}  ", m.clock_time(utc_offset_secs)) } else { " ".repeat(INDENT) };
+            all.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled(segment, Style::default().fg(fg)),
+            ]));
+        }
+    }
+
+    // The window ends `scroll` display lines before the newest.
+    let total = all.len();
+    let scroll = scroll_from_tail.min(total.saturating_sub(rows));
+    let end = total - scroll;
+    let start = end.saturating_sub(rows);
+    let position = match (start, scroll) {
+        (0, 0) => String::new(),
+        (older, 0) => format!("  ({older} older)"),
+        (older, newer) => format!("  ({older} older, {newer} newer)"),
+    };
+    let header = format!("Messages — k/j scroll, Esc close{position}");
+    let mut lines = vec![Line::from(Span::styled(header, Style::default().fg(Color::Rgb(110, 110, 130))))];
+    lines.extend(all.drain(start..end));
+    if entries.is_empty() {
+        lines.push(Line::from(Span::styled("no messages yet", Style::default().fg(Color::Rgb(60, 60, 60)))));
+    }
+    frame.render_widget(Paragraph::new(lines).style(bg), inner);
+    scroll
 }
 
 /// The permanent context panel. Renders whichever state it's in: an empty frame,
@@ -1957,22 +2034,29 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Greedy word-wrap into lines of at most `width` columns, for the picker's explanatory note.
+/// Greedy word-wrap into lines of at most `width` columns. Words longer than
+/// `width` (paths, typically) are hard-split rather than overflowing their line.
 fn wrap_words(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
     }
+    let chunks = text.split_whitespace().flat_map(|word| {
+        word.chars().collect::<Vec<_>>()
+            .chunks(width)
+            .map(|c| c.iter().collect::<String>())
+            .collect::<Vec<_>>()
+    });
     let mut lines = Vec::new();
     let mut line = String::new();
-    for word in text.split_whitespace() {
+    for chunk in chunks {
         if line.is_empty() {
-            line = word.to_string();
-        } else if line.chars().count() + 1 + word.chars().count() <= width {
+            line = chunk;
+        } else if line.chars().count() + 1 + chunk.chars().count() <= width {
             line.push(' ');
-            line.push_str(word);
+            line.push_str(&chunk);
         } else {
             lines.push(std::mem::take(&mut line));
-            line = word.to_string();
+            line = chunk;
         }
     }
     if !line.is_empty() {

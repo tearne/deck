@@ -38,6 +38,7 @@ mod deck;
 mod error_reports;
 mod frame_stats;
 mod library;
+mod messages;
 mod playlist;
 mod render;
 mod tags;
@@ -50,15 +51,16 @@ use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
     anchor_beat_grid_to_cue, apply_offset_step, cache_entry_for_deck, compute_spectrum,
-    compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, NudgeMode, Notification, NotificationStyle,
-    NOTIFICATION_TIMEOUT, PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
+    compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, NudgeMode,
+    PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
 };
 use library::WorkspaceLibrary;
+use messages::{Message, MessageStream, Severity, Source};
 use render::{
     extract_tick_viewport, halfblock_art, info_line_empty, DEFAULT_ZOOM_IDX,
-    info_line_for_deck, notification_line_empty, notification_line_for_deck,
+    info_line_for_deck, title_line_empty, title_line_for_deck,
     overview_empty, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
-    render_keyboard_help, render_shared_tick_row,
+    render_keyboard_help, render_message_history, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
 use tags::{propose_rename_stem, read_cover_art, read_tags_for_editor, read_track_name};
@@ -436,7 +438,7 @@ fn commit_playlist(panel: &PlaylistPanel, decks: &mut [Option<Deck>; 3]) {
     }
 }
 
-/// Clear the target deck and start loading the selection. Returns a notification
+/// Clear the target deck and start loading the selection. Returns a message
 /// on failure (e.g. an unreadable or empty playlist).
 fn apply_browser_load(
     load: BrowserLoad,
@@ -444,7 +446,7 @@ fn apply_browser_load(
     decks: &mut [Option<Deck>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
     workspace: Option<&Path>,
-) -> Option<Notification> {
+) -> Option<Message> {
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
     match load {
@@ -460,16 +462,16 @@ fn open_playlist_on_deck(
     deck: usize,
     workspace: Option<&Path>,
     pending_loads: &mut [Option<PendingLoad>; 3],
-) -> Option<Notification> {
+) -> Option<Message> {
     let mut playlist = match playlist::read_playlist(rpl_path) {
         Ok((playlist, _migrated)) => playlist,
-        Err(e) => return Some(notification(format!("Playlist read failed: {e}"), NotificationStyle::Error)),
+        Err(e) => return Some(Message::new(Source::Playlist, Severity::Error, format!("Playlist read failed: {e}"))),
     };
     let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
     let Some((index, track_path)) = resolved.first_playable else {
-        return Some(notification("No playable tracks in playlist", NotificationStyle::Warning));
+        return Some(Message::new(Source::Playlist, Severity::Warning, "No playable tracks in playlist"));
     };
-    let warning = unplayable_warning(resolved.unplayable, workspace);
+    let warning = unplayable_warning(resolved.unplayable, workspace, deck);
     let mut load = start_load(&track_path);
     load.attach_playlist = Some(ActivePlaylist {
         playlist,
@@ -484,16 +486,16 @@ fn open_playlist_on_deck(
 
 /// The deck's warning for a set carrying tracks it can't play. Without a workspace the
 /// news is that setting one may relocate them; with one set, the count is the news.
-fn unplayable_warning(unplayable: usize, workspace: Option<&Path>) -> Option<Notification> {
+fn unplayable_warning(unplayable: usize, workspace: Option<&Path>, deck: usize) -> Option<Message> {
     if unplayable == 0 { return None; }
-    let message = match workspace {
-        None => "Some tracks are missing — set a workspace (@) to relocate moved files".to_string(),
+    let text = match workspace {
+        None => "Some tracks missing — set a workspace (@) to relocate".to_string(),
         Some(_) => {
             let plural = if unplayable == 1 { "" } else { "s" };
             format!("{unplayable} track{plural} unavailable — open the playlist to see which")
         }
     };
-    Some(notification(message, NotificationStyle::Warning))
+    Some(Message::new(Source::Deck(deck), Severity::Warning, text))
 }
 
 /// Create an empty `.rpl` named `name` in `dir`. Errs if a file already exists.
@@ -536,7 +538,7 @@ fn gather_insert_entries(path: &Path, kind: EntryKind, playlist_dir: &Path) -> R
 }
 
 /// Load entry `index` of the panel's playlist onto `deck`, attaching the playlist at
-/// that index. Returns a notification when the entry can't be resolved.
+/// that index. Returns a message when the entry can't be resolved.
 fn play_panel_entry(
     pp: &PlaylistPanel,
     index: usize,
@@ -544,13 +546,13 @@ fn play_panel_entry(
     decks: &mut [Option<Deck>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
     workspace: Option<&Path>,
-) -> Option<Notification> {
+) -> Option<Message> {
     let Some(entry) = pp.playlist.entries.get(index) else { return None };
     let dir = pp.path.parent().unwrap_or_else(|| Path::new("."));
     let library = WorkspaceLibrary::new(workspace);
     let search = playlist::LibrarySearch::new(&library);
     let playlist::Resolution::Found { path, .. } = playlist::resolve(entry, dir, &search) else {
-        return Some(notification("That entry is unavailable", NotificationStyle::Warning));
+        return Some(Message::new(Source::Playlist, Severity::Warning, "That entry is unavailable"));
     };
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
@@ -818,27 +820,25 @@ fn build_deck(
 }
 
 /// Move `source` into `dest_dir`. Audio already decoded in memory is unaffected.
-/// Returns the outcome notification and, on success, the file's new path.
-fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Notification, Option<PathBuf>) {
+/// Returns the outcome message and, on success, the file's new path.
+fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Message, Option<PathBuf>) {
+    let files = |severity, text: String| Message::new(Source::Files, severity, text);
     let Some(filename) = source.file_name() else {
-        return (notification("File has no name", NotificationStyle::Error), None);
+        return (files(Severity::Error, "File has no name".into()), None);
     };
     let destination = dest_dir.join(filename);
     if destination == source {
-        return (notification("Already in that directory", NotificationStyle::Warning), None);
+        return (files(Severity::Warning, "Already in that directory".into()), None);
     }
     if destination.exists() {
-        return (
-            notification(format!("A file named {} already exists there", filename.to_string_lossy()), NotificationStyle::Error),
-            None,
-        );
+        return (files(Severity::Error, format!("A file named {} already exists there", filename.to_string_lossy())), None);
     }
     match std::fs::rename(source, &destination) {
-        Ok(()) => (notification(format!("Moved to {}", dest_dir.display()), NotificationStyle::Success), Some(destination)),
+        Ok(()) => (files(Severity::Success, format!("Moved to {}", dest_dir.display())), Some(destination)),
         // EXDEV: rename can't cross filesystems, and a copy-then-delete fallback
         // would need progress and interruption handling out of proportion here.
-        Err(e) if e.raw_os_error() == Some(18) => (notification("Can't move across filesystems", NotificationStyle::Error), None),
-        Err(e) => (notification(format!("Move failed: {e}"), NotificationStyle::Error), None),
+        Err(e) if e.raw_os_error() == Some(18) => (files(Severity::Error, "Can't move across filesystems".into()), None),
+        Err(e) => (files(Severity::Error, format!("Move failed: {e}")), None),
     }
 }
 
@@ -856,10 +856,6 @@ fn sync_deck_path(decks: &mut [Option<Deck>; 3], old_path: &Path, new_path: &Pat
             }
         }
     }
-}
-
-fn notification(message: impl Into<String>, style: NotificationStyle) -> Notification {
-    Notification { message: message.into(), style, expires: Instant::now() + NOTIFICATION_TIMEOUT }
 }
 
 /// The file's content-identity hash, or the reason it can't be computed.
@@ -1038,12 +1034,12 @@ fn default_target_deck(decks: &[Option<Deck>; 3], selected: usize) -> usize {
 
 /// One key for the standalone tag editor. Saving writes tags (and renames on a
 /// stem change) to the editor's own file, syncs any deck loaded from it, refreshes
-/// the browser if open, and reports through the global notification.
+/// the browser if open, and reports through the message stream.
 fn handle_tag_editor_key(
     tag_editor: &mut Option<TagEditorState>,
     decks: &mut [Option<Deck>; 3],
     browser_state: &mut Option<BrowserState>,
-    global_notification: &mut Option<Notification>,
+    stream: &mut MessageStream,
     compliance_cache: &mut HashMap<PathBuf, bool>,
     key: crossterm::event::KeyEvent,
 ) -> bool {
@@ -1085,39 +1081,35 @@ fn handle_tag_editor_key(
                 compliance_cache.remove(&target);
                 match write_tags_verified(&old, &fields) {
                     Err(e) => {
-                        *global_notification = Some(notification(format!("tag write failed: {e}"), NotificationStyle::Error));
+                        stream.emit(Message::new(Source::Tags, Severity::Error, format!("tag write failed: {e}")));
                         false
                     }
                     Ok(incident) => {
                         let saved = if needs_rename {
                             match std::fs::rename(&old, &target) {
                                 Err(e) => {
-                                    *global_notification = Some(notification(format!("rename failed: {e}"), NotificationStyle::Error));
+                                    stream.emit(Message::new(Source::Tags, Severity::Error, format!("rename failed: {e}")));
                                     false
                                 }
                                 Ok(()) => {
                                     sync_deck_path(decks, &old, &target, Some(&name));
                                     if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
-                                    *global_notification = Some(notification(format!("\u{2192} {stem}"), NotificationStyle::Success));
+                                    stream.emit(Message::new(Source::Tags, Severity::Success, format!("\u{2192} {stem}")));
                                     true
                                 }
                             }
                         } else {
                             sync_deck_path(decks, &old, &old, Some(&name));
-                            *global_notification = Some(notification("tags saved", NotificationStyle::Info));
+                            stream.emit(Message::new(Source::Tags, Severity::Info, "tags saved"));
                             true
                         };
-                        // A changed identity is a critical alert. Show it in the
-                        // browser header (near the eyes) with a long timeout when the
-                        // browser is open, else fall back to the global notification.
+                        // A changed identity is a critical alert — held on screen far
+                        // longer than the usual display time.
                         if let Some(dir) = incident {
-                            let msg = format!("⚠ IDENTITY CHANGED by tag edit — files preserved in {}", dir.display());
-                            let expiry = Instant::now() + Duration::from_secs(30);
-                            if let Some(bs) = browser_state.as_mut() {
-                                bs.alert = Some((msg, expiry));
-                            } else {
-                                *global_notification = Some(Notification { message: msg, style: NotificationStyle::Error, expires: expiry });
-                            }
+                            stream.emit_showing_for(
+                                Message::new(Source::Tags, Severity::Error, format!("⚠ IDENTITY CHANGED by tag edit — files preserved in {}", dir.display())),
+                                Duration::from_secs(30),
+                            );
                         }
                         saved
                     }
@@ -1189,22 +1181,17 @@ fn tui_loop(
     }
     let (keymap, display_cfg, config_notice) = load_config(use_local_config);
     let mut target_fps: u32 = display_cfg.target_fps;
-    let mut global_notification: Option<Notification> = None;
+    let mut stream = MessageStream::new();
     if let Some(msg) = config_notice {
-        global_notification = Some(Notification {
-            message: msg,
-            style: NotificationStyle::Success,
-            expires: Instant::now() + NOTIFICATION_TIMEOUT,
-        });
+        stream.emit(Message::new(Source::App, Severity::Success, msg));
     }
     let mut decks: [Option<Deck>; 3] = [None, None, None];
     let mut pending_loads: [Option<PendingLoad>; 3] = [initial_load, None, None];
-    if pending_loads[0].is_none() && global_notification.is_none() {
-        global_notification = Some(Notification {
-            message: "No track loaded — press z to open the file browser".to_string(),
-            style: NotificationStyle::Info,
-            expires: Instant::now() + Duration::from_secs(60),
-        });
+    if pending_loads[0].is_none() && stream.showing().is_none() {
+        stream.emit_showing_for(
+            Message::new(Source::App, Severity::Info, "No track loaded — press z to open the file browser"),
+            Duration::from_secs(60),
+        );
     }
     const DET_MIN: u16 = 3;
     let mut audio_latency_ms: i64 = ((session.get_latency() as f64 / 10.0).round() as i64 * 10).clamp(0, 250);
@@ -1221,6 +1208,10 @@ fn tui_loop(
     let mut fps_sample_frames: u32 = 0;
     let mut fps_display: (u32, u32, u32) = (0, 0, target_fps); // (current, budget, cap)
     let mut help_open = false;
+    let mut history_open = false;
+    // Lines scrolled back from the newest message while the history is open.
+    let mut history_scroll: usize = 0;
+    let utc_offset_secs = messages::local_utc_offset_secs();
     // The tag editor is a standalone overlay (may sit over the browser or the
     // player), not attached to a deck.
     let mut tag_editor: Option<TagEditorState> = None;
@@ -1311,10 +1302,6 @@ fn tui_loop(
         let elapsed = elapsed_uncapped.min(col_secs * 4.0);
         last_render = frame_start;
 
-        // Expire global notification.
-        if global_notification.as_ref().map_or(false, |n| frame_start >= n.expires) {
-            global_notification = None;
-        }
         track_data.flush_if_idle();
         session.flush_if_idle();
         // Complete any pending loads.
@@ -1333,11 +1320,7 @@ fn tui_loop(
                     }
                 }
                 Ok(Err(e)) => {
-                    global_notification = Some(Notification {
-                        message: format!("Load failed: {e}"),
-                        style: NotificationStyle::Error,
-                        expires: Instant::now() + NOTIFICATION_TIMEOUT,
-                    });
+                    stream.emit(Message::new(Source::Deck(slot), Severity::Error, format!("Load failed: {e}")));
                     pending_loads[slot] = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1348,7 +1331,7 @@ fn tui_loop(
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         let service_start = Instant::now();
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, vinyl_mode);
+            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, vinyl_mode, &mut stream);
         }
         let service_dur = service_start.elapsed();
 
@@ -1502,7 +1485,7 @@ fn tui_loop(
             const OV_MIN:  u16 = 2;
             let det_max = detail_height as u16;
             let ih = inner.height;
-            let fixed = 10_u16; // global + detail-info + shared-tick×2 + notif×3 + info×3
+            let fixed = 10_u16; // global + detail-info + shared-tick×2 + title×3 + info×3
 
             // Cap detail_height to what the current terminal can actually display,
             // so HeightIncrease never outruns the screen.
@@ -1555,13 +1538,13 @@ fn tui_loop(
                 take_consume(&mut rem, effective_det_h),  // 4:  detail B
                 take(&mut rem, 1),                       // 5:  shared tick row B/C
                 take_consume(&mut rem, effective_det_h),  // 6:  detail C
-                take(&mut rem, 1),                       // 7:  notif A
+                take(&mut rem, 1),                       // 7:  title A
                 take(&mut rem, 1),                       // 8:  info A
                 take_consume(&mut rem, effective_ov_h),   // 9:  overview A
-                take(&mut rem, 1),                       // 10: notif B
+                take(&mut rem, 1),                       // 10: title B
                 take(&mut rem, 1),                       // 11: info B
                 take_consume(&mut rem, effective_ov_h),   // 12: overview B
-                take(&mut rem, 1),                       // 13: notif C
+                take(&mut rem, 1),                       // 13: title C
                 take(&mut rem, 1),                       // 14: info C
                 take_consume(&mut rem, effective_ov_h),   // 15: overview C
                 rem,                                     // 16: spacer (leftover)
@@ -1573,9 +1556,9 @@ fn tui_loop(
                 .split(inner);
             let (area_detail_info, area_detail_a, area_tick_ab,
                  area_detail_b, area_tick_bc, area_detail_c,
-                 area_notif_a, area_info_a, area_overview_a,
-                 area_notif_b, area_info_b, area_overview_b,
-                 area_notif_c, area_info_c, area_overview_c,
+                 area_title_a, area_info_a, area_overview_a,
+                 area_title_b, area_info_b, area_overview_b,
+                 area_title_c, area_info_c, area_overview_c,
                  area_global) = (c[1], c[2], c[3], c[4], c[5], c[6],
                                  c[7], c[8], c[9], c[10], c[11], c[12],
                                  c[13], c[14], c[15], c[0]);
@@ -1595,11 +1578,11 @@ fn tui_loop(
             // Suspended while the browser is open.
             if !browser_open {
                 let detail_area   = [area_detail_a, area_detail_b, area_detail_c][selected_deck];
-                let notif_area    = [area_notif_a, area_notif_b, area_notif_c][selected_deck];
+                let title_area    = [area_title_a, area_title_b, area_title_c][selected_deck];
                 let info_area     = [area_info_a, area_info_b, area_info_c][selected_deck];
                 let overview_area = [area_overview_a, area_overview_b, area_overview_c][selected_deck];
-                let strip_top    = notif_area.y;
-                let strip_bottom = (notif_area.y + notif_area.height)
+                let strip_top    = title_area.y;
+                let strip_bottom = (title_area.y + title_area.height)
                     .max(info_area.y + info_area.height)
                     .max(overview_area.y + overview_area.height);
                 let bar_style = Style::default().fg(Color::Yellow);
@@ -1644,7 +1627,7 @@ fn tui_loop(
             }
 
             let label_style = Style::default().fg(Color::Rgb(40, 60, 100));
-            let notif_bg    = Style::default().bg(Color::Rgb(20, 20, 38));
+            let bar_bg    = Style::default().bg(Color::Rgb(20, 20, 38));
 
             // Extract tick viewport slices for both shared tick rows.
             let tick_w = area_tick_ab.width as usize;
@@ -1661,11 +1644,11 @@ fn tui_loop(
 
             // ---- Deck 1 ----
             if let (Some(deck), Some(rs)) = (&mut d0, &render[0]) {
-                let content = notification_line_for_deck(deck, area_notif_a.width.saturating_sub(2) as usize, vinyl_mode);
+                let content = title_line_for_deck(deck, area_title_a.width.saturating_sub(2) as usize, vinyl_mode);
                 let num1_style = if selected_deck == 0 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_a);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_a);
                 let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_a.width, vinyl_mode);
                 frame.render_widget(Paragraph::new(info), area_info_a);
                 deck.display.overview_rect = area_overview_a;
@@ -1680,9 +1663,9 @@ fn tui_loop(
                 if let Some(ref s) = loading_label[0] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
                 } else {
-                    spans.extend(notification_line_empty().spans);
+                    spans.extend(title_line_empty().spans);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_a);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_a);
                 frame.render_widget(Paragraph::new(info_line_empty(area_info_a.width)), area_info_a);
                 frame.render_widget(Paragraph::new(overview_empty(area_overview_a, 0)), area_overview_a);
                 render_detail_empty(frame, area_detail_a, 0);
@@ -1690,11 +1673,11 @@ fn tui_loop(
 
             // ---- Deck 2 ----
             if let (Some(deck), Some(rs)) = (&mut d1, &render[1]) {
-                let content = notification_line_for_deck(deck, area_notif_b.width.saturating_sub(2) as usize, vinyl_mode);
+                let content = title_line_for_deck(deck, area_title_b.width.saturating_sub(2) as usize, vinyl_mode);
                 let num2_style = if selected_deck == 1 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_b);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_b);
                 let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_b.width, vinyl_mode);
                 frame.render_widget(Paragraph::new(info), area_info_b);
                 deck.display.overview_rect = area_overview_b;
@@ -1709,9 +1692,9 @@ fn tui_loop(
                 if let Some(ref s) = loading_label[1] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
                 } else {
-                    spans.extend(notification_line_empty().spans);
+                    spans.extend(title_line_empty().spans);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_b);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_b);
                 frame.render_widget(Paragraph::new(info_line_empty(area_info_b.width)), area_info_b);
                 frame.render_widget(Paragraph::new(overview_empty(area_overview_b, 1)), area_overview_b);
                 render_detail_empty(frame, area_detail_b, 1);
@@ -1719,11 +1702,11 @@ fn tui_loop(
 
             // ---- Deck 3 ----
             if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
-                let content = notification_line_for_deck(deck, area_notif_c.width.saturating_sub(2) as usize, vinyl_mode);
+                let content = title_line_for_deck(deck, area_title_c.width.saturating_sub(2) as usize, vinyl_mode);
                 let num3_style = if selected_deck == 2 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
                 let mut spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
                 spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_c);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_c);
                 let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_c.width, vinyl_mode);
                 frame.render_widget(Paragraph::new(info), area_info_c);
                 deck.display.overview_rect = area_overview_c;
@@ -1742,9 +1725,9 @@ fn tui_loop(
                 if let Some(ref s) = loading_label[2] {
                     spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
                 } else {
-                    spans.extend(notification_line_empty().spans);
+                    spans.extend(title_line_empty().spans);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(notif_bg), area_notif_c);
+                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_c);
                 frame.render_widget(Paragraph::new(info_line_empty(area_info_c.width)), area_info_c);
                 frame.render_widget(Paragraph::new(overview_empty(area_overview_c, 2)), area_overview_c);
                 render_detail_empty(frame, area_detail_c, 2);
@@ -1753,9 +1736,10 @@ fn tui_loop(
             // ---- Global status bar ----
             {
                 if pending_quit.map_or(false, |e| Instant::now() > e) { pending_quit = None; }
-                let notification_bar = |msg: &str, expires: Instant, fg: Color, bg: Color, countdown_fg: Color| {
-                    let secs = expires.saturating_duration_since(Instant::now()).as_secs();
-                    let countdown = format!("[{}]", secs);
+                let notification_bar = |msg: &str, expires: Option<Instant>, fg: Color, bg: Color, countdown_fg: Color| {
+                    let countdown = expires.map_or(String::new(), |e| {
+                        format!("[{}]", e.saturating_duration_since(Instant::now()).as_secs())
+                    });
                     let w = area_global.width as usize;
                     let inner = w.saturating_sub(countdown.len());
                     let pad = inner.saturating_sub(msg.len()) / 2;
@@ -1767,24 +1751,22 @@ fn tui_loop(
                     ]);
                     (line, Style::default().bg(bg))
                 };
+                // Severity palette: (text, background, countdown).
+                let severity_colors = |severity| match severity {
+                    Severity::Error   => (Color::Rgb(255, 180, 180), Color::Rgb(100, 20, 20), Color::Rgb(200, 120, 120)),
+                    Severity::Warning => (Color::Rgb(255, 220, 120), Color::Rgb(80, 60, 0),   Color::Rgb(200, 160, 80)),
+                    Severity::Info    => (Color::Rgb(160, 200, 255), Color::Rgb(20, 40, 80),  Color::Rgb(100, 140, 200)),
+                    Severity::Success => (Color::Rgb(140, 230, 160), Color::Rgb(10, 60, 30),  Color::Rgb(80, 170, 100)),
+                };
                 let (global_line, bar_style) = if let Some(quit_expires) = pending_quit {
-                    notification_bar("Track is playing — quit?  [y] quit   [Esc/n] cancel", quit_expires,
+                    notification_bar("Track is playing — quit?  [y] quit   [Esc/n] cancel", Some(quit_expires),
                         Color::Rgb(255, 180, 180), Color::Rgb(100, 20, 20), Color::Rgb(200, 120, 120))
-                } else if let Some(ref n) = global_notification {
-                    match n.style {
-                        NotificationStyle::Error =>
-                            notification_bar(&n.message, n.expires,
-                                Color::Rgb(255, 180, 180), Color::Rgb(100, 20, 20), Color::Rgb(200, 120, 120)),
-                        NotificationStyle::Warning =>
-                            notification_bar(&n.message, n.expires,
-                                Color::Rgb(255, 220, 120), Color::Rgb(80, 60, 0), Color::Rgb(200, 160, 80)),
-                        NotificationStyle::Info =>
-                            notification_bar(&n.message, n.expires,
-                                Color::Rgb(160, 200, 255), Color::Rgb(20, 40, 80), Color::Rgb(100, 140, 200)),
-                        NotificationStyle::Success =>
-                            notification_bar(&n.message, n.expires,
-                                Color::Rgb(140, 230, 160), Color::Rgb(10, 60, 30), Color::Rgb(80, 170, 100)),
-                    }
+                } else if let Some((_, deck)) = browser_load_confirm {
+                    let (fg, bg, cd) = severity_colors(Severity::Error);
+                    notification_bar(&format!("Deck {} is playing — Enter to load, any other key cancels", deck + 1), None, fg, bg, cd)
+                } else if let Some((m, until)) = stream.showing() {
+                    let (fg, bg, cd) = severity_colors(m.severity);
+                    notification_bar(&m.display_text(), Some(until), fg, bg, cd)
                 } else {
                     let version = format!(" {} ", env!("CARGO_PKG_VERSION"));
                     let dir     = format!("  {}", browser_dir.display());
@@ -1795,7 +1777,7 @@ fn tui_loop(
                         Span::styled(format!("{:pad$}", ""), Style::default()),
                         Span::styled(version, Style::default().fg(Color::DarkGray)),
                     ]);
-                    (line, notif_bg)
+                    (line, bar_bg)
                 };
                 frame.render_widget(Paragraph::new(global_line).style(bar_style), area_global);
             }
@@ -1861,6 +1843,12 @@ fn tui_loop(
             // Unified help overlay — drawn on top of art; skipped when browser is open
             if help_open && browser_state.is_none() {
                 render_keyboard_help(frame, c[16]);
+            }
+
+            // Message history overlay — same space and rules as help. Adopt the
+            // renderer's clamped scroll so overscroll doesn't accumulate.
+            if history_open && browser_state.is_none() {
+                history_scroll = render_message_history(frame, c[16], stream.entries(), history_scroll, utc_offset_secs);
             }
 
             // Tag editor overlay — a standalone modal only when the browser is closed
@@ -1941,7 +1929,7 @@ fn tui_loop(
                 // Tag editor — a standalone modal; intercepts all keys while open.
                 if tag_editor.is_some() {
                     if let KeyEventKind::Press = key.kind {
-                        let saved = handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut global_notification, &mut compliance_cache, key);
+                        let saved = handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut stream, &mut compliance_cache, key);
                         if saved {
                             // A fix: advance from the resume anchor next frame.
                             cleanup_advance_to = edit_resume_anchor.take();
@@ -1958,19 +1946,17 @@ fn tui_loop(
                     if key.kind == KeyEventKind::Press {
                         if key.code == KeyCode::Enter {
                             let (load, deck) = browser_load_confirm.take().unwrap();
-                            global_notification = None;
                             if let Some(bs) = browser_state.as_ref() { *browser_dir = bs.cwd.clone(); }
                             session.set_last_browser_path(browser_dir);
                             let workspace = session.workspace().map(|p| p.to_path_buf());
-                            if let Some(n) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
-                                global_notification = Some(n);
+                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                                stream.emit(m);
                             }
                             browser_state = None;
                             preview_output = None;
                         } else {
                             // Any other key cancels — no wedge, and it matches the prompt.
                             browser_load_confirm = None;
-                            global_notification = None;
                         }
                     }
                     continue;
@@ -2011,8 +1997,8 @@ fn tui_loop(
                                 // one (it can't be played), or nudge for a workspace on an unavailable one.
                                 KeyCode::Enter => match pp.status_at(pp.cursor) {
                                     EntryStatus::Found => {
-                                        if let Some(n) = play_panel_entry(pp, pp.cursor, target_deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
-                                            global_notification = Some(n);
+                                        if let Some(m) = play_panel_entry(pp, pp.cursor, target_deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                                            stream.emit(m);
                                         }
                                     }
                                     EntryStatus::NeedsConfirmation => {
@@ -2025,7 +2011,7 @@ fn tui_loop(
                                     }
                                     EntryStatus::Unavailable => {
                                         if workspace.is_none() {
-                                            global_notification = Some(notification("Set a workspace (@) to find candidates for missing tracks", NotificationStyle::Warning));
+                                            stream.emit(Message::new(Source::Playlist, Severity::Warning, "Set a workspace (@) to find candidates for missing tracks"));
                                         }
                                     }
                                 },
@@ -2058,13 +2044,13 @@ fn tui_loop(
                                                     Ok(()) => {
                                                         commit_playlist(&new_pp, &mut decks);
                                                         new_pp.recompute_status(workspace.as_deref(), false);
-                                                        global_notification = Some(notification("Track re-linked", NotificationStyle::Success));
+                                                        stream.emit(Message::new(Source::Playlist, Severity::Success, "Track re-linked"));
                                                         transition = Some(Panel::Browse(new_pp));
                                                     }
-                                                    Err(e) => global_notification = Some(notification(format!("re-link failed: {e:?}"), NotificationStyle::Error)),
+                                                    Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, format!("re-link failed: {e:?}"))),
                                                 }
                                             }
-                                            None => global_notification = Some(notification("couldn't read candidate file", NotificationStyle::Error)),
+                                            None => stream.emit(Message::new(Source::Playlist, Severity::Error, "couldn't read candidate file")),
                                         }
                                     }
                                 }
@@ -2107,7 +2093,7 @@ fn tui_loop(
                                                 pp.recompute_status(workspace.as_deref(), false);
                                             }
                                             Ok(_) => {}
-                                            Err(e) => global_notification = Some(notification(e, NotificationStyle::Error)),
+                                            Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, e)),
                                         }
                                     }
                                     consumed = true;
@@ -2178,7 +2164,7 @@ fn tui_loop(
                         Some(BrowserResult::EditRequested(path)) => {
                             tag_editor = TagEditorState::for_track(&path);
                             if tag_editor.is_none() {
-                                global_notification = Some(notification("Couldn't read that file's tags", NotificationStyle::Warning));
+                                stream.emit(Message::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
                             }
                             // Cleanup mode: remember the entry below this one so a save
                             // resumes there (stable across the rename), wrapping to top.
@@ -2192,11 +2178,11 @@ fn tui_loop(
                             // Move the carried source file, sync any deck loaded from
                             // it, and stay in the browser (back to Command) refreshed.
                             if let Some(source) = bs.move_source.take() {
-                                let (notif, new_path) = move_file_to_directory(&source, &dir);
+                                let (outcome, new_path) = move_file_to_directory(&source, &dir);
                                 if let Some(ref new_path) = new_path {
                                     sync_deck_path(&mut decks, &source, new_path, None);
                                 }
-                                global_notification = Some(notif);
+                                stream.emit(outcome);
                             }
                             bs.mode = BrowserMode::Command;
                             let _ = bs.refresh();
@@ -2228,15 +2214,16 @@ fn tui_loop(
                             let library = WorkspaceLibrary::new(ws);
                             let search = playlist::LibrarySearch::new(&library);
                             let mut healed = false;
-                            for d in decks.iter_mut().flatten() {
+                            for (slot, d) in decks.iter_mut().enumerate() {
+                                let Some(d) = d else { continue };
                                 let Some(active) = d.playlist.as_mut() else { continue };
                                 let resolved = resolve_playlist_against(&mut active.playlist, &active.path, &search);
                                 active.unplayable = resolved.unplayable;
                                 healed |= resolved.relocated;
                                 // Silent when the heal fixed everything — the badge going
                                 // back to teal is the signal, and the global message covers it.
-                                if let Some(warning) = unplayable_warning(resolved.unplayable, ws) {
-                                    d.active_notification = Some(warning);
+                                if let Some(warning) = unplayable_warning(resolved.unplayable, ws, slot) {
+                                    stream.emit(warning);
                                 }
                             }
                             // Status recomputation heals as it goes, so the panel needs
@@ -2245,7 +2232,7 @@ fn tui_loop(
                                 pp.recompute_status_against(&search, true);
                             }
                             if healed {
-                                global_notification = Some(notification("Relocated moved tracks in open playlists", NotificationStyle::Success));
+                                stream.emit(Message::new(Source::Playlist, Severity::Success, "Relocated moved tracks in open playlists"));
                             }
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
@@ -2259,16 +2246,13 @@ fn tui_loop(
                         session.set_last_browser_path(browser_dir);
                         let playing = decks[deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
                         if playing {
-                            // Defer behind a confirmation; the browser stays open.
+                            // Defer behind a confirmation; the browser stays open. The
+                            // global bar renders the prompt from this pending state.
                             browser_load_confirm = Some((load, deck));
-                            global_notification = Some(notification(
-                                format!("Deck {} is playing — Enter to load, any other key cancels", deck + 1),
-                                NotificationStyle::Error,
-                            ));
                         } else {
                             let workspace = session.workspace().map(|p| p.to_path_buf());
-                            if let Some(n) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
-                                global_notification = Some(n);
+                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                                stream.emit(m);
                             }
                             browser_state = None;
                             preview_output = None;
@@ -2280,7 +2264,7 @@ fn tui_loop(
                             Ok(path) => if let Some(bs) = browser_state.as_mut() {
                                 let _ = bs.go_to(dir.clone(), Some(&path), format!("new playlist: {name}"));
                             },
-                            Err(e) => global_notification = Some(notification(e, NotificationStyle::Error)),
+                            Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, e)),
                         }
                     }
                     continue; // block all player key handling while browser is open
@@ -2313,11 +2297,7 @@ fn tui_loop(
                             })
                             .unwrap_or(NudgeMode::Jump);
                         if new_mode == NudgeMode::Warp && !release_events_supported {
-                            global_notification = Some(Notification {
-                                message: "Warp nudge unavailable — terminal can't report key releases".to_string(),
-                                style: NotificationStyle::Error,
-                                expires: Instant::now() + NOTIFICATION_TIMEOUT,
-                            });
+                            stream.emit(Message::new(Source::App, Severity::Error, "Warp nudge unavailable — terminal can't report key releases"));
                         } else {
                             for slot in 0..3 {
                                 if let Some(ref mut d) = decks[slot] {
@@ -2458,6 +2438,23 @@ fn tui_loop(
                         help_open = false;
                         continue 'tui;
                     }
+                    // Message history intercepts its scroll and close keys; the
+                    // rest fall through to normal handling.
+                    if history_open {
+                        match key.code {
+                            KeyCode::Esc => { history_open = false; continue 'tui; }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                // The renderer clamps to the wrapped line count on draw.
+                                history_scroll += 1;
+                                continue 'tui;
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                history_scroll = history_scroll.saturating_sub(1);
+                                continue 'tui;
+                            }
+                            _ => {}
+                        }
+                    }
                     // Quit confirmation intercept — y/Enter confirms, anything else cancels.
                     if pending_quit.is_some() {
                         pending_quit = None;
@@ -2477,9 +2474,9 @@ fn tui_loop(
                         }
                         continue 'tui;
                     }
-                    // Esc dismisses any active global notification.
-                    if global_notification.is_some() && key.code == KeyCode::Esc {
-                        global_notification = None;
+                    // Esc dismisses the message on the global bar (it stays in the log).
+                    if stream.showing().is_some() && key.code == KeyCode::Esc {
+                        stream.dismiss();
                         continue 'tui;
                     }
                     // BPM confirmation intercept — check both decks.
@@ -2516,7 +2513,7 @@ fn tui_loop(
                                     KeyCode::Char('y') => {
                                         tag_editor = TagEditorState::for_track(&d.path);
                                         if tag_editor.is_none() {
-                                            global_notification = Some(notification("Couldn't read that file's tags", NotificationStyle::Warning));
+                                            stream.emit(Message::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
                                         }
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
@@ -2786,7 +2783,11 @@ fn tui_loop(
                         }
                         }
                     }
-                    Some(Action::Help)            => { help_open = !help_open; }
+                    Some(Action::Help)            => { help_open = !help_open; history_open = false; }
+                    Some(Action::MessageHistory)  => {
+                        history_open = !history_open;
+                        if history_open { help_open = false; history_scroll = 0; }
+                    }
                     Some(Action::VinylModeToggle) => {
                         vinyl_mode = !vinyl_mode;
                         for slot in 0..3 {
@@ -3104,6 +3105,7 @@ fn service_deck_frame(
     track_data: &mut TrackDatabase,
     audio_latency_ms: i64,
     vinyl_mode: bool,
+    stream: &mut MessageStream,
 ) {
     let Some(ref mut d) = decks[slot] else { return; };
 
@@ -3116,11 +3118,6 @@ fn service_deck_frame(
         }
     }
 
-    // Expire per-deck active notification.
-    if d.active_notification.as_ref().map_or(false, |n| Instant::now() >= n.expires) {
-        d.active_notification = None;
-    }
-
     // Poll BPM detection results.
     if let Ok((hash, new_bpm, new_offset, is_fresh)) = d.tempo.bpm_rx.try_recv() {
         if !is_fresh || !d.tempo.bpm_established {
@@ -3131,15 +3128,12 @@ fn service_deck_frame(
             if hash.is_empty() {
                 // Unhashable track (content identity unavailable): it plays, but persists
                 // nothing and can't be referenced by a playlist. The load thread already
-                // recorded an error report; warn in this deck's notification row.
+                // recorded an error report; warn through the message stream.
                 d.cue_sample = None;
                 d.tempo.offset_established = false;
                 d.mixer.gain_db = 0;
                 d.audio.gain_linear.store(1.0f32.to_bits(), Ordering::Relaxed);
-                d.active_notification = Some(notification(
-                    "Content identity unavailable — not saved, unusable in playlists",
-                    NotificationStyle::Error,
-                ));
+                stream.emit(Message::new(Source::Deck(slot), Severity::Error, "Content identity unavailable — not saved, unusable in playlists"));
                 d.tempo.analysis_hash = None;
             } else {
                 // Restore cue_sample, offset_established, and gain_db from the track database if present.

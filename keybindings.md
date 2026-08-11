@@ -40,6 +40,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `quit` | `esc` | Quit (confirmation only while a deck is playing) |
 | `help` | `?` | Toggle keyboard help overlay |
+| `message_history` | `N` | Toggle message history overlay (k/j scroll, Esc close) |
 | `vinyl_mode_toggle` | `` ` `` | Toggle vinyl/beat mode |
 | `nudge_mode_toggle` | `¬` | Toggle nudge jump/warp |
 | `zoom_in` | `-` | Zoom in |
