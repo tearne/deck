@@ -57,9 +57,10 @@ use deck::{
 use library::WorkspaceLibrary;
 use messages::{Message, MessageStream, Severity, Source};
 use render::{
-    extract_tick_viewport, halfblock_art, info_line_empty, DEFAULT_ZOOM_IDX,
-    info_line_for_deck, title_line_empty, title_line_for_deck,
-    overview_empty, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
+    extract_tick_viewport, halfblock_art, DEFAULT_ZOOM_IDX,
+    bottom_transient_line, countdown_prompt_line, overlay_bottom_left, overlay_bottom_right, overlay_top_left,
+    overview_empty, overview_title_line, readout_corner_line, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
+    title_empty_span,
     render_keyboard_help, render_message_history, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
@@ -1510,11 +1511,13 @@ fn tui_loop(
             // Row heights are pre-computed and sum exactly to inner.height so the
             // cassowary solver never receives an infeasible system and proportionally
             // shrinks things it shouldn't.
-            const OV_MAX:  u16 = 3;
+            // The overview is the deck's status surface: its top and bottom rows
+            // carry the corner overlays, so the max buys clear waveform between them.
+            const OV_MAX:  u16 = 4;
             const OV_MIN:  u16 = 2;
             let det_max = detail_height as u16;
             let ih = inner.height;
-            let fixed = 10_u16; // global + detail-info + shared-tick×2 + title×3 + info×3
+            let fixed = 4_u16; // global + detail-info + shared-tick×2
 
             // Cap detail_height to what the current terminal can actually display,
             // so HeightIncrease never outruns the screen.
@@ -1567,16 +1570,10 @@ fn tui_loop(
                 take_consume(&mut rem, effective_det_h),  // 4:  detail B
                 take(&mut rem, 1),                       // 5:  shared tick row B/C
                 take_consume(&mut rem, effective_det_h),  // 6:  detail C
-                take(&mut rem, 1),                       // 7:  title A
-                take(&mut rem, 1),                       // 8:  info A
-                take_consume(&mut rem, effective_ov_h),   // 9:  overview A
-                take(&mut rem, 1),                       // 10: title B
-                take(&mut rem, 1),                       // 11: info B
-                take_consume(&mut rem, effective_ov_h),   // 12: overview B
-                take(&mut rem, 1),                       // 13: title C
-                take(&mut rem, 1),                       // 14: info C
-                take_consume(&mut rem, effective_ov_h),   // 15: overview C
-                rem,                                     // 16: spacer (leftover)
+                take_consume(&mut rem, effective_ov_h),   // 7:  overview A
+                take_consume(&mut rem, effective_ov_h),   // 8:  overview B
+                take_consume(&mut rem, effective_ov_h),   // 9:  overview C
+                rem,                                     // 10: spacer (leftover)
             ];
 
             let c = Layout::default()
@@ -1585,12 +1582,9 @@ fn tui_loop(
                 .split(inner);
             let (area_detail_info, area_detail_a, area_tick_ab,
                  area_detail_b, area_tick_bc, area_detail_c,
-                 area_title_a, area_info_a, area_overview_a,
-                 area_title_b, area_info_b, area_overview_b,
-                 area_title_c, area_info_c, area_overview_c,
+                 area_overview_a, area_overview_b, area_overview_c,
                  area_global) = (c[1], c[2], c[3], c[4], c[5], c[6],
-                                 c[7], c[8], c[9], c[10], c[11], c[12],
-                                 c[13], c[14], c[15], c[0]);
+                                 c[7], c[8], c[9], c[0]);
 
             // Update renderer dimensions from layout.
             {
@@ -1603,17 +1597,11 @@ fn tui_loop(
             }
 
             // Active-deck accent bar in the reserved gutter: one segment beside the
-            // deck's detail waveform, one beside its header/info/overview strip.
+            // deck's detail waveform, one beside its overview.
             // Suspended while the browser is open.
             if !browser_open {
                 let detail_area   = [area_detail_a, area_detail_b, area_detail_c][selected_deck];
-                let title_area    = [area_title_a, area_title_b, area_title_c][selected_deck];
-                let info_area     = [area_info_a, area_info_b, area_info_c][selected_deck];
                 let overview_area = [area_overview_a, area_overview_b, area_overview_c][selected_deck];
-                let strip_top    = title_area.y;
-                let strip_bottom = (title_area.y + title_area.height)
-                    .max(info_area.y + info_area.height)
-                    .max(overview_area.y + overview_area.height);
                 let bar_style = Style::default().fg(Color::Yellow);
                 let mut draw_bar = |y: u16, h: u16| {
                     if h == 0 { return; }
@@ -1622,7 +1610,7 @@ fn tui_loop(
                     frame.render_widget(Paragraph::new(lines), rect);
                 };
                 draw_bar(detail_area.y, detail_area.height);
-                draw_bar(strip_top, strip_bottom.saturating_sub(strip_top));
+                draw_bar(overview_area.y, overview_area.height);
             }
 
             // Update tempo and cue state for background buffer rendering.
@@ -1672,94 +1660,97 @@ fn tui_loop(
             render_shared_tick_row(frame, area_tick_bc, &tick_b, &tick_c);
 
             // ---- Deck 1 ----
-            if let (Some(deck), Some(rs)) = (&mut d0, &render[0]) {
-                let content = title_line_for_deck(deck, area_title_a.width.saturating_sub(2) as usize, vinyl_mode);
+            {
                 let num1_style = if selected_deck == 0 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
-                spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_a);
-                let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_a.width, vinyl_mode);
-                frame.render_widget(Paragraph::new(info), area_info_a);
-                deck.display.overview_rect = area_overview_a;
-                refresh_overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                if let Some(ref cached) = deck.display.overview_cache {
-                    frame.render_widget(&cached.paragraph, area_overview_a);
-                }
-                render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
-            } else {
-                let num1_style = if selected_deck == 0 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
-                if let Some(ref s) = loading_label[0] {
-                    spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                let mut title_spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
+                if let (Some(deck), Some(rs)) = (&mut d0, &render[0]) {
+                    deck.display.overview_rect = area_overview_a;
+                    refresh_overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    if let Some(ref cached) = deck.display.overview_cache {
+                        frame.render_widget(&cached.paragraph, area_overview_a);
+                    }
+                    render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    title_spans.extend(overview_title_line(deck).spans);
+                    if let Some(transient) = bottom_transient_line(deck) {
+                        overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
+                    }
+                    let bottom_right = countdown_prompt_line(deck)
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                    overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
                 } else {
-                    spans.extend(title_line_empty().spans);
+                    if let Some(ref s) = loading_label[0] {
+                        title_spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                    } else {
+                        title_spans.push(title_empty_span());
+                    }
+                    frame.render_widget(Paragraph::new(overview_empty(area_overview_a, 0)), area_overview_a);
+                    render_detail_empty(frame, area_detail_a, 0);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_a);
-                frame.render_widget(Paragraph::new(info_line_empty(area_info_a.width)), area_info_a);
-                frame.render_widget(Paragraph::new(overview_empty(area_overview_a, 0)), area_overview_a);
-                render_detail_empty(frame, area_detail_a, 0);
+                overlay_top_left(frame, area_overview_a, Line::from(title_spans), bar_bg);
             }
 
             // ---- Deck 2 ----
-            if let (Some(deck), Some(rs)) = (&mut d1, &render[1]) {
-                let content = title_line_for_deck(deck, area_title_b.width.saturating_sub(2) as usize, vinyl_mode);
+            {
                 let num2_style = if selected_deck == 1 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
-                spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_b);
-                let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_b.width, vinyl_mode);
-                frame.render_widget(Paragraph::new(info), area_info_b);
-                deck.display.overview_rect = area_overview_b;
-                refresh_overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                if let Some(ref cached) = deck.display.overview_cache {
-                    frame.render_widget(&cached.paragraph, area_overview_b);
-                }
-                render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
-            } else {
-                let num2_style = if selected_deck == 1 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
-                if let Some(ref s) = loading_label[1] {
-                    spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                let mut title_spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
+                if let (Some(deck), Some(rs)) = (&mut d1, &render[1]) {
+                    deck.display.overview_rect = area_overview_b;
+                    refresh_overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    if let Some(ref cached) = deck.display.overview_cache {
+                        frame.render_widget(&cached.paragraph, area_overview_b);
+                    }
+                    render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    title_spans.extend(overview_title_line(deck).spans);
+                    if let Some(transient) = bottom_transient_line(deck) {
+                        overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
+                    }
+                    let bottom_right = countdown_prompt_line(deck)
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                    overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
                 } else {
-                    spans.extend(title_line_empty().spans);
+                    if let Some(ref s) = loading_label[1] {
+                        title_spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                    } else {
+                        title_spans.push(title_empty_span());
+                    }
+                    frame.render_widget(Paragraph::new(overview_empty(area_overview_b, 1)), area_overview_b);
+                    render_detail_empty(frame, area_detail_b, 1);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_b);
-                frame.render_widget(Paragraph::new(info_line_empty(area_info_b.width)), area_info_b);
-                frame.render_widget(Paragraph::new(overview_empty(area_overview_b, 1)), area_overview_b);
-                render_detail_empty(frame, area_detail_b, 1);
+                overlay_top_left(frame, area_overview_b, Line::from(title_spans), bar_bg);
             }
 
             // ---- Deck 3 ----
-            if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
-                let content = title_line_for_deck(deck, area_title_c.width.saturating_sub(2) as usize, vinyl_mode);
+            {
                 let num3_style = if selected_deck == 2 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
-                spans.extend(content.spans);
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_c);
-                let info = info_line_for_deck(deck, frame_count, rs.beat_on, rs.spinner_active, label_style, area_info_c.width, vinyl_mode);
-                frame.render_widget(Paragraph::new(info), area_info_c);
-                deck.display.overview_rect = area_overview_c;
-                if deck.loop_state.active {
-                    render_loop_panels(frame, deck, area_overview_c, rs.display_pos_samp, deck.display.palette);
-                } else {
-                    refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                    if let Some(ref cached) = deck.display.overview_cache {
-                        frame.render_widget(&cached.paragraph, area_overview_c);
+                let mut title_spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
+                if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
+                    deck.display.overview_rect = area_overview_c;
+                    if deck.loop_state.active {
+                        render_loop_panels(frame, deck, area_overview_c, rs.display_pos_samp, deck.display.palette);
+                    } else {
+                        refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                        if let Some(ref cached) = deck.display.overview_cache {
+                            frame.render_widget(&cached.paragraph, area_overview_c);
+                        }
                     }
-                }
-                render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
-            } else {
-                let num3_style = if selected_deck == 2 && !browser_open { Style::default().fg(Color::Yellow) } else { label_style };
-                let mut spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
-                if let Some(ref s) = loading_label[2] {
-                    spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                    render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    title_spans.extend(overview_title_line(deck).spans);
+                    if let Some(transient) = bottom_transient_line(deck) {
+                        overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
+                    }
+                    let bottom_right = countdown_prompt_line(deck)
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                    overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
                 } else {
-                    spans.extend(title_line_empty().spans);
+                    if let Some(ref s) = loading_label[2] {
+                        title_spans.push(Span::styled(s.clone(), Style::default().fg(Color::DarkGray)));
+                    } else {
+                        title_spans.push(title_empty_span());
+                    }
+                    frame.render_widget(Paragraph::new(overview_empty(area_overview_c, 2)), area_overview_c);
+                    render_detail_empty(frame, area_detail_c, 2);
                 }
-                frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_bg), area_title_c);
-                frame.render_widget(Paragraph::new(info_line_empty(area_info_c.width)), area_info_c);
-                frame.render_widget(Paragraph::new(overview_empty(area_overview_c, 2)), area_overview_c);
-                render_detail_empty(frame, area_detail_c, 2);
+                overlay_top_left(frame, area_overview_c, Line::from(title_spans), bar_bg);
             }
 
             // ---- Global status bar ----
@@ -1816,8 +1807,8 @@ fn tui_loop(
 
             // ---- Browser + context panel (permanent 70/30 split) ----
             if let Some(ref bs) = browser_state {
-                let area = if c[16].height >= 8 {
-                    c[16]
+                let area = if c[10].height >= 8 {
+                    c[10]
                 } else {
                     frame.render_widget(ratatui::widgets::Clear, inner);
                     inner
@@ -1840,13 +1831,13 @@ fn tui_loop(
                         .find_map(|d| d.playlist.as_ref().filter(|a| a.path == p.path).map(|a| a.index));
                     render::render_panel(frame, cols[1], &panel, &playing_of);
                 }
-            } else if c[16].height >= 3 && art_bright_idx < 2 {
+            } else if c[10].height >= 3 && art_bright_idx < 2 {
                 let brightness = [1.0f32, 0.35, 0.0][art_bright_idx as usize];
                 // 1-row top margin separates art from deck 2 above.
                 let vert = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([Constraint::Length(1), Constraint::Min(0)])
-                    .split(c[16]);
+                    .split(c[10]);
                 let art_row = vert[1];
                 // 1-column gaps between the three panels.
                 let art_areas = Layout::default()
@@ -1874,13 +1865,13 @@ fn tui_loop(
 
             // Unified help overlay — drawn on top of art; skipped when browser is open
             if help_open && browser_state.is_none() {
-                render_keyboard_help(frame, c[16]);
+                render_keyboard_help(frame, c[10]);
             }
 
             // Message history overlay — same space and rules as help. Adopt the
             // renderer's clamped scroll so overscroll doesn't accumulate.
             if history_open && browser_state.is_none() {
-                history_scroll = render_message_history(frame, c[16], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
+                history_scroll = render_message_history(frame, c[10], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
             }
 
             // Tag editor overlay — a standalone modal only when the browser is closed
@@ -3358,12 +3349,12 @@ fn service_deck_frame(
         frame_stats::note_spectrum(spectrum_start.elapsed());
         if chars_due {
             d.spectrum.chars = new_chars;
-            for i in 0..16 { d.spectrum.bg_accum[i] |= new_bg[i]; }
+            for i in 0..deck::SPECTRUM_CHARS { d.spectrum.bg_accum[i] |= new_bg[i]; }
             d.spectrum.bg = d.spectrum.bg_accum;
             d.spectrum.last_update = Some(Instant::now());
         }
         if bg_due {
-            d.spectrum.bg_accum = [false; 16];
+            d.spectrum.bg_accum = [false; deck::SPECTRUM_CHARS];
             d.spectrum.last_bg_update = Some(Instant::now());
         }
     }

@@ -117,9 +117,9 @@ pub(crate) struct DisplayState {
 }
 
 pub(crate) struct SpectrumState {
-    pub(crate) chars: [char; 16],
-    pub(crate) bg: [bool; 16],
-    pub(crate) bg_accum: [bool; 16],
+    pub(crate) chars: [char; SPECTRUM_CHARS],
+    pub(crate) bg: [bool; SPECTRUM_CHARS],
+    pub(crate) bg_accum: [bool; SPECTRUM_CHARS],
     pub(crate) last_update: Option<Instant>,
     pub(crate) last_bg_update: Option<Instant>,
 }
@@ -313,9 +313,9 @@ impl Deck {
                 overview_cache: None,
             },
             spectrum: SpectrumState {
-                chars: ['\u{2800}'; 16],
-                bg: [false; 16],
-                bg_accum: [false; 16],
+                chars: ['\u{2800}'; SPECTRUM_CHARS],
+                bg: [false; SPECTRUM_CHARS],
+                bg_accum: [false; SPECTRUM_CHARS],
                 last_update: None,
                 last_bg_update: None,
             },
@@ -414,14 +414,18 @@ pub(crate) fn apply_offset_step(d: &mut Deck, delta_ms: i64) {
 
 /// Compute 16 braille spectrum characters from mono samples at `pos`.
 /// Uses the Goertzel algorithm on 32 log-spaced bins, 20 Hz – 20 kHz.
-pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filter_offset: i32) -> ([char; 16], [bool; 16]) {
+/// Spectrum analyser width in braille characters (two bins per character).
+pub(crate) const SPECTRUM_CHARS: usize = 16;
+const SPECTRUM_BINS: usize = SPECTRUM_CHARS * 2;
+
+pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filter_offset: i32) -> ([char; SPECTRUM_CHARS], [bool; SPECTRUM_CHARS]) {
     const N: usize = 4096;
     const LEFT_MASKS:  [u8; 5] = [0x00, 0x40, 0x44, 0x46, 0x47];
     const RIGHT_MASKS: [u8; 5] = [0x00, 0x80, 0xA0, 0xB0, 0xB8];
 
-    // 32 log-spaced centre frequencies: 20 Hz … 20 kHz.
-    let freqs: [f64; 32] = std::array::from_fn(|i| {
-        20.0 * (1000.0_f64).powf(i as f64 / 31.0)
+    // Log-spaced centre frequencies: 20 Hz … 20 kHz.
+    let freqs: [f64; SPECTRUM_BINS] = std::array::from_fn(|i| {
+        20.0 * (1000.0_f64).powf(i as f64 / (SPECTRUM_BINS - 1) as f64)
     });
 
     // Hann window coefficients — computed once and reused across all calls.
@@ -450,8 +454,8 @@ pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filte
     };
 
     let sr = sample_rate as f64;
-    let mut heights = [0usize; 32];
-    let mut raw_heights = [0.0f32; 32];
+    let mut heights = [0usize; SPECTRUM_BINS];
+    let mut raw_heights = [0.0f32; SPECTRUM_BINS];
 
     for (k, &f) in freqs.iter().enumerate() {
         let coeff = 2.0 * (2.0 * std::f64::consts::PI * f / sr).cos();
@@ -481,12 +485,12 @@ pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filte
 
     // Background active when raw energy exceeds 1/4 of the single-dot threshold (0.5).
     const BG_THRESH: f32 = 0.5 / 4.0;
-    let chars: [char; 16] = std::array::from_fn(|c| {
+    let chars: [char; SPECTRUM_CHARS] = std::array::from_fn(|c| {
         let l = heights[c * 2];
         let r = heights[c * 2 + 1];
         char::from_u32(0x2800 | LEFT_MASKS[l] as u32 | RIGHT_MASKS[r] as u32).unwrap_or(' ')
     });
-    let has_bg: [bool; 16] = std::array::from_fn(|c| {
+    let has_bg: [bool; SPECTRUM_CHARS] = std::array::from_fn(|c| {
         raw_heights[c * 2] > BG_THRESH || raw_heights[c * 2 + 1] > BG_THRESH
     });
     (chars, has_bg)

@@ -604,77 +604,74 @@ impl SharedDetailRenderer {
     }
 }
 
-fn cache_indicator_spans(deck: &Deck, vinyl_mode: bool) -> Vec<Span<'static>> {
-    let lit  = Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.45));
-    let dim  = Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.18));
-    let dark = Style::default().fg(Color::Rgb(50, 50, 50));
-    let indicator_style = |active: bool| match (active, vinyl_mode) {
-        (true,  false) => lit,
-        (true,  true)  => dim,
-        (false, _)     => dark,
-    };
-    vec![
-        Span::styled("[BPM]",  indicator_style(deck.tempo.bpm_established)),
-        Span::styled("[Tick]", indicator_style(deck.tempo.offset_established || deck.cue_sample.is_some())),
-        Span::styled("[Cue]",  indicator_style(deck.cue_sample.is_some())),
-    ]
+/// Play state, badge, and track name for the overview's top-left overlay; a
+/// lingering rename offer marks the title it concerns with an amber ⚠.
+pub(crate) fn overview_title_line(deck: &Deck) -> Line<'static> {
+    let play_icon = if deck.audio.player.is_paused() { "⏸" } else { "▶" };
+    let mut spans = vec![Span::styled(format!("{play_icon} "), Style::default().fg(Color::DarkGray))];
+    let (badge, _) = playlist_badge(deck);
+    spans.extend(badge);
+    spans.push(Span::styled(
+        deck.track_name.clone(),
+        Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85)),
+    ));
+    if deck.rename_offer_active() && deck.rename_offer_started.unwrap().elapsed().as_secs() >= 10 {
+        spans.push(Span::styled(" ⚠", Style::default().fg(Color::Rgb(230, 170, 60))));
+    }
+    Line::from(spans)
 }
 
-pub(crate) fn title_line_for_deck(deck: &Deck, content_width: usize, vinyl_mode: bool) -> Line<'static> {
-    let dim = Style::default().fg(Color::DarkGray);
+/// A countdown prompt that momentarily displaces the meters corner: the BPM
+/// confirmation, or the rename offer's active phase. The meters return when
+/// the prompt resolves.
+pub(crate) fn countdown_prompt_line(deck: &Deck) -> Option<Line<'static>> {
     if let Some((_, p_bpm, _, received_at)) = &deck.tempo.pending_bpm {
         let secs_left = 15u64.saturating_sub(received_at.elapsed().as_secs());
         let yellow = Style::default().fg(Color::Yellow);
-        let countdown_style = if secs_left <= 5 {
-            Style::default().fg(Color::Red)
-        } else {
-            yellow
-        };
-        Line::from(vec![
+        let countdown_style = if secs_left <= 5 { Style::default().fg(Color::Red) } else { yellow };
+        return Some(Line::from(vec![
             Span::styled(format!("BPM detected: {p_bpm:.2}  [y] accept  [n] reject  ("), yellow),
             Span::styled(format!("{secs_left}s"), countdown_style),
             Span::styled(")", yellow),
-        ])
-    } else if deck.rename_offer_active() {
-        let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
-        let (offer, offer_style) = if elapsed < 10 {
-            let secs_left = 10 - elapsed;
-            // Same amber as the browser's non-compliant marker, then fades to grey.
-            (format!("⚠ rename? [y]  ({}s)", secs_left), Style::default().fg(Color::Rgb(230, 170, 60)))
-        } else {
-            ("⚠ rename? [y]".to_string(), dim)
-        };
-        let track_name = deck.track_name.clone();
-        let (badge, badge_w) = playlist_badge(deck);
-        let indicators = cache_indicator_spans(deck, vinyl_mode);
-        let indicators_w = 16; // "[BPM][Tick][Cue]"
-        let left_w  = badge_w + track_name.chars().count();
-        let right_w = offer.chars().count() + 1 + indicators_w; // space + indicators
-        let spacer_w = content_width.saturating_sub(left_w + right_w).max(1);
-        let mut spans = badge;
-        spans.extend([
-            Span::styled(track_name, Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85))),
-            Span::raw(" ".repeat(spacer_w)),
-            Span::styled(offer, offer_style),
-            Span::raw(" "),
-        ]);
-        spans.extend(indicators);
-        Line::from(spans)
-    } else {
-        let track_name = deck.track_name.clone();
-        let (badge, badge_w) = playlist_badge(deck);
-        let indicators = cache_indicator_spans(deck, vinyl_mode);
-        let indicators_w = 16; // "[BPM][Tick][Cue]"
-        let left_w   = badge_w + track_name.chars().count();
-        let spacer_w = content_width.saturating_sub(left_w + indicators_w).max(1);
-        let mut spans = badge;
-        spans.extend([
-            Span::styled(track_name, Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85))),
-            Span::raw(" ".repeat(spacer_w)),
-        ]);
-        spans.extend(indicators);
-        Line::from(spans)
+        ]));
     }
+    if deck.rename_offer_active() {
+        let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
+        if elapsed < 10 {
+            let secs_left = 10 - elapsed;
+            // Same amber as the browser's non-compliant marker.
+            return Some(Line::from(Span::styled(
+                format!("⚠ rename? [y]  ({secs_left}s)"),
+                Style::default().fg(Color::Rgb(230, 170, 60)),
+            )));
+        }
+    }
+    None
+}
+
+/// Overlay `line` on the top-left of `area`, backed by `bg` only behind the
+/// text, so the rest of the row stays waveform.
+pub(crate) fn overlay_top_left(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line<'static>, bg: Style) {
+    if area.height == 0 || area.width == 0 { return; }
+    let w = (line.width() as u16).min(area.width);
+    let rect = ratatui::layout::Rect { x: area.x, y: area.y, width: w, height: 1 };
+    frame.render_widget(Paragraph::new(line).style(bg), rect);
+}
+
+/// As [`overlay_top_left`], anchored to the bottom-left corner.
+pub(crate) fn overlay_bottom_left(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line<'static>, bg: Style) {
+    if area.height == 0 || area.width == 0 { return; }
+    let w = (line.width() as u16).min(area.width);
+    let rect = ratatui::layout::Rect { x: area.x, y: area.y + area.height - 1, width: w, height: 1 };
+    frame.render_widget(Paragraph::new(line).style(bg), rect);
+}
+
+/// As [`overlay_top_left`], anchored to the bottom-right corner.
+pub(crate) fn overlay_bottom_right(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line<'static>, bg: Style) {
+    if area.height == 0 || area.width == 0 { return; }
+    let w = (line.width() as u16).min(area.width);
+    let rect = ratatui::layout::Rect { x: area.x + area.width - w, y: area.y + area.height - 1, width: w, height: 1 };
+    frame.render_widget(Paragraph::new(line).style(bg), rect);
 }
 
 /// The `≡ x/y` position badge shown before the track name when a playlist is
@@ -697,47 +694,26 @@ fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
     }
 }
 
-pub(crate) fn title_line_empty() -> Line<'static> {
-    Line::from(Span::styled(
-        "no track",
-        Style::default().fg(Color::Rgb(60, 60, 60)),
-    ))
+pub(crate) fn title_empty_span() -> Span<'static> {
+    Span::styled("no track", Style::default().fg(Color::Rgb(60, 60, 60)))
 }
 
-pub(crate) fn info_line_for_deck(
+/// Tempo readouts: BPM or percentage, pitch, metronome, grid offset — the
+/// heart of the old info row's left group.
+fn tempo_spans(
     deck: &Deck,
     frame_count: usize,
     beat_on: bool,
     analysing: bool,
-    _label_style: Style,
-    bar_width: u16,
     vinyl_mode: bool,
-) -> Line<'static> {
+) -> Vec<Span<'static>> {
     const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let play_icon = if deck.audio.player.is_paused() { "⏸" } else { "▶" };
-    let nudge_str = match deck.nudge {
-        1  => "  ▶nudge",
-        -1 => "  ◀nudge",
-        _  => "",
-    };
-    let tap_active = !deck.tap.tap_times.is_empty()
-        && deck.tap.last_tap_wall.map_or(false, |t| t.elapsed().as_secs_f64() < 2.0);
-    let tap_flash_on = deck.tap.last_tap_wall
-        .map_or(false, |t| t.elapsed().as_millis() < 150);
-    let tap_str = if tap_active {
-        format!("  tap:{}", deck.tap.tap_times.len())
-    } else {
-        String::new()
-    };
     let dim = Style::default().fg(Color::DarkGray);
     if analysing {
-        return Line::from(vec![
-            Span::styled(format!("{play_icon}  "), dim),
-            Span::styled(
-                format!("[analysing {}]", SPINNER[(frame_count / 6) % SPINNER.len()]),
-                dim,
-            ),
-        ]);
+        return vec![Span::styled(
+            format!("[analysing {}]", SPINNER[(frame_count / 6) % SPINNER.len()]),
+            dim,
+        )];
     }
     // Beat flash requires both vinyl mode off and an established BPM.
     let beat_active = !vinyl_mode && beat_on && deck.tempo.bpm_established;
@@ -749,9 +725,8 @@ pub(crate) fn info_line_for_deck(
     // Percentage display: vinyl mode always; beat mode when no BPM established.
     let show_percentage = vinyl_mode || !deck.tempo.bpm_established;
 
-    // --- Left group ---
     let left_spans: Vec<Span<'static>> = {
-        let mut spans = vec![Span::styled(format!("{play_icon}  "), dim)];
+        let mut spans = Vec::new();
         if show_percentage {
             let pct = if vinyl_mode || !deck.tempo.bpm_established {
                 (deck.tempo.vinyl_speed - 1.0) * 100.0
@@ -782,7 +757,7 @@ pub(crate) fn info_line_for_deck(
                 if deck.metronome_mode {
                     spans.push(Span::styled("\u{266A}", Style::default().fg(Color::Red)));
                 }
-                spans.push(Span::styled(format!("  {:+}ms", deck.tempo.offset_ms), dim));
+                spans.push(Span::styled(format!(" {:+}ms", deck.tempo.offset_ms), dim));
             }
         } else {
             // base_bpm adjusts in 0.01 steps → 2dp; playback bpm adjusts in 0.1 steps → 1dp.
@@ -813,40 +788,31 @@ pub(crate) fn info_line_for_deck(
             if deck.metronome_mode {
                 spans.push(Span::styled("\u{266A}", Style::default().fg(Color::Red)));
             }
-            spans.push(Span::styled(format!("  {:+}ms", deck.tempo.offset_ms), dim));
-        }
-        if !tap_str.is_empty() {
-            if tap_flash_on {
-                let tap_flash_style = Style::default().fg(Color::Yellow).bg(Color::Rgb(60, 50, 0));
-                spans.push(Span::styled(" ", dim));
-                spans.push(Span::styled(format!(" tap:{} ", deck.tap.tap_times.len()), tap_flash_style));
-            } else {
-                spans.push(Span::styled(tap_str.clone(), dim));
-            }
+            spans.push(Span::styled(format!(" {:+}ms", deck.tempo.offset_ms), dim));
         }
         spans
     };
+    left_spans
+}
 
-    // --- Right group ---
-    let mut right_spans: Vec<Span<'static>> = Vec::new();
-    if !nudge_str.is_empty() {
-        right_spans.push(Span::styled(nudge_str.to_string(), dim));
+/// Level, gain, and PFL — the meters segment of the readout line.
+fn meter_spans(deck: &Deck) -> Vec<Span<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if deck.mixer.pfl_level > 0 {
+        spans.push(Span::styled("PFL ", Style::default().fg(Color::Cyan)));
     }
     const LEVEL_BARS: [char; 8] = ['▁','▂','▃','▄','▅','▆','▇','█'];
     let level_idx = ((deck.mixer.volume * 7.0).round() as usize).min(7);
-    let level_char = LEVEL_BARS[level_idx];
     let t = level_idx as f32 / 7.0;
     let level_style = Style::default()
         .fg(Color::Rgb((60.0 + 195.0 * t).round() as u8, (50.0 + 165.0 * t).round() as u8, 0))
         .bg(Color::Rgb((40.0 * t).round() as u8, (33.0 * t).round() as u8, 0));
     let bracket_style = Style::default().fg(Color::Rgb(140, 140, 140));
-    if deck.mixer.pfl_level > 0 {
-        right_spans.push(Span::styled("  PFL", Style::default().fg(Color::Cyan)));
-    }
-    right_spans.push(Span::styled("  level:", dim));
-    right_spans.push(Span::styled("\u{2595}", bracket_style));
-    right_spans.push(Span::styled(level_char.to_string(), level_style));
-    right_spans.push(Span::styled("\u{258F}", bracket_style));
+    spans.push(Span::styled("lvl:", dim));
+    spans.push(Span::styled("\u{2595}", bracket_style));
+    spans.push(Span::styled(LEVEL_BARS[level_idx].to_string(), level_style));
+    spans.push(Span::styled("\u{258F}", bracket_style));
     {
         const GAIN_CHARS: [char; 7] = ['▁','▂','▃','▄','▅','▆','▇'];
         let idx = ((deck.mixer.gain_db as i32 + 12) * 6 / 24).clamp(0, 6) as usize;
@@ -855,63 +821,104 @@ pub(crate) fn info_line_for_deck(
         } else {
             Style::default().fg(Color::Rgb(180, 140, 0))
         };
-        right_spans.push(Span::styled(GAIN_CHARS[idx].to_string(), gain_style));
+        spans.push(Span::styled(GAIN_CHARS[idx].to_string(), gain_style));
     }
-    {
-        let stopband: Option<(bool, usize)> = if deck.mixer.filter_offset != 0 {
-            let n = deck.mixer.filter_offset.unsigned_abs() as usize;
-            let is_lpf = deck.mixer.filter_offset < 0;
-            let cutoff_char = if is_lpf { 16 - n } else { n };
-            Some((is_lpf, cutoff_char))
-        } else {
-            None
-        };
-        right_spans.push(Span::styled("  \u{2595}".to_string(), dim));
-        for i in 0..16 {
-            let ch = deck.spectrum.chars[i].to_string();
-            let in_stopband = stopband.map_or(false, |(is_lpf, cutoff_char)| {
-                if is_lpf { i >= cutoff_char } else { i < cutoff_char }
-            });
-            let style = if in_stopband {
-                if ch != "\u{2800}" {
-                    Style::default().fg(Color::Rgb(120, 100, 0)).bg(Color::Rgb(50, 50, 50))
-                } else {
-                    Style::default().bg(Color::Rgb(50, 50, 50))
-                }
-            } else if ch != "\u{2800}" {
-                Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 33, 0))
-            } else if deck.spectrum.bg[i] {
-                Style::default().bg(Color::Rgb(40, 33, 0))
-            } else {
-                Style::default()
-            };
-            right_spans.push(Span::styled(ch, style));
-        }
-        right_spans.push(Span::styled("\u{258F}".to_string(), dim));
-        // dB/oct indicator: fixed 2-char field — visible when filter active, blank otherwise.
-        let slope_str = if deck.mixer.filter_offset != 0 { match deck.mixer.filter_poles { 4 => "24", _ => "12" } } else { "  " };
-        right_spans.push(Span::styled(slope_str, dim));
-    }
-
-    // Spacer: fill gap between left and right groups.
-    let bar_w = bar_width as usize;
-    let left_w: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
-    let right_w: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
-    let spacer_w = bar_w.saturating_sub(left_w + right_w).max(1);
-    let mut info_spans = left_spans;
-    info_spans.push(Span::raw(" ".repeat(spacer_w)));
-    info_spans.extend(right_spans);
-    Line::from(info_spans)
+    spans
 }
 
-pub(crate) fn info_line_empty(bar_width: u16) -> Line<'static> {
-    let dim = Style::default().fg(Color::Rgb(60, 60, 60));
-    let left  = Span::styled("⏸  ---  +0ms", dim);
-    let right = Span::styled("zoom:---", dim);
-    let lw = left.content.chars().count();
-    let rw = right.content.chars().count();
-    let spacer = " ".repeat((bar_width as usize).saturating_sub(lw + rw).max(1));
-    Line::from(vec![left, Span::raw(spacer), right])
+/// The analyser zone: bar legend, spectrum, filter shading, and slope field.
+/// The filter's 16 steps map onto the character count (ceiling, so the first
+/// step always shades something).
+fn analyser_spans(deck: &Deck, overview_width: usize, analysing: bool) -> Vec<Span<'static>> {
+    use crate::deck::SPECTRUM_CHARS;
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if !analysing {
+        let (_, _, bars_per_tick) = bar_tick_cols(deck.tempo.base_bpm as f64, deck.tempo.offset_ms, deck.total_duration, overview_width);
+        spans.push(Span::styled(format!("{bars_per_tick}br"), dim));
+    }
+    let stopband: Option<(bool, usize)> = if deck.mixer.filter_offset != 0 {
+        let n = deck.mixer.filter_offset.unsigned_abs() as usize;
+        let scaled = (n * SPECTRUM_CHARS).div_ceil(16);
+        let is_lpf = deck.mixer.filter_offset < 0;
+        let cutoff_char = if is_lpf { SPECTRUM_CHARS - scaled } else { scaled };
+        Some((is_lpf, cutoff_char))
+    } else {
+        None
+    };
+    spans.push(Span::styled("\u{2595}".to_string(), dim));
+    for i in 0..SPECTRUM_CHARS {
+        let ch = deck.spectrum.chars[i].to_string();
+        let in_stopband = stopband.map_or(false, |(is_lpf, cutoff_char)| {
+            if is_lpf { i >= cutoff_char } else { i < cutoff_char }
+        });
+        let style = if in_stopband {
+            if ch != "\u{2800}" {
+                Style::default().fg(Color::Rgb(120, 100, 0)).bg(Color::Rgb(50, 50, 50))
+            } else {
+                Style::default().bg(Color::Rgb(50, 50, 50))
+            }
+        } else if ch != "\u{2800}" {
+            Style::default().fg(Color::Yellow).bg(Color::Rgb(40, 33, 0))
+        } else if deck.spectrum.bg[i] {
+            Style::default().bg(Color::Rgb(40, 33, 0))
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(ch, style));
+    }
+    spans.push(Span::styled("\u{258F}".to_string(), dim));
+    // dB/oct indicator — present only while the filter is active.
+    let slope_str = if deck.mixer.filter_offset != 0 { match deck.mixer.filter_poles { 4 => "24", _ => "12" } } else { "" };
+    spans.push(Span::styled(slope_str, dim));
+    spans
+}
+
+/// Bottom-right corner: the deck's whole readout in one `│`-separated line —
+/// tempo group, meters, analyser. Anchored bottom-right so a narrow terminal
+/// costs waveform, never the title or the stats; a countdown prompt displaces
+/// it for its seconds-long life.
+pub(crate) fn readout_corner_line(
+    deck: &Deck,
+    overview_width: usize,
+    frame_count: usize,
+    beat_on: bool,
+    analysing: bool,
+    vinyl_mode: bool,
+) -> Line<'static> {
+    let sep = Span::styled("│", Style::default().fg(Color::Rgb(70, 70, 90)));
+    let mut spans = tempo_spans(deck, frame_count, beat_on, analysing, vinyl_mode);
+    spans.push(sep.clone());
+    spans.extend(meter_spans(deck));
+    spans.push(sep);
+    spans.extend(analyser_spans(deck, overview_width, analysing));
+    Line::from(spans)
+}
+
+/// Bottom-left corner, transient content only: the tap counter while tapping
+/// and the nudge arrows while nudging. `None` in every steady state, so the
+/// waveform stays clear.
+pub(crate) fn bottom_transient_line(deck: &Deck) -> Option<Line<'static>> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    match deck.nudge {
+        1  => spans.push(Span::styled("▶nudge", dim)),
+        -1 => spans.push(Span::styled("◀nudge", dim)),
+        _  => {}
+    }
+    let tap_active = !deck.tap.tap_times.is_empty()
+        && deck.tap.last_tap_wall.map_or(false, |t| t.elapsed().as_secs_f64() < 2.0);
+    if tap_active {
+        if !spans.is_empty() { spans.push(Span::raw("  ")); }
+        let tap_flash_on = deck.tap.last_tap_wall.map_or(false, |t| t.elapsed().as_millis() < 150);
+        let style = if tap_flash_on {
+            Style::default().fg(Color::Yellow).bg(Color::Rgb(60, 50, 0))
+        } else {
+            dim
+        };
+        spans.push(Span::styled(format!("tap:{}", deck.tap.tap_times.len()), style));
+    }
+    if spans.is_empty() { None } else { Some(Line::from(spans)) }
 }
 
 /// Rebuild the deck's overview if any input it depends on has changed, storing the
@@ -995,17 +1002,11 @@ fn overview_lines(
     let ov_bass: Vec<f32> = (0..overview_width)
         .map(|c| (ov_bass_hires[c * 2] + ov_bass_hires[c * 2 + 1]) / 2.0)
         .collect();
-    let (bar_cols, bar_times, bars_per_tick): (Vec<usize>, Vec<f64>, u32) = if !analysing {
+    let (bar_cols, bar_times, _bars_per_tick): (Vec<usize>, Vec<f64>, u32) = if !analysing {
         bar_tick_cols(deck.tempo.base_bpm as f64, deck.tempo.offset_ms, deck.total_duration, overview_width)
     } else {
         (Vec::new(), Vec::new(), 4)
     };
-    let legend: String = if !analysing {
-        format!("{} bars", bars_per_tick)
-    } else {
-        String::new()
-    };
-    let legend_start = overview_width.saturating_sub(legend.len());
     let is_bar_col = {
         let mut mask = vec![false; overview_width];
         for &c in &bar_cols { mask[c] = true; }
@@ -1021,10 +1022,7 @@ fn overview_lines(
             let mut run = String::new();
             let mut run_color = Color::Reset;
             for (c, byte) in row.into_iter().enumerate() {
-                let (color, ch) = if r == 0 && c >= legend_start && !legend.is_empty() {
-                    let lch = legend.chars().nth(c - legend_start).unwrap_or(' ');
-                    (Color::DarkGray, lch)
-                } else if c == playhead_col && cue_col == Some(c) {
+                let (color, ch) = if c == playhead_col && cue_col == Some(c) {
                     if r == 0 || r + 1 == overview_height {
                         (Color::Rgb(255, 0, 255), '\u{28FF}')
                     } else {
