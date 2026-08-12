@@ -105,7 +105,7 @@ Application
 
 A loaded track with waveform visualisation and transport controls. Each deck has its own track, playback state, BPM, and audio output.
 
-The waveforms are the primary visual feedback — the DJ reads track structure, position, and phase from them. Three layers: a colour encoding representing frequency content, an overview showing the full track, and a detail view showing the area around the playhead at high zoom.
+The waveforms are the primary visual feedback — the DJ reads track structure, position, and phase from them. Three layers: a colour encoding representing frequency content, an overview showing the full track, and a detail view showing the area around the playhead at high zoom. The strip is nothing but waveform — the deck's title and readouts overlay the overview's corners.
 
 Three deck instances share one conceptual model. The map describes the deck, not each instance.
 
@@ -120,7 +120,7 @@ Three deck instances share one conceptual model. The map describes the deck, not
 
 Each deck is independent, one selected at a time. The selected deck receives all deck-specific input — transport, BPM, cue, nudge, pitch. The mixer controls — level, gain, and filter — are the exception: they address each deck directly, whichever is selected.
 
-The selected deck is marked by a yellow accent bar in the left gutter, beside both its waveform and its strip.
+The selected deck is marked by a yellow accent bar in the left gutter, beside both its detail waveform and its overview.
 
 Two decks can be swapped wholesale — their entire state trades places, and selection follows the content so the operator keeps controlling the same track. The others start empty, loaded by selecting them and opening the browser. Audio latency is a single global value shared across all decks.
 
@@ -143,7 +143,7 @@ Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
 
 [Up](#track-loading)
 
-Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer in the deck's title row — accept it to open the metadata editor, or carry on and the offer fades but lingers. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
+Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer that counts down in the deck's readout corner — accept it to open the metadata editor, or carry on and it shrinks to an amber `⚠` beside the track title until dealt with. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
 
 **See also**
 
@@ -232,9 +232,11 @@ The looked-up colours are emitted as xterm-256 indexed colours rather than truec
 
 The full-track waveform — a miniature map of the whole song. Playhead and cue point shown as vertical lines; spectral colour is shared with the detail view.
 
+Its corners carry the deck's text on a navy backing: top-left the title (deck number, play state, playlist badge, track name); bottom-right the readout — tempo and offset │ level and gain │ bar interval, spectrum and filter. Bottom-left holds only transient state (tap counter, nudge arrows), and a countdown prompt briefly displaces the readout. A narrow terminal costs waveform, never title or readout.
+
 Rendered at half-column braille resolution: each character encodes two adjacent audio columns, doubling horizontal detail within the terminal width.
 
-In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. A legend in the top-right corner shows the current interval. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In vinyl mode, bar markers and the warning flash are suppressed.
+In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In vinyl mode, bar markers and the warning flash are suppressed.
 
 **See also**
 
@@ -247,7 +249,7 @@ In beat mode, bar markers overlay the track as thin vertical lines at every N ba
 
 [Up](#deck)
 
-A compact real-time frequency display in the info bar — 16 braille characters wide (32 logarithmically spaced bins, 20 Hz to 20 kHz), one braille row tall. Each character encodes two adjacent bins as a bottom-up bar chart. Active whenever a track is loaded.
+A compact real-time frequency display at the tail of the deck's readout — 16 braille characters wide (32 logarithmically spaced bins, 20 Hz to 20 kHz), one braille row tall. Each character encodes two adjacent bins as a bottom-up bar chart. Active whenever a track is loaded.
 
 The display is beat-synced: it updates 4 times per beat, falling back to 250 ms intervals during BPM analysis. A background glow lights character cells with sub-threshold activity and resets on a 2-bar accumulation window.
 
@@ -260,6 +262,7 @@ Goertzel algorithm over a 4096-sample Hann-windowed window at the current playba
 **See also**
 
 - [Filter](#filter) — the shaded region tracks filter position
+- [Overview Waveform](#overview-waveform) — the readout it sits in, overlaid bottom-right
 - [Keymap](#keymap) — no config actions; the analyser is always on
 
 
@@ -966,7 +969,7 @@ Application messages have three kinds, told apart by what happens after they are
 
 - **Hints** are transient guidance — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere.
 
-Three surfaces: the **global bar** (top row, always visible) shows one thing at a time — prompt beats event beats hint, and idle it shows directory and version; **deck rows** carry only their own prompts — deck events go to the bar, named ("Deck 2: …"); the **history view** looks back over every event.
+Three surfaces: the **global bar** (top row, always visible) shows one thing at a time — prompts outrank events, events outrank hints — and idle it shows directory and version; **deck overlays** carry only that deck's prompts, on its own overview — deck events go to the bar, named ("Deck 2: …"); the **history view** looks back over every event.
 
 **Detail**
 

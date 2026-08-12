@@ -826,10 +826,10 @@ fn meter_spans(deck: &Deck) -> Vec<Span<'static>> {
     spans
 }
 
-/// The analyser zone: bar legend, spectrum, filter shading, and slope field.
-/// The filter's 16 steps map onto the character count (ceiling, so the first
-/// step always shades something).
-fn analyser_spans(deck: &Deck, overview_width: usize, analysing: bool) -> Vec<Span<'static>> {
+/// The readout's tail segment: bar interval, spectrum, filter shading, and
+/// slope field. The filter's 16 steps map onto the character count (ceiling,
+/// so the first step always shades something).
+fn spectrum_filter_spans(deck: &Deck, overview_width: usize, analysing: bool) -> Vec<Span<'static>> {
     use crate::deck::SPECTRUM_CHARS;
     let dim = Style::default().fg(Color::DarkGray);
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -875,7 +875,8 @@ fn analyser_spans(deck: &Deck, overview_width: usize, analysing: bool) -> Vec<Sp
 }
 
 /// Bottom-right corner: the deck's whole readout in one `│`-separated line —
-/// tempo group, meters, analyser. Anchored bottom-right so a narrow terminal
+/// tempo and offset, level and gain, bar interval + spectrum and filter.
+/// Anchored bottom-right so a narrow terminal
 /// costs waveform, never the title or the stats; a countdown prompt displaces
 /// it for its seconds-long life.
 pub(crate) fn readout_corner_line(
@@ -891,7 +892,7 @@ pub(crate) fn readout_corner_line(
     spans.push(sep.clone());
     spans.extend(meter_spans(deck));
     spans.push(sep);
-    spans.extend(analyser_spans(deck, overview_width, analysing));
+    spans.extend(spectrum_filter_spans(deck, overview_width, analysing));
     Line::from(spans)
 }
 

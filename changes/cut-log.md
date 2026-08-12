@@ -10,6 +10,10 @@ Cut the sentence explaining that Ctrl isn't expressible in the keymap and that a
 
 The Conclusion re-narrated the hand-back history (stale hints fixed, ephemeral hints added) that the Log entries directly above it already carried. PROCESS.md already says the Conclusion comments only on what isn't captured elsewhere — the recap added nothing a reader of the archived document couldn't get from the Log. Pattern to watch: **history restated from the Log**.
 
+## 2026-08-12 — map, Overview Waveform draft
+
+Cut "on the navy backing the old title row used" to "on a navy backing". The map describes what exists; where a colour came from is history, and the sync rule already forbids it. Pattern to watch: **history references in describes-what-exists documents**.
+
 ## 2026-08-11 — message-stream, Approach ("One message stream") *(retrospective)*
 
 The paragraph justifying the single stream restated the single-slot-overwrite argument that the inventory table above it already made visible. When a table carries the evidence, the prose only needs the verdict.
