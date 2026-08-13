@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 
 use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     DisableMouseCapture, EnableMouseCapture,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
@@ -55,7 +55,7 @@ use deck::{
     PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
 };
 use library::WorkspaceLibrary;
-use messages::{Message, MessageStream, Severity, Source};
+use messages::{Event, EventStream, Severity, Source};
 use render::{
     extract_tick_viewport, halfblock_art, DEFAULT_ZOOM_IDX,
     bottom_transient_line, countdown_prompt_line, overlay_bottom_left, overlay_bottom_right, overlay_top_left,
@@ -447,7 +447,7 @@ fn apply_browser_load(
     decks: &mut [Option<Deck>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
     workspace: Option<&Path>,
-) -> Option<Message> {
+) -> Option<Event> {
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
     match load {
@@ -463,14 +463,14 @@ fn open_playlist_on_deck(
     deck: usize,
     workspace: Option<&Path>,
     pending_loads: &mut [Option<PendingLoad>; 3],
-) -> Option<Message> {
+) -> Option<Event> {
     let mut playlist = match playlist::read_playlist(rpl_path) {
         Ok((playlist, _migrated)) => playlist,
-        Err(e) => return Some(Message::new(Source::Playlist, Severity::Error, format!("Playlist read failed: {e}"))),
+        Err(e) => return Some(Event::new(Source::Playlist, Severity::Error, format!("Playlist read failed: {e}"))),
     };
     let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
     let Some((index, track_path)) = resolved.first_playable else {
-        return Some(Message::new(Source::Playlist, Severity::Warning, "No playable tracks in playlist"));
+        return Some(Event::new(Source::Playlist, Severity::Warning, "No playable tracks in playlist"));
     };
     let warning = unplayable_warning(resolved.unplayable, workspace, deck);
     let mut load = start_load(&track_path);
@@ -487,7 +487,7 @@ fn open_playlist_on_deck(
 
 /// The deck's warning for a set carrying tracks it can't play. Without a workspace the
 /// news is that setting one may relocate them; with one set, the count is the news.
-fn unplayable_warning(unplayable: usize, workspace: Option<&Path>, deck: usize) -> Option<Message> {
+fn unplayable_warning(unplayable: usize, workspace: Option<&Path>, deck: usize) -> Option<Event> {
     if unplayable == 0 { return None; }
     let text = match workspace {
         None => "Some tracks missing — set a workspace (@) to relocate".to_string(),
@@ -496,7 +496,7 @@ fn unplayable_warning(unplayable: usize, workspace: Option<&Path>, deck: usize) 
             format!("{unplayable} track{plural} unavailable — open the playlist to see which")
         }
     };
-    Some(Message::new(Source::Deck(deck), Severity::Warning, text))
+    Some(Event::new(Source::Deck(deck), Severity::Warning, text))
 }
 
 /// Create an empty `.rpl` named `name` in `dir`. Errs if a file already exists.
@@ -547,13 +547,13 @@ fn play_panel_entry(
     decks: &mut [Option<Deck>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
     workspace: Option<&Path>,
-) -> Option<Message> {
+) -> Option<Event> {
     let Some(entry) = pp.playlist.entries.get(index) else { return None };
     let dir = pp.path.parent().unwrap_or_else(|| Path::new("."));
     let library = WorkspaceLibrary::new(workspace);
     let search = playlist::LibrarySearch::new(&library);
     let playlist::Resolution::Found { path, .. } = playlist::resolve(entry, dir, &search) else {
-        return Some(Message::new(Source::Playlist, Severity::Warning, "That entry is unavailable"));
+        return Some(Event::new(Source::Playlist, Severity::Warning, "That entry is unavailable"));
     };
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
@@ -822,8 +822,8 @@ fn build_deck(
 
 /// Move `source` into `dest_dir`. Audio already decoded in memory is unaffected.
 /// Returns the outcome message and, on success, the file's new path.
-fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Message, Option<PathBuf>) {
-    let files = |severity, text: String| Message::new(Source::Files, severity, text);
+fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Event, Option<PathBuf>) {
+    let files = |severity, text: String| Event::new(Source::Files, severity, text);
     let Some(filename) = source.file_name() else {
         return (files(Severity::Error, "File has no name".into()), None);
     };
@@ -1058,7 +1058,7 @@ fn handle_tag_editor_key(
     tag_editor: &mut Option<TagEditorState>,
     decks: &mut [Option<Deck>; 3],
     browser_state: &mut Option<BrowserState>,
-    stream: &mut MessageStream,
+    stream: &mut EventStream,
     compliance_cache: &mut HashMap<PathBuf, bool>,
     key: crossterm::event::KeyEvent,
 ) -> bool {
@@ -1100,33 +1100,33 @@ fn handle_tag_editor_key(
                 compliance_cache.remove(&target);
                 match write_tags_verified(&old, &fields) {
                     Err(e) => {
-                        stream.emit(Message::new(Source::Tags, Severity::Error, format!("tag write failed: {e}")));
+                        stream.emit(Event::new(Source::Tags, Severity::Error, format!("tag write failed: {e}")));
                         false
                     }
                     Ok(incident) => {
                         let saved = if needs_rename {
                             match std::fs::rename(&old, &target) {
                                 Err(e) => {
-                                    stream.emit(Message::new(Source::Tags, Severity::Error, format!("rename failed: {e}")));
+                                    stream.emit(Event::new(Source::Tags, Severity::Error, format!("rename failed: {e}")));
                                     false
                                 }
                                 Ok(()) => {
                                     sync_deck_path(decks, &old, &target, Some(&name));
                                     if let Some(bs) = browser_state.as_mut() { let _ = bs.refresh(); }
-                                    stream.emit(Message::new(Source::Tags, Severity::Success, format!("\u{2192} {stem}")));
+                                    stream.emit(Event::new(Source::Tags, Severity::Success, format!("\u{2192} {stem}")));
                                     true
                                 }
                             }
                         } else {
                             sync_deck_path(decks, &old, &old, Some(&name));
-                            stream.emit(Message::new(Source::Tags, Severity::Info, "tags saved"));
+                            stream.emit(Event::new(Source::Tags, Severity::Info, "tags saved"));
                             true
                         };
                         // A changed identity is a critical alert — held on screen far
                         // longer than the usual display time.
                         if let Some(dir) = incident {
                             stream.emit_showing_for(
-                                Message::new(Source::Tags, Severity::Error, format!("⚠ IDENTITY CHANGED by tag edit — files preserved in {}", dir.display())),
+                                Event::new(Source::Tags, Severity::Error, format!("⚠ IDENTITY CHANGED by tag edit — files preserved in {}", dir.display())),
                                 Duration::from_secs(30),
                             );
                         }
@@ -1204,13 +1204,13 @@ fn tui_loop(
     // Seed history from previous sessions (pruned to retention), then attach the
     // file and open this session with its delimiting first line.
     let log_path = xdg::state_dir().join("messages.log");
-    let mut stream = MessageStream::new();
+    let mut stream = EventStream::new();
     stream.seed(messages::load_and_prune(&log_path, retention_days, utc_offset_secs));
     stream.attach_log_file(&log_path, utc_offset_secs);
-    stream.emit(Message::new(Source::App, Severity::Info, format!("deck v{} started", env!("CARGO_PKG_VERSION"))));
+    stream.emit(Event::new(Source::App, Severity::Info, format!("deck v{} started", env!("CARGO_PKG_VERSION"))));
     let had_config_notice = config_notice.is_some();
     if let Some(msg) = config_notice {
-        stream.emit(Message::new(Source::App, Severity::Success, msg));
+        stream.emit(Event::new(Source::App, Severity::Success, msg));
     }
     let mut decks: [Option<Deck>; 3] = [None, None, None];
     let mut pending_loads: [Option<PendingLoad>; 3] = [initial_load, None, None];
@@ -1344,13 +1344,14 @@ fn tui_loop(
                     let mut new_deck = build_deck(&pending.path, pending.filename, mono, stereo, sample_rate, channels, mixer, &track_data, Arc::clone(&pfl_active_deck), slot);
                     new_deck.playlist = pending.attach_playlist;
                     shared_renderer.set_deck(slot, Arc::clone(&new_deck.audio.waveform), new_deck.audio.seek_handle.channels, new_deck.audio.sample_rate);
+                    stream.record(Event::new(Source::Deck(slot), Severity::Info, format!("loaded {}", new_deck.track_name)));
                     decks[slot] = Some(new_deck);
                     if let Some(ref mut d) = decks[slot] {
                         d.display.palette = if slot == 0 { PALETTE_SCHEMES[scheme_idx].1 } else { PALETTE_SCHEMES[scheme_idx].2 };
                     }
                 }
                 Ok(Err(e)) => {
-                    stream.emit(Message::new(Source::Deck(slot), Severity::Error, format!("Load failed: {e}")));
+                    stream.emit(Event::new(Source::Deck(slot), Severity::Error, format!("Load failed: {e}")));
                     pending_loads[slot] = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1868,7 +1869,7 @@ fn tui_loop(
                 render_keyboard_help(frame, c[10]);
             }
 
-            // Message history overlay — same space and rules as help. Adopt the
+            // Event history overlay — same space and rules as help. Adopt the
             // renderer's clamped scroll so overscroll doesn't accumulate.
             if history_open && browser_state.is_none() {
                 history_scroll = render_message_history(frame, c[10], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
@@ -1893,7 +1894,7 @@ fn tui_loop(
         // Single event handler — all actions work regardless of which deck is loaded.
         while event::poll(Duration::ZERO)? {
             match event::read()? {
-            Event::Mouse(mouse_event) => {
+            TermEvent::Mouse(mouse_event) => {
                 if browser_state.is_some() { continue; }
                 if tag_editor.is_some() { continue; }
                 if mouse_event.kind == MouseEventKind::Down(MouseButton::Left) {
@@ -1927,7 +1928,7 @@ fn tui_loop(
                     }
                 }
             }
-            Event::Key(key) => {
+            TermEvent::Key(key) => {
                 // Esc steps up one level per physical press, so only the initial press acts.
                 // A held Esc repeats every ~30 ms, which would otherwise race through every
                 // level of the cascade — deselecting a playlist and closing the browser in
@@ -1945,6 +1946,7 @@ fn tui_loop(
                             }
                         }
                     }
+                    stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                     track_data.save();
                     session.save();
                     return Ok(());
@@ -2034,7 +2036,7 @@ fn tui_loop(
                                     }
                                     EntryStatus::Unavailable => {
                                         if workspace.is_none() {
-                                            stream.emit(Message::new(Source::Playlist, Severity::Warning, "Set a workspace (@) to find candidates for missing tracks"));
+                                            stream.emit(Event::new(Source::Playlist, Severity::Warning, "Set a workspace (@) to find candidates for missing tracks"));
                                         }
                                     }
                                 },
@@ -2067,13 +2069,13 @@ fn tui_loop(
                                                     Ok(()) => {
                                                         commit_playlist(&new_pp, &mut decks);
                                                         new_pp.recompute_status(workspace.as_deref(), false);
-                                                        stream.emit(Message::new(Source::Playlist, Severity::Success, "Track re-linked"));
+                                                        stream.emit(Event::new(Source::Playlist, Severity::Success, "Track re-linked"));
                                                         transition = Some(Panel::Browse(new_pp));
                                                     }
-                                                    Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, format!("re-link failed: {e:?}"))),
+                                                    Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, format!("re-link failed: {e:?}"))),
                                                 }
                                             }
-                                            None => stream.emit(Message::new(Source::Playlist, Severity::Error, "couldn't read candidate file")),
+                                            None => stream.emit(Event::new(Source::Playlist, Severity::Error, "couldn't read candidate file")),
                                         }
                                     }
                                 }
@@ -2116,7 +2118,7 @@ fn tui_loop(
                                                 pp.recompute_status(workspace.as_deref(), false);
                                             }
                                             Ok(_) => {}
-                                            Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, e)),
+                                            Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
                                         }
                                     }
                                     consumed = true;
@@ -2187,7 +2189,7 @@ fn tui_loop(
                         Some(BrowserResult::EditRequested(path)) => {
                             tag_editor = TagEditorState::for_track(&path);
                             if tag_editor.is_none() {
-                                stream.emit(Message::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
                             }
                             // Cleanup mode: remember the entry below this one so a save
                             // resumes there (stable across the rename), wrapping to top.
@@ -2255,7 +2257,7 @@ fn tui_loop(
                                 pp.recompute_status_against(&search, true);
                             }
                             if healed {
-                                stream.emit(Message::new(Source::Playlist, Severity::Success, "Relocated moved tracks in open playlists"));
+                                stream.emit(Event::new(Source::Playlist, Severity::Success, "Relocated moved tracks in open playlists"));
                             }
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
@@ -2287,7 +2289,7 @@ fn tui_loop(
                             Ok(path) => if let Some(bs) = browser_state.as_mut() {
                                 let _ = bs.go_to(dir.clone(), Some(&path), format!("new playlist: {name}"));
                             },
-                            Err(e) => stream.emit(Message::new(Source::Playlist, Severity::Error, e)),
+                            Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
                         }
                     }
                     continue; // block all player key handling while browser is open
@@ -2320,7 +2322,7 @@ fn tui_loop(
                             })
                             .unwrap_or(NudgeMode::Jump);
                         if new_mode == NudgeMode::Warp && !release_events_supported {
-                            stream.emit(Message::new(Source::App, Severity::Error, "Warp nudge unavailable — terminal can't report key releases"));
+                            stream.emit(Event::new(Source::App, Severity::Error, "Warp nudge unavailable — terminal can't report key releases"));
                         } else {
                             for slot in 0..3 {
                                 if let Some(ref mut d) = decks[slot] {
@@ -2461,7 +2463,7 @@ fn tui_loop(
                         help_open = false;
                         continue 'tui;
                     }
-                    // Message history intercepts its scroll and close keys; the
+                    // Event history intercepts its scroll and close keys; the
                     // rest fall through to normal handling.
                     if history_open {
                         match key.code {
@@ -2491,6 +2493,7 @@ fn tui_loop(
                                 }
                             }
                             session.set_latency(audio_latency_ms);
+                            stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                             track_data.save();
                             session.save();
                             return Ok(());
@@ -2537,7 +2540,7 @@ fn tui_loop(
                                     KeyCode::Char('y') => {
                                         tag_editor = TagEditorState::for_track(&d.path);
                                         if tag_editor.is_none() {
-                                            stream.emit(Message::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                            stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
                                         }
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
@@ -2578,6 +2581,7 @@ fn tui_loop(
                             }
                         }
                         session.set_latency(audio_latency_ms);
+                        stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                         track_data.save();
                         session.save();
                         return Ok(());
@@ -3129,7 +3133,7 @@ fn service_deck_frame(
     track_data: &mut TrackDatabase,
     audio_latency_ms: i64,
     vinyl_mode: bool,
-    stream: &mut MessageStream,
+    stream: &mut EventStream,
 ) {
     let Some(ref mut d) = decks[slot] else { return; };
 
@@ -3157,7 +3161,7 @@ fn service_deck_frame(
                 d.tempo.offset_established = false;
                 d.mixer.gain_db = 0;
                 d.audio.gain_linear.store(1.0f32.to_bits(), Ordering::Relaxed);
-                stream.emit(Message::new(Source::Deck(slot), Severity::Error, "Content identity unavailable — not saved, unusable in playlists"));
+                stream.emit(Event::new(Source::Deck(slot), Severity::Error, "Content identity unavailable — not saved, unusable in playlists"));
                 d.tempo.analysis_hash = None;
             } else {
                 // Restore cue_sample, offset_established, and gain_db from the track database if present.

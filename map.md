@@ -961,19 +961,25 @@ Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the pan
 [Down](#history-view)
 [Down](#event-log)
 
-Application messages have three kinds, told apart by what happens after they are seen:
+Application messages appear in three places:
 
-- **Prompts** await a keypress — never recorded. BPM confirmation, rename offer, quit and load confirmations.
+- The **global bar** — top row, always visible. Shows one thing at a time; at idle, it shows directory and version.
 
-- **Events** are things that happened — moves, playlist warnings, identity alerts. One stream feeds every surface; expiring off screen never loses one.
+- **Deck overlays** — on each deck's own overview, for things about that deck.
 
-- **Hints** are transient guidance — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere.
+- The **history** — everything worth keeping, one thing seen two ways: the [History View](#history-view) is its UI, the [Event Log](#event-log) its persistence.
 
-Three surfaces: the **global bar** (top row, always visible) shows one thing at a time — prompts outrank events, events outrank hints — and idle it shows directory and version; **deck overlays** carry only that deck's prompts, on its own overview — deck events go to the bar, named ("Deck 2: …"); the **history view** looks back over every event.
+Three kinds of message pass through them:
+
+- **Prompts** await a keypress beside what they ask about: deck prompts (BPM confirmation, rename offer) on the deck overlay, app prompts (quit and load confirmations) on the bar. Never recorded.
+
+- **Events** are things that happened — loads, moves, warnings, identity alerts. Every event enters the history; those needing attention also show on the bar, named ("Deck 2: …"), and leaving the bar loses nothing.
+
+- **Hints** are transient guidance, on the bar — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere.
 
 **Detail**
 
-- Esc dismisses whatever the bar shows; events stay in the log.
+- Bar precedence: prompts outrank events, events outrank hints; Esc dismisses whatever it shows (events stay in the history).
 - Severity (info/success/warning/error) colours the bar; display time is per-event — 5 s usual, 30 s for the identity alert.
 
 

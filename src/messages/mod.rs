@@ -1,7 +1,8 @@
-//! The application's message stream. Every passive message — notice, warning,
-//! error, success — passes through one sink and appends to an in-memory log,
-//! so a message leaving the screen is never lost. Display surfaces render
-//! views of the log; today that is the global bar showing the latest entry.
+//! The application's messages: events and hints. Every **event** — routine or
+//! interrupting — passes through one sink and appends to an in-memory log and
+//! the log file, so an event leaving the screen (or never shown) is not lost.
+//! **Hints** are transient guidance, displayed and forgotten. The global bar
+//! shows the latest displayed entry; the history view shows the whole log.
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -67,14 +68,14 @@ impl Source {
     }
 }
 
-pub(crate) struct Message {
+pub(crate) struct Event {
     pub(crate) at: SystemTime,
     pub(crate) severity: Severity,
     pub(crate) source: Source,
     pub(crate) text: String,
 }
 
-impl Message {
+impl Event {
     pub(crate) fn new(source: Source, severity: Severity, text: impl Into<String>) -> Self {
         // Single-line by construction, so the log file stays line-per-message.
         let text = text.into().replace(['\n', '\r'], " ");
@@ -171,8 +172,8 @@ pub(crate) fn local_utc_offset_secs() -> i64 {
 /// How long a message stays on screen unless a later one replaces it.
 const DISPLAY_TIME: Duration = Duration::from_secs(5);
 
-pub(crate) struct MessageStream {
-    log: Vec<Message>,
+pub(crate) struct EventStream {
+    log: Vec<Event>,
     showing_until: Option<Instant>,
     /// Transient guidance shown on the bar but never remembered — not history,
     /// not the log file. Guidance isn't an event.
@@ -181,14 +182,14 @@ pub(crate) struct MessageStream {
     utc_offset_secs: i64,
 }
 
-impl MessageStream {
+impl EventStream {
     pub(crate) fn new() -> Self {
         Self { log: Vec::new(), showing_until: None, hint: None, log_file: None, utc_offset_secs: 0 }
     }
 
     /// Adopt previous sessions' messages (oldest first) without displaying or
     /// re-writing them — the history view scrolls into them, the bar ignores them.
-    pub(crate) fn seed(&mut self, messages: Vec<Message>) {
+    pub(crate) fn seed(&mut self, messages: Vec<Event>) {
         self.log = messages;
     }
 
@@ -202,24 +203,34 @@ impl MessageStream {
         self.utc_offset_secs = utc_offset_secs;
     }
 
-    pub(crate) fn emit(&mut self, message: Message) {
-        self.emit_showing_for(message, DISPLAY_TIME);
+    pub(crate) fn emit(&mut self, event: Event) {
+        self.emit_showing_for(event, DISPLAY_TIME);
     }
 
     /// Emit with a non-standard display time, for alerts that must outlive the
     /// usual few seconds (or hints that may sit until something else happens).
-    pub(crate) fn emit_showing_for(&mut self, message: Message, display: Duration) {
-        if let Some(file) = self.log_file.as_mut() {
-            use std::io::Write;
-            let _ = writeln!(file, "{}", message.log_line(self.utc_offset_secs));
-            let _ = file.flush();
-        }
-        self.log.push(message);
+    pub(crate) fn emit_showing_for(&mut self, event: Event, display: Duration) {
+        self.append(event);
         self.showing_until = Some(Instant::now() + display);
     }
 
+    /// Record a routine event without displaying it — history and file, never
+    /// the bar. For events that narrate the session rather than interrupt it.
+    pub(crate) fn record(&mut self, event: Event) {
+        self.append(event);
+    }
+
+    fn append(&mut self, event: Event) {
+        if let Some(file) = self.log_file.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(file, "{}", event.log_line(self.utc_offset_secs));
+            let _ = file.flush();
+        }
+        self.log.push(event);
+    }
+
     /// The message currently on screen and when it leaves, if any.
-    pub(crate) fn showing(&self) -> Option<(&Message, Instant)> {
+    pub(crate) fn showing(&self) -> Option<(&Event, Instant)> {
         let until = self.showing_until.filter(|&u| Instant::now() < u)?;
         self.log.last().map(|m| (m, until))
     }
@@ -242,18 +253,18 @@ impl MessageStream {
     }
 
     /// The whole session's messages, oldest first.
-    pub(crate) fn entries(&self) -> &[Message] {
+    pub(crate) fn entries(&self) -> &[Event] {
         &self.log
     }
 }
 
 /// Read the log file, drop lines older than the retention cutoff (and any that
 /// don't parse), rewrite it pruned, and return what survives for seeding.
-pub(crate) fn load_and_prune(path: &std::path::Path, retention_days: u64, utc_offset_secs: i64) -> Vec<Message> {
+pub(crate) fn load_and_prune(path: &std::path::Path, retention_days: u64, utc_offset_secs: i64) -> Vec<Event> {
     let Ok(content) = std::fs::read_to_string(path) else { return Vec::new() };
     let cutoff = SystemTime::now() - Duration::from_secs(retention_days.saturating_mul(86_400));
-    let kept: Vec<Message> = content.lines()
-        .filter_map(|line| Message::from_log_line(line, utc_offset_secs))
+    let kept: Vec<Event> = content.lines()
+        .filter_map(|line| Event::from_log_line(line, utc_offset_secs))
         .filter(|m| m.at >= cutoff)
         .collect();
     let body: String = kept.iter().map(|m| m.log_line(utc_offset_secs) + "\n").collect();
@@ -270,9 +281,9 @@ mod tests {
 
     #[test]
     fn log_line_roundtrip() {
-        let m = Message::new(Source::Deck(1), Severity::Warning, "3 tracks unavailable — open the playlist to see which");
+        let m = Event::new(Source::Deck(1), Severity::Warning, "3 tracks unavailable — open the playlist to see which");
         for offset in [-11 * 3600, 0, 3600, 5 * 3600 + 1800] {
-            let parsed = Message::from_log_line(&m.log_line(offset), offset).expect("line should parse back");
+            let parsed = Event::from_log_line(&m.log_line(offset), offset).expect("line should parse back");
             assert_eq!(parsed.text, m.text);
             assert!(parsed.severity == m.severity);
             assert_eq!(parsed.source.token(), m.source.token());
@@ -284,7 +295,7 @@ mod tests {
 
     #[test]
     fn newlines_are_sanitised_at_construction() {
-        let m = Message::new(Source::App, Severity::Info, "two\nlines\r\nhere");
+        let m = Event::new(Source::App, Severity::Info, "two\nlines\r\nhere");
         assert!(!m.text.contains('\n') && !m.text.contains('\r'));
     }
 
@@ -293,7 +304,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("deck-msg-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("messages.log");
-        let recent = Message::new(Source::App, Severity::Info, "recent").log_line(0);
+        let recent = Event::new(Source::App, Severity::Info, "recent").log_line(0);
         let content = format!("2001-01-01 00:00:00 info  app       ancient\nnot a log line\n{recent}\n");
         std::fs::write(&path, content).unwrap();
 
@@ -309,7 +320,7 @@ mod tests {
     #[test]
     fn malformed_lines_do_not_parse() {
         for line in ["", "not a log line", "2026-08-11 10:00:00 nope app  text", "2026-08-11 10:00 warn app  short stamp"] {
-            assert!(Message::from_log_line(line, 0).is_none(), "parsed unexpectedly: {line}");
+            assert!(Event::from_log_line(line, 0).is_none(), "parsed unexpectedly: {line}");
         }
     }
 }

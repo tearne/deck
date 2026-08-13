@@ -12,7 +12,7 @@ use crate::deck::{
     Deck, SpecPalette, TagEditorState,
     TAG_EDITOR_MAX_WIDTH, TAG_EDITOR_MIN_WIDTH, TAG_FIELD_LABELS,
 };
-use crate::messages::{Message, Severity};
+use crate::messages::{Event, Severity};
 
 pub(crate) const ZOOM_LEVELS: &[f32] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
@@ -1921,7 +1921,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
 pub(crate) fn render_message_history(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
-    entries: &[Message],
+    entries: &[Event],
     scroll_from_tail: usize,
     utc_offset_secs: i64,
     log_path: &str,
