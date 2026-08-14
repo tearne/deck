@@ -757,7 +757,7 @@ fn build_deck(
     ));
     player.pause();
 
-    let (bpm_tx, bpm_rx) = mpsc::channel::<(String, f32, i64, bool)>();
+    let (bpm_tx, bpm_rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
     {
         let entries = track_data.entries_snapshot();
         let identity_path = path.to_path_buf();
@@ -770,8 +770,7 @@ fn build_deck(
             let hash = match content_identity(&identity_path) {
                 Ok(hash) => hash,
                 Err(error) => {
-                    record_identity_failure(&identity_path, &error);
-                    let _ = bpm_tx.send((String::new(), 120.0, 0, true));
+                    let _ = bpm_tx.send((String::new(), 120.0, 0, true, Some(error)));
                     return;
                 }
             };
@@ -787,7 +786,7 @@ fn build_deck(
                 // signals that the BPM has not been confirmed.
                 (120.0f32, 0i64, true)
             };
-            let _ = bpm_tx.send((hash, bpm, offset_ms, is_fresh));
+            let _ = bpm_tx.send((hash, bpm, offset_ms, is_fresh, None));
         });
     }
 
@@ -889,23 +888,14 @@ fn identity_of(path: &Path) -> Option<String> {
     content_identity(path).ok()
 }
 
-/// Record a load-time identity failure as a harmonised error report. The track
-/// is unsupported app-wide (no playlist can reference it), so this is surfaced,
-/// not swallowed. Called off the main thread.
-fn record_identity_failure(path: &Path, error: &str) {
-    let base = error_reports::dir();
-    let _ = std::fs::create_dir_all(&base);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
-    let report = base.join(format!("{}.txt", error_reports::stamped_name("identity-unhashable", stem)));
-    let body = format!(
-        "Content identity could not be computed for this track.\n\n\
-         file:  {}\n\
-         error: {error}\n\n\
-         The track loads and plays, but its analysis and edits are not saved, and it\n\
-         cannot be referenced by playlists (which key on content identity).\n",
-        path.display(),
-    );
-    let _ = std::fs::write(report, body);
+/// True when the seeded history's last session opened without closing — a
+/// `started` line with no `deck quit` after it. The quit bracket is the
+/// evidence; no file-timestamp heuristics.
+fn previous_session_ended_abnormally(history: &[Event]) -> bool {
+    match history.iter().rposition(|e| e.text.starts_with("deck v") && e.text.ends_with(" started")) {
+        Some(i) => !history[i..].iter().any(|e| e.text == "deck quit"),
+        None => false,
+    }
 }
 
 /// Write tags to `path`, verifying the content identity is unchanged — tag edits
@@ -1207,7 +1197,16 @@ fn tui_loop(
     let mut stream = EventStream::new();
     stream.seed(messages::load_and_prune(&log_path, retention_days, utc_offset_secs));
     stream.attach_log_file(&log_path, utc_offset_secs);
+    let crashed = previous_session_ended_abnormally(stream.entries());
     stream.emit(Event::new(Source::App, Severity::Info, format!("deck v{} started", env!("CARGO_PKG_VERSION"))));
+    if crashed {
+        let text = if panic_log_path().exists() {
+            "Previous session ended abnormally — see panic.log"
+        } else {
+            "Previous session ended abnormally"
+        };
+        stream.emit(Event::new(Source::App, Severity::Warning, text));
+    }
     let had_config_notice = config_notice.is_some();
     if let Some(msg) = config_notice {
         stream.emit(Event::new(Source::App, Severity::Success, msg));
@@ -2784,7 +2783,7 @@ fn tui_loop(
                             if d.tempo.pending_bpm.is_some() {
                                 d.tempo.pending_bpm = None;
                             } else if d.tempo.redetecting {
-                                let (_, dead_rx) = mpsc::channel::<(String, f32, i64, bool)>();
+                                let (_, dead_rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
                                 d.tempo.background_rx = Some(std::mem::replace(&mut d.tempo.bpm_rx, dead_rx));
                                 d.tempo.redetecting = false;
                                 d.tempo.analysis_hash = d.tempo.redetect_saved_hash.take();
@@ -2795,12 +2794,12 @@ fn tui_loop(
                                     d.tempo.redetecting = true;
                                 } else {
                                     let mono_bg = Arc::clone(&d.audio.mono);
-                                    let (tx, rx) = mpsc::channel::<(String, f32, i64, bool)>();
+                                    let (tx, rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
                                     let hash_bg = d.tempo.analysis_hash.clone().unwrap_or_default();
                                     let sr_bg = d.audio.sample_rate;
                                     thread::spawn(move || {
                                         if let Ok(bpm) = detect_bpm(&mono_bg, sr_bg) {
-                                            let _ = tx.send((hash_bg, bpm, 0, true));
+                                            let _ = tx.send((hash_bg, bpm, 0, true, None));
                                         }
                                     });
                                     d.tempo.bpm_rx = rx;
@@ -3147,7 +3146,7 @@ fn service_deck_frame(
     }
 
     // Poll BPM detection results.
-    if let Ok((hash, new_bpm, new_offset, is_fresh)) = d.tempo.bpm_rx.try_recv() {
+    if let Ok((hash, new_bpm, new_offset, is_fresh, identity_error)) = d.tempo.bpm_rx.try_recv() {
         if !is_fresh || !d.tempo.bpm_established {
             d.tempo.bpm      = new_bpm;
             d.tempo.base_bpm = new_bpm;
@@ -3155,13 +3154,14 @@ fn service_deck_frame(
             d.tempo.offset_ms = (new_offset as f64 / 10.0).round() as i64 * 10;
             if hash.is_empty() {
                 // Unhashable track (content identity unavailable): it plays, but persists
-                // nothing and can't be referenced by a playlist. The load thread already
-                // recorded an error report; warn through the message stream.
+                // nothing and can't be referenced by a playlist. The event carries the
+                // error detail — the log line is the fault's whole record.
                 d.cue_sample = None;
                 d.tempo.offset_established = false;
                 d.mixer.gain_db = 0;
                 d.audio.gain_linear.store(1.0f32.to_bits(), Ordering::Relaxed);
-                stream.emit(Event::new(Source::Deck(slot), Severity::Error, "Content identity unavailable — not saved, unusable in playlists"));
+                let detail = identity_error.unwrap_or_else(|| "unknown".to_string());
+                stream.emit(Event::new(Source::Deck(slot), Severity::Error, format!("Content identity unavailable ({detail}) — not saved, unusable in playlists")));
                 d.tempo.analysis_hash = None;
             } else {
                 // Restore cue_sample, offset_established, and gain_db from the track database if present.
@@ -3368,6 +3368,17 @@ fn service_deck_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abnormal_end_detected_from_missing_quit_bracket() {
+        let ev = |text: &str| Event::new(Source::App, Severity::Info, text);
+        assert!(!previous_session_ended_abnormally(&[]));
+        assert!(!previous_session_ended_abnormally(&[ev("deck v1 started"), ev("loaded X"), ev("deck quit")]));
+        assert!(previous_session_ended_abnormally(&[ev("deck v1 started"), ev("loaded X")]));
+        // Only the most recent session counts — an old crash followed by a clean
+        // session raises nothing.
+        assert!(!previous_session_ended_abnormally(&[ev("deck v1 started"), ev("deck v2 started"), ev("deck quit")]));
+    }
 
     /// A normal tag write must not change the content identity — otherwise the
     /// check would raise a false incident on every edit. Verifies no incident and

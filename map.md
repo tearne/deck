@@ -8,7 +8,7 @@
 [Down](#track-database)
 [Down](#session-state)
 [Down](#messages)
-[Down](#error-reports)
+[Down](#fault-capture)
 [Down](#album-art)
 [Down](#audio-latency)
 
@@ -84,7 +84,7 @@ Application
 ├ Messages
 │ ├ History View
 │ └ Event Log
-├ Error Reports
+├ Fault Capture
 ├ Album Art (TODO)
 └ Audio Latency
 ```
@@ -186,7 +186,7 @@ Reached two ways: by `e` on a highlighted file in the browser, or via the load-t
 
 - [Renaming](#renaming) — the load-time offer that also opens this
 - [Keymap](#keymap) — editor keys (fixed, not configurable)
-- [Error Reports](#error-reports) — where a payload-change mismatch is preserved
+- [Fault Capture](#fault-capture) — where a payload-change mismatch is preserved
 
 
 # Move
@@ -930,7 +930,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 - A flat `{identity: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
 - The two copies reconcile whenever a workspace becomes active — at start-up if one is already configured, and when the operator sets or changes it: the workspace copy wins on shared identities, local-only entries are pushed out, and both are written at once. Every later save writes both, so the analysis follows the library between machines.
-- A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced (deck warning plus an [Error Reports](#error-reports) entry).
+- A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced as an error event carrying the cause (see [Fault Capture](#fault-capture)).
 
 **See also**
 
@@ -944,7 +944,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
 
-Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and the [Error Reports](#error-reports).
+Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 
 **Detail**
 
@@ -989,7 +989,7 @@ Three kinds of message pass through them:
 
 The look-back over every event, this session and previous ones. `N` opens it over the album-art space (mutually exclusive with the browser, like help); each line is clock time plus the event, severity-coloured, long lines wrapping under a hanging indent. `k`/`j` scroll older/newer — the header counts what lies beyond each edge — and Esc or `N` closes it.
 
-Sessions read as one continuous scroll: on startup the log file's retained history seeds the view, and every session opens with a "deck v… started" line, so the boundaries are visible. Seeded history never appears on the global bar.
+Sessions read as one continuous scroll: on startup the log file's retained history seeds the view, and every session opens with a "deck v… started" line and closes with "deck quit", so the boundaries are visible. Seeded history never appears on the global bar.
 
 **Detail**
 
@@ -1016,25 +1016,27 @@ The file prunes itself at startup: lines older than the retention window (`[mess
 
 **See also**
 
-- [Error Reports](#error-reports) — the identity-mismatch event names its report, so the log indexes the directory chronologically
+- [Fault Capture](#fault-capture) — the log is fault capture's first layer: mismatch events name their report folders, and a session missing its closing "deck quit" raises the abnormal-end warning at next startup
 
 
-# Error Reports
+# Fault Capture
 
 [Up](#application)
 
-A single directory where faults worth preserving are written for later inspection: `~/.local/state/deck/error_reports/`. Each report is named `YYYY-MM-DD_HHMMSS-<kind>-<label>` so a plain listing reads as a chronological log.
+Three layers, by what a fault needs to leave behind:
 
-Two kinds today:
+- **The log** is the primary record — every fault is an event, in history and on disk with its detail. See [Event Log](#event-log).
 
-- **identity-mismatch** — a tag edit changed the audio payload (a folder holding the original, edited, and details).
+- **`error_reports/`** preserves artefacts a log line can't hold. One kind today: **identity-mismatch** — a tag edit changed the audio payload; a dated folder keeps the original, edited, and details for recovery.
 
-- **identity-unhashable** — a track's content identity couldn't be computed at load (a text file with the path and error).
+- **`panic.log`** catches the crash itself, written as the process dies. At next startup, a session that never logged its "deck quit" raises an abnormal-end warning, naming panic.log if present — crashes join the narrative.
+
+All three live in `~/.local/state/deck/`. Report folders are named `YYYY-MM-DD_HHMMSS-<kind>-<label>` so a listing reads chronologically, and the mismatch event names its folder — the log indexes the directory.
 
 **See also**
 
-- [Metadata Editor](#metadata-editor) — writes identity-mismatch reports
-- [Track Database](#track-database) — the load-time identity-unhashable case
+- [Metadata Editor](#metadata-editor) — the identity safeguard that writes mismatch reports
+- [Event Log](#event-log) — layer one, the chronological record
 - [Event Log](#event-log) — the identity-mismatch event names its report, so the log indexes this directory chronologically
 
 

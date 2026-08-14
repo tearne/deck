@@ -50,7 +50,7 @@ pub(crate) struct TempoState {
     pub(crate) bpm: f32,
     pub(crate) base_bpm: f32,
     pub(crate) offset_ms: i64,
-    pub(crate) bpm_rx: std::sync::mpsc::Receiver<(String, f32, i64, bool)>,
+    pub(crate) bpm_rx: std::sync::mpsc::Receiver<(String, f32, i64, bool, Option<String>)>,
     pub(crate) analysis_hash: Option<String>,
     /// True once the initial load analysis has returned (identified or unhashable).
     /// Drives the "analysing" spinner independently of whether a key was produced,
@@ -61,7 +61,7 @@ pub(crate) struct TempoState {
     pub(crate) pending_bpm: Option<(String, f32, i64, Instant)>,
     pub(crate) redetecting: bool,
     pub(crate) redetect_saved_hash: Option<String>,
-    pub(crate) background_rx: Option<std::sync::mpsc::Receiver<(String, f32, i64, bool)>>,
+    pub(crate) background_rx: Option<std::sync::mpsc::Receiver<(String, f32, i64, bool, Option<String>)>>,
     /// Absolute playback speed multiplier (1.0 = nominal). Used in vinyl mode and when
     /// no BPM is established. Independent of BPM state; passed directly to `player.set_speed`.
     pub(crate) vinyl_speed: f32,
@@ -251,7 +251,7 @@ impl Deck {
         total_duration: f64,
         rename_hint: Option<String>,
         audio: DeckAudio,
-        bpm_rx: std::sync::mpsc::Receiver<(String, f32, i64, bool)>,
+        bpm_rx: std::sync::mpsc::Receiver<(String, f32, i64, bool, Option<String>)>,
     ) -> Self {
         Deck {
             filename,
