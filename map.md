@@ -52,6 +52,7 @@ Application
 │ │   ├ Quiet-Frame Search
 │ │   ├ Fade Envelope
 │ │   └ Pipeline Flush
+│ ├ Loop Prototype
 │ ├ Beat Grid
 │ │ └ Cue Point
 │ └ Audio Pipeline
@@ -100,6 +101,7 @@ Application
 [Down](#spectrum-analyser)
 [Down](#detail-waveform)
 [Down](#transport)
+[Down](#loop-prototype)
 [Down](#beat-grid)
 [Down](#audio-pipeline)
 
@@ -521,6 +523,25 @@ The pitch shifter and filter carry internal state (buffered samples, filter hist
 - **Filter (FilterSource):** crossfades from previous filter state to new state over 256 samples. Biquad history (per-channel) is pre-allocated — no allocations on the audio path.
 
 
+# Loop Prototype
+
+[Up](#deck)
+
+Experimental, deck 3 only: capture a seamless loop by tapping, then refine it by ear. `g` tapped on the beat — the first tap marks the loop start — and stopping after ≥4 taps activates it: the tapped tempo sets the period, the tap count rounds up to a power-of-two bars of length. The audio thread cycles the bounds; the overview gives way to three loop panels for close-up trimming, `4`/`r` and `5`/`t` nudging start and end by ±1 ms. `H` exits.
+
+Independent of the beat grid — the loop's tempo comes from its own taps.
+
+**Detail**
+
+- Taps: 2 s inter-tap reset; 1 s silence ends the session; <4 taps discards; deck must be playing.
+- Length: tap count → bars (÷4, ceiling) → next power of two, × 4 beats.
+- Trim keys are the 8/16-bar jump keys, overridden only while the loop is active.
+
+**See also**
+
+- [Keymap](#keymap) — `loop_tap` (`g`) and `loop_exit` (`H`) are configurable
+
+
 # Beat Grid
 
 [Up](#deck)
@@ -928,7 +949,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 **Detail**
 
-- A flat `{identity: entry}` JSON map. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+- A JSON file: an `_about` header that explains itself to a stranger, then the `tracks` map of `{identity: entry}`, deterministically sorted. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
 - The two copies reconcile whenever a workspace becomes active — at start-up if one is already configured, and when the operator sets or changes it: the workspace copy wins on shared identities, local-only entries are pushed out, and both are written at once. Every later save writes both, so the analysis follows the library between machines.
 - A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced as an error event carrying the cause (see [Fault Capture](#fault-capture)).
 

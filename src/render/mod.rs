@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -155,10 +155,10 @@ pub(crate) struct SharedDetailRenderer {
     pub(crate) gain_c:         Arc<AtomicU32>,
     /// Loop mode (deck 3 PoC). When `loop_active_c` is true, the deck-C detail
     /// waveform tiles the loop content infinitely via `peaks_for_slot` wrapping.
-    /// Sample fields are in mono frames.
+    /// Both bounds live in one atomic (start in the high half, end in the low,
+    /// mono frames) so the background renderer can never read a mismatched pair.
     pub(crate) loop_active_c:  Arc<AtomicBool>,
-    pub(crate) loop_start_c:   Arc<AtomicUsize>,
-    pub(crate) loop_end_c:     Arc<AtomicUsize>,
+    pub(crate) loop_bounds_c:  Arc<AtomicU64>,
     pub(crate) shared_a:       Arc<Mutex<Arc<BrailleBuffer>>>,
     pub(crate) shared_b:       Arc<Mutex<Arc<BrailleBuffer>>>,
     pub(crate) shared_c:       Arc<Mutex<Arc<BrailleBuffer>>>,
@@ -206,8 +206,7 @@ impl SharedDetailRenderer {
         let gain_b         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let gain_c         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let loop_active_c  = Arc::new(AtomicBool::new(false));
-        let loop_start_c   = Arc::new(AtomicUsize::new(0));
-        let loop_end_c     = Arc::new(AtomicUsize::new(0));
+        let loop_bounds_c  = Arc::new(AtomicU64::new(0));
         let shared_a: Arc<Mutex<Arc<BrailleBuffer>>> =
             Arc::new(Mutex::new(Arc::new(BrailleBuffer::empty())));
         let shared_b: Arc<Mutex<Arc<BrailleBuffer>>> =
@@ -252,8 +251,7 @@ impl SharedDetailRenderer {
             let gain_b_bg    = Arc::clone(&gain_b);
             let gain_c_bg    = Arc::clone(&gain_c);
             let loop_active_c_bg = Arc::clone(&loop_active_c);
-            let loop_start_c_bg  = Arc::clone(&loop_start_c);
-            let loop_end_c_bg    = Arc::clone(&loop_end_c);
+            let loop_bounds_c_bg = Arc::clone(&loop_bounds_c);
             let shared_a_bg  = Arc::clone(&shared_a);
             let shared_b_bg  = Arc::clone(&shared_b);
             let shared_c_bg  = Arc::clone(&shared_c);
@@ -335,8 +333,9 @@ impl SharedDetailRenderer {
                         let ch  = ch_at[slot].load(Ordering::Relaxed).max(1);
                         let pos = pos_at[slot].load(Ordering::Relaxed) / ch;
                         let load_gen = gen_at[slot].load(Ordering::Relaxed);
-                        let loop_bounds = if slot == 2 && loop_active_c_bg.load(Ordering::Relaxed) {
-                            let (s, e) = (loop_start_c_bg.load(Ordering::Relaxed), loop_end_c_bg.load(Ordering::Relaxed));
+                        let loop_bounds = if slot == 2 && loop_active_c_bg.load(Ordering::Acquire) {
+                            let packed = loop_bounds_c_bg.load(Ordering::Relaxed);
+                            let (s, e) = ((packed >> 32) as usize, (packed & 0xFFFF_FFFF) as usize);
                             (e > s).then_some((s, e))
                         } else { None };
                         let params = SlotParams {
@@ -416,7 +415,7 @@ impl SharedDetailRenderer {
             offset_ms_a, offset_ms_b, offset_ms_c,
             cue_sample_a, cue_sample_b, cue_sample_c,
             gain_a, gain_b, gain_c,
-            loop_active_c, loop_start_c, loop_end_c,
+            loop_active_c, loop_bounds_c,
             shared_a, shared_b, shared_c,
             _stop_guard: stop_guard,
         }
@@ -452,9 +451,13 @@ impl SharedDetailRenderer {
     /// are in mono frames. Ignored for other slots.
     pub(crate) fn store_loop(&self, slot: usize, active: bool, start_mono: usize, end_mono: usize) {
         if slot == 2 {
-            self.loop_start_c.store(start_mono, Ordering::Relaxed);
-            self.loop_end_c.store(end_mono, Ordering::Relaxed);
-            self.loop_active_c.store(active, Ordering::Relaxed);
+            // Bounds land before the flag (Release pairs with the reader's
+            // Acquire), so a reader that sees `active` always has real bounds —
+            // and one packed store means it can never see a mismatched pair.
+            let packed = ((start_mono.min(u32::MAX as usize) as u64) << 32)
+                | (end_mono.min(u32::MAX as usize) as u64);
+            self.loop_bounds_c.store(packed, Ordering::Relaxed);
+            self.loop_active_c.store(active, Ordering::Release);
         }
     }
 

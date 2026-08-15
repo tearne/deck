@@ -57,7 +57,37 @@ pub(crate) struct CacheEntry {
     pub(crate) gain_db: i8,
 }
 
-type TrackEntries = std::collections::HashMap<String, CacheEntry>;
+/// BTreeMap so both file copies serialise in one deterministic order — a
+/// versioned library doesn't churn diffs on every save.
+type TrackEntries = std::collections::BTreeMap<String, CacheEntry>;
+
+/// The self-explaining header carried at the top of every `track-data.json`,
+/// for the stranger who finds one in a library root.
+const TRACK_DATA_ABOUT: &[&str] = &[
+    "Deck's per-track memory: BPM, beat-grid offset, cue point, and gain trim,",
+    "keyed by content identity — a hash of the audio data with tags excluded,",
+    "so entries follow tracks across renames and retags.",
+    "Canonical copy: ~/.local/share/deck/track-data.json; when a search",
+    "workspace is set, a second copy travels in the library root.",
+    "Safe to delete: analysis re-runs on demand, but cues and trims are lost.",
+];
+
+/// The on-disk form: header plus entries. Reading falls back to the legacy
+/// flat map, so an old file upgrades silently at its next save.
+#[derive(Deserialize)]
+struct TrackDataFile {
+    #[serde(rename = "_about")]
+    #[allow(dead_code)] // present in the file; the app has no use for it
+    about: Vec<String>,
+    tracks: TrackEntries,
+}
+
+#[derive(Serialize)]
+struct TrackDataFileRef<'a> {
+    #[serde(rename = "_about")]
+    about: &'a [&'a str],
+    tracks: &'a TrackEntries,
+}
 
 pub(crate) struct TrackDatabase {
     path: PathBuf,
@@ -119,18 +149,21 @@ impl TrackDatabase {
     }
 
     pub(crate) fn save(&self) {
-        write_json_atomic(&self.path, &self.entries);
+        let file = TrackDataFileRef { about: TRACK_DATA_ABOUT, tracks: &self.entries };
+        write_json_atomic(&self.path, &file);
         if let Some(mirror) = &self.mirror_path {
-            write_json_atomic(mirror, &self.entries);
+            write_json_atomic(mirror, &file);
         }
     }
 }
 
 fn read_entries(path: &Path) -> TrackEntries {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    let Ok(text) = std::fs::read_to_string(path) else { return TrackEntries::default() };
+    if let Ok(file) = serde_json::from_str::<TrackDataFile>(&text) {
+        return file.tracks;
+    }
+    // Legacy form: the bare entries map, headerless.
+    serde_json::from_str(&text).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -175,6 +208,31 @@ mod tests {
         assert_eq!(mirror.get("X").unwrap().name, "x-from-workspace");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The saved file carries the `_about` header, stays valid JSON, reads
+    /// back losslessly — and a legacy headerless file still reads (as the
+    /// mirror test above also exercises).
+    #[test]
+    fn about_header_roundtrip_and_legacy_fallback() {
+        let dir = std::env::temp_dir().join(format!("deck-about-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(TRACK_DATA_FILE);
+
+        let mut entries = TrackEntries::new();
+        entries.insert("A".into(), entry(128.0, "a"));
+        write_json_atomic(&path, &TrackDataFileRef { about: TRACK_DATA_ABOUT, tracks: &entries });
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.trim_start().starts_with("{\n  \"_about\""), "header leads the file");
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("stays plain valid JSON");
+        assert!(parsed.get("_about").is_some());
+        assert_eq!(read_entries(&path).get("A").unwrap().bpm, 128.0, "roundtrip");
+
+        std::fs::write(&path, serde_json::to_string(&entries).unwrap()).unwrap();
+        assert_eq!(read_entries(&path).get("A").unwrap().bpm, 128.0, "legacy fallback");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
