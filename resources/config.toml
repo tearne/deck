@@ -17,30 +17,26 @@ nudge_mode_toggle = "¬"
 fps_increase      = "^"
 fps_decrease      = "Y"
 
-# Deck select
-select_deck1 = "alt+1"
-select_deck2 = "alt+2"
-select_deck3 = "alt+3"
-# Cycle the selected deck (Zellij-style): down/right advance, up/left retreat
-select_next_deck = ["alt+down", "alt+right"]
-select_prev_deck = ["alt+up", "alt+left"]
+# Deck select — Zellij-style cycling on the fresh Alt layer
+select_next_deck = "alt+j"
+select_prev_deck = "alt+k"
 # Skip the selected deck's playlist to the next / previous track
-playlist_next = "alt+n"
-playlist_prev = "alt+p"
+playlist_next = "space+n"
+playlist_prev = "space+p"
 
 # Transport / browse (selected deck)
-play_pause   = "alt+g"
-open_browser = "alt+f"
+play_pause   = "space+g"
+open_browser = "space+f"
 
 # Pitch (selected deck)
 pitch_up    = "a"
 pitch_down  = "z"
-pitch_reset = ["alt+a", "alt+z"]
+pitch_reset = ["space+a", "space+z"]
 
 # BPM (selected deck)
 bpm_tap          = "b"
-detect_bpm       = "alt+b"
-metronome_toggle = "alt+v"
+detect_bpm       = "space+b"
+metronome_toggle = "space+v"
 
 # Loop mode (PoC: deck 3 only)
 loop_tap   = "g"
@@ -49,7 +45,7 @@ bpm_increase     = "v"
 bpm_decrease     = "f"
 base_bpm_increase = "V"
 base_bpm_decrease = "F"
-speed_reset      = "alt+c"
+speed_reset      = "space+c"
 
 # Nudge (selected deck)
 nudge_forward  = "d"
@@ -66,8 +62,8 @@ cue_play = "G"
 # PFL (selected deck)
 pfl_up     = "s"
 pfl_down   = "x"
-pfl_reset  = ["alt+s", "alt+x"]
-pfl_on_off = "alt+d"
+pfl_reset  = ["space+s", "space+x"]
+pfl_on_off = "space+d"
 
 # Beat jumps (selected deck)
 jump_forward_1bt  = "1"
@@ -88,45 +84,45 @@ jump_backward_64b = "T"
 # Mixer — Deck 1
 deck1_level_up          = "j"
 deck1_level_down        = "m"
-deck1_level_max         = "alt+j"
-deck1_level_min         = "alt+m"
+deck1_level_max         = "space+j"
+deck1_level_min         = "space+m"
 deck1_gain_increase     = "J"
 deck1_gain_decrease     = "M"
 deck1_filter_increase        = "7"
 deck1_filter_decrease        = "u"
-deck1_filter_reset           = ["alt+7", "alt+u"]
+deck1_filter_reset           = ["space+7", "space+u"]
 deck1_filter_slope_increase  = "&"
 deck1_filter_slope_decrease  = "U"
 
 # Mixer — Deck 2
 deck2_level_up          = "k"
 deck2_level_down        = ","
-deck2_level_max         = "alt+k"
-deck2_level_min         = "alt+,"
+deck2_level_max         = "space+k"
+deck2_level_min         = "space+,"
 deck2_gain_increase     = "K"
 deck2_gain_decrease     = "<"
 deck2_filter_increase        = "8"
 deck2_filter_decrease        = "i"
-deck2_filter_reset           = ["alt+8", "alt+i"]
+deck2_filter_reset           = ["space+8", "space+i"]
 deck2_filter_slope_increase  = "*"
 deck2_filter_slope_decrease  = "I"
 
 # Mixer — Deck 3
 deck3_level_up          = "l"
 deck3_level_down        = "."
-deck3_level_max         = "alt+l"
-deck3_level_min         = "alt+."
+deck3_level_max         = "space+l"
+deck3_level_min         = "space+."
 deck3_gain_increase     = "L"
 deck3_gain_decrease     = ">"
 deck3_filter_increase        = "9"
 deck3_filter_decrease        = "o"
-deck3_filter_reset           = ["alt+9", "alt+o"]
+deck3_filter_reset           = ["space+9", "space+o"]
 deck3_filter_slope_increase  = "("
 deck3_filter_slope_decrease  = "O"
 
 # Deck swap
-swap_deck1_deck2 = "alt+="
-swap_deck2_deck3 = "alt+-"
+swap_deck1_deck2 = "space+="
+swap_deck2_deck3 = "space+-"
 
 [display]
 playhead_position = 20        # 0–100, percentage from left edge of detail panel

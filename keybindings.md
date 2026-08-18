@@ -10,7 +10,7 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
 ```
   ╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope
   1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF
-  ╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=
+  ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
     ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
     Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
     ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
@@ -22,10 +22,10 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   p palette   Alt+= swap1↔2   Alt+- swap2↔3   Y/^ fps          ╰ [Alt]
+/ art   p palette   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck      ╰ [Space]
 ```
 
-Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Alt-action`. Empty modifier cells = no binding on that layer.
+Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
 
 Not shown in the overlay: `?` help toggle.
 
@@ -58,37 +58,34 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `select_deck1` | `alt+1` | Select deck 1 |
-| `select_deck2` | `alt+2` | Select deck 2 |
-| `select_deck3` | `alt+3` | Select deck 3 |
-| `select_next_deck` | `alt+down`, `alt+right` | Cycle to next deck (wraps) |
-| `select_prev_deck` | `alt+up`, `alt+left` | Cycle to previous deck (wraps) |
-| `playlist_next` | `alt+n` | Selected deck: skip to next playlist track |
-| `playlist_prev` | `alt+p` | Selected deck: skip to previous playlist track |
-| `swap_deck1_deck2` | `alt+=` | Swap decks 1 ↔ 2 |
-| `swap_deck2_deck3` | `alt+-` | Swap decks 2 ↔ 3 |
+| `select_next_deck` | `alt+j` | Cycle to next deck (wraps; works in the browser too) |
+| `select_prev_deck` | `alt+k` | Cycle to previous deck (wraps; works in the browser too) |
+| `playlist_next` | `space+n` | Selected deck: skip to next playlist track |
+| `playlist_prev` | `space+p` | Selected deck: skip to previous playlist track |
+| `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 |
+| `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 |
 
 ### Transport
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `play_pause` | `alt+g` | Play/pause |
-| `open_browser` | `alt+f` | Open file browser |
+| `play_pause` | `space+g` | Play/pause |
+| `open_browser` | `space+f` | Open file browser |
 
 ### BPM & Beat Grid
 
 | Action | Default | Description |
 |--------|---------|-------------|
 | `bpm_tap` | `b` | Tap BPM |
-| `detect_bpm` | `alt+b` | Trigger BPM detection |
+| `detect_bpm` | `space+b` | Trigger BPM detection |
 | `bpm_increase` | `v` | Playback BPM +0.1 |
 | `bpm_decrease` | `f` | Playback BPM −0.1 |
 | `base_bpm_increase` | `V` | Native BPM +0.01 |
 | `base_bpm_decrease` | `F` | Native BPM −0.01 |
-| `speed_reset` | `alt+c` | Reset playback speed to nominal |
+| `speed_reset` | `space+c` | Reset playback speed to nominal |
 | `offset_increase` | `D` | Phase offset +10 ms |
 | `offset_decrease` | `C` | Phase offset −10 ms |
-| `metronome_toggle` | `alt+v` | Toggle metronome |
+| `metronome_toggle` | `space+v` | Toggle metronome |
 
 ### Nudge
 
@@ -110,7 +107,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `pitch_up` | `a` | Pitch +1 semitone |
 | `pitch_down` | `z` | Pitch −1 semitone |
-| `pitch_reset` | `alt+a`, `alt+z` | Reset pitch to 0 |
+| `pitch_reset` | `space+a`, `space+z` | Reset pitch to 0 |
 
 ### PFL
 
@@ -118,8 +115,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `pfl_up` | `s` | PFL level +20 |
 | `pfl_down` | `x` | PFL level −20 |
-| `pfl_reset` | `alt+s`, `alt+x` | PFL level to 0 |
-| `pfl_on_off` | `alt+d` | Toggle PFL on (100) / off (0) |
+| `pfl_reset` | `space+s`, `space+x` | PFL level to 0 |
+| `pfl_on_off` | `space+d` | Toggle PFL on (100) / off (0) |
 
 ### Beat Jump
 
@@ -148,13 +145,13 @@ Actions are prefixed `deck1_`, `deck2_`, `deck3_`. Default keys are shown left t
 |-----------------|--------|--------|--------|-------------|
 | `deckN_level_up` | `j` | `k` | `l` | Level +5% |
 | `deckN_level_down` | `m` | `,` | `.` | Level −5% |
-| `deckN_level_max` | `alt+j` | `alt+k` | `alt+l` | Level to 100% |
-| `deckN_level_min` | `alt+m` | `alt+,` | `alt+.` | Level to 0% |
+| `deckN_level_max` | `space+j` | `space+k` | `space+l` | Level to 100% |
+| `deckN_level_min` | `space+m` | `space+,` | `space+.` | Level to 0% |
 | `deckN_gain_increase` | `J` | `K` | `L` | Gain +1 dB |
 | `deckN_gain_decrease` | `M` | `<` | `>` | Gain −1 dB |
 | `deckN_filter_increase` | `7` | `8` | `9` | Filter toward HPF |
 | `deckN_filter_decrease` | `u` | `i` | `o` | Filter toward LPF |
-| `deckN_filter_reset` | `alt+7`, `alt+u` | `alt+8`, `alt+i` | `alt+9`, `alt+o` | Filter to flat |
+| `deckN_filter_reset` | `space+7`, `space+u` | `space+8`, `space+i` | `space+9`, `space+o` | Filter to flat |
 | `deckN_filter_slope_increase` | `&` | `*` | `(` | Filter slope up |
 | `deckN_filter_slope_decrease` | `U` | `I` | `O` | Filter slope down |
 
@@ -175,7 +172,7 @@ Not configurable — hardcoded in the application.
 | Key | Action |
 |-----|--------|
 | `Up` / `Down` / `j` / `k` | Navigate entries |
-| `Enter` | Load highlighted track, or open highlighted playlist |
+| `Enter` | Load highlighted track to the selected deck, or open highlighted playlist |
 | `Backspace` / `Left` | Go up a directory |
 | `@` | Set current directory as workspace |
 | `'` | Clear workspace |
@@ -211,8 +208,8 @@ Not configurable — hardcoded in the application.
 
 | Key | Context | Action |
 |-----|---------|--------|
-| `y` / `Enter` | BPM detection, quit, browser-blocked | Confirm |
-| `n` / `Esc` | BPM detection, quit, browser-blocked | Cancel |
+| `y` | BPM detection, quit, load-to-playing-deck | Confirm (only `y` — a reflexive Enter dismisses) |
+| any other key | BPM detection, quit, load-to-playing-deck | Cancel |
 | `y` | Rename offer | Open tag editor |
 | `Ctrl-C` | Any | Quit unconditionally |
 
@@ -231,7 +228,7 @@ Key bindings load from `config.toml` at startup — first from the binary's dire
 
 ### Key-string format
 
-Printable characters as-is (`q`, `+`, `H`). Special keys as lowercase names (`space`, `esc`, `up`, `down`, `left`, `right`, `enter`, `backspace`). Alt-modifier chords as `alt+<key>` (a legacy `space+<key>` form still parses to the same chord).
+Printable characters as-is (`q`, `+`, `H`). Special keys as lowercase names (`space`, `esc`, `up`, `down`, `left`, `right`, `enter`, `backspace`). Alt-modifier chords as `space+<key>` (a legacy `space+<key>` form still parses to the same chord).
 
 ### Display parameters
 

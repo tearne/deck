@@ -65,9 +65,6 @@ pub(crate) struct BrowserState {
     /// The file being relocated while in Move mode (the entry highlighted when `m`
     /// was pressed).
     pub(crate) move_source: Option<std::path::PathBuf>,
-    /// Which deck a load will target. Floats — set on open to the least-disruptive
-    /// deck and adjustable with `[`/`]` (any mode) or `1`/`2`/`3` (command mode).
-    pub(crate) target_deck: usize,
     /// Tag-compliance "cleanup mode": when on, the current directory is scanned and
     /// non-compliant files are marked. Toggled with `T`, preserved across navigation.
     pub(crate) compliance_on: bool,
@@ -122,7 +119,7 @@ impl BrowserState {
             .position(|e| Self::is_selectable(&e.kind) && e.name != "..")
             .unwrap_or(0);
 
-        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, name_prompt: None, move_source: None, target_deck: 0, compliance_on: false, location_label: None })
+        Ok(Self { cwd: dir, entries, cursor, workspace, search_term: String::new(), search_results: None, workspace_files: None, mode: BrowserMode::Command, name_prompt: None, move_source: None, compliance_on: false, location_label: None })
     }
 
     pub(crate) fn is_selectable(kind: &EntryKind) -> bool {
@@ -238,18 +235,16 @@ impl BrowserState {
         }
     }
 
-    /// Rebuild the browser at `dir`, preserving the workspace, mode, target deck,
+    /// Rebuild the browser at `dir`, preserving the workspace, mode,
     /// compliance mode, and any in-flight move source.
     fn navigate_to(&mut self, dir: std::path::PathBuf) -> io::Result<()> {
         let workspace = self.workspace.clone();
         let mode = self.mode;
         let move_source = self.move_source.take();
-        let target_deck = self.target_deck;
         let compliance_on = self.compliance_on;
         *self = BrowserState::new(dir, workspace)?;
         self.mode = mode;
         self.move_source = move_source;
-        self.target_deck = target_deck;
         self.compliance_on = compliance_on;
         if mode == BrowserMode::Move { self.snap_to_cursor_stop(); }
         Ok(())
@@ -412,6 +407,8 @@ pub(crate) fn render_browser(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     state: &BrowserState,
+    selected_deck: usize,
+    selected_playing: bool,
 ) {
     let bg    = Color::Rgb(20, 20, 38);
     let theme = mode_theme(state.mode);
@@ -422,16 +419,19 @@ pub(crate) fn render_browser(
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    // Top bar: a prominent load-target chip on the left (easy to miss otherwise),
+    // Top bar: a prominent selected-deck chip on the left (loads land there),
     // the mode's content right-aligned on the right.
     let top = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(11), Constraint::Min(0)])
         .split(chunks[0]);
+    // Chip colour warns about the landing zone: yellow = safe to load,
+    // red = the selected deck is playing (a load will ask to confirm).
+    let chip_bg = if selected_playing { Color::Rgb(255, 70, 70) } else { Color::Rgb(200, 170, 40) };
     frame.render_widget(
         Paragraph::new(Line::from(ratatui::text::Span::styled(
-            format!(" ▶ DECK {} ", state.target_deck + 1),
-            Style::default().fg(Color::Black).bg(theme.accent).add_modifier(Modifier::BOLD),
+            format!(" ▶ DECK {} ", selected_deck + 1),
+            Style::default().fg(Color::Black).bg(chip_bg).add_modifier(Modifier::BOLD),
         ))).style(Style::default().bg(bg)),
         top[0],
     );
@@ -619,8 +619,6 @@ pub(crate) fn handle_browser_key(
     // `[`/`]` cycle the load target in every mode — non-letter keys, so they don't
     // collide with search typing.
     match key.code {
-        KeyCode::Char('[') => { state.target_deck = (state.target_deck + 2) % 3; return Ok(None); }
-        KeyCode::Char(']') => { state.target_deck = (state.target_deck + 1) % 3; return Ok(None); }
         _ => {}
     }
     match state.mode {
@@ -690,7 +688,6 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
             }
             Ok(None)
         }
-        KeyCode::Char(d @ '1'..='3') => { state.target_deck = d as usize - '1' as usize; Ok(None) }
         // `n` starts a new playlist (name prompt), which opens in the editor.
         KeyCode::Char('n') => { state.name_prompt = Some(String::new()); Ok(None) }
         // Rotate through loaded-track locations.
@@ -769,7 +766,6 @@ mod tests {
             mode: BrowserMode::Command,
             name_prompt: None,
             move_source: None,
-            target_deck: 0,
             compliance_on: false,
             location_label: None,
         }

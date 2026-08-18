@@ -10,7 +10,6 @@ pub(crate) enum Action {
     NudgeModeToggle,
     ArtCycle,
     // Selected-deck controls
-    SelectDeck1, SelectDeck2, SelectDeck3,
     SelectNextDeck, SelectPrevDeck,
     PlaylistNext, PlaylistPrev,
     PlayPause, OpenBrowser,
@@ -66,9 +65,6 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("nudge_mode_toggle",  Action::NudgeModeToggle),
     ("art_cycle",          Action::ArtCycle),
     // Selected-deck controls
-    ("select_deck1",        Action::SelectDeck1),
-    ("select_deck2",        Action::SelectDeck2),
-    ("select_deck3",        Action::SelectDeck3),
     ("select_next_deck",    Action::SelectNextDeck),
     ("select_prev_deck",    Action::SelectPrevDeck),
     ("playlist_next",       Action::PlaylistNext),
@@ -153,14 +149,18 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
 #[derive(Hash, Eq, PartialEq)]
 pub(crate) enum KeyBinding {
     Key(KeyCode),
-    /// A chord: fires while a chord modifier (Alt, advertised; Space, legacy) is held.
-    Chord(KeyCode),
+    /// Space-chorded: the original chord layer, home of the long-standing actions.
+    SpaceChord(KeyCode),
+    /// Alt-chorded: the fresh feature layer, populated deliberately.
+    AltChord(KeyCode),
 }
 
 pub(crate) fn parse_key(s: &str) -> Option<KeyBinding> {
-    // `alt+` is the advertised form; `space+` still parses for existing configs.
-    if let Some(rest) = s.strip_prefix("alt+").or_else(|| s.strip_prefix("space+")) {
-        return parse_bare_key(rest).map(KeyBinding::Chord);
+    if let Some(rest) = s.strip_prefix("alt+") {
+        return parse_bare_key(rest).map(KeyBinding::AltChord);
+    }
+    if let Some(rest) = s.strip_prefix("space+") {
+        return parse_bare_key(rest).map(KeyBinding::SpaceChord);
     }
     parse_bare_key(s).map(KeyBinding::Key)
 }

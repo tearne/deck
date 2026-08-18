@@ -63,7 +63,6 @@ Application
 ├ Browser
 │ ├ Search
 │ ├ Preview
-│ ├ Load Target
 │ ├ Jump to Loaded
 │ ├ Tag Compliance
 │ ├ Context Panel
@@ -681,14 +680,13 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#search)
 [Down](#preview)
 [Down](#file-operations)
-[Down](#load-target)
 [Down](#tag-compliance)
 [Down](#jump-to-loaded)
 [Down](#context-panel)
 
 A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
-The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track into the current Load Target.
+The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track onto the **selected deck** — `Alt+j`/`Alt+k` cycle selection inside the browser as everywhere, and the deck chip and gutter accent turn bright red when a load would land on a playing deck.
 
 The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen. `Esc` backs out one level — clearing an active search filter in place (mode unchanged, so exiting from search still restores it on reopen), then exiting the browser. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
@@ -725,13 +723,6 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 - [Keymap](#keymap) — the preview key
 
 
-# Load Target
-
-[Up](#browser)
-
-Where `Enter` sends the highlighted track. The browser isn't bound to a deck — the target floats, shown as a chip. It defaults to the least-disruptive deck: an empty one, else a loaded-but-not-playing one, else the selected deck. Adjust it with `[`/`]` in any mode, or `1`/`2`/`3` in command mode. Loading into a deck that is playing asks to confirm first — `Enter` loads, any other key cancels.
-
-
 # Jump to Loaded
 
 [Up](#browser)
@@ -763,7 +754,7 @@ Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the curs
 
 The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's tags, or a playlist's entries. It follows the highlight passively until the operator focuses it.
 
-Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to a deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. While the panel has focus the browser dims, so which list is being driven is never in doubt.
+Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. While the panel has focus the browser dims, so which list is being driven is never in doubt.
 
 **See also**
 
@@ -909,9 +900,9 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 [Up](#application)
 [Down](#key-reporting)
 
-Three input layers on a split keyboard: plain keys, Shift-modified, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
+Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Alt is the chord modifier: holding it and pressing another key fires a chord action. Alt arrives as a reliable per-keypress modifier bit, so — unlike a held Space — there's no held-state to track. By convention, chords are reserved for one-time actions (set cue, open browser, select/cycle deck); continuous actions like nudge or fader movement use the plain or Shift layers. Space still fires the same chords as an unadvertised legacy modifier. Ctrl-C always quits unconditionally.
+Space chords fire **one-time actions** — set cue, open browser, play/pause, the resets — never anything expecting the modifier to be *held*, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second chord layer, deliberately sparse, home to newer features — deck cycling today, clip vocabulary to come — and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
 
 Esc steps up one level per press — dismiss the overlay, leave the panel, close the browser — one physical tap at a time. Repeats and releases are ignored, so holding it doesn't race through the levels.
 
@@ -992,7 +983,7 @@ Application messages appear in three places:
 
 Three kinds of message pass through them:
 
-- **Prompts** await a keypress beside what they ask about: deck prompts (BPM confirmation, rename offer) on the deck overlay, app prompts (quit and load confirmations) on the bar. Never recorded.
+- **Prompts** await a keypress beside what they ask about: deck prompts (BPM confirmation, rename offer) on the deck overlay, app prompts (quit and load confirmations) on the bar. Never recorded. Destructive confirmations accept only `y` — a reflexive Enter dismisses.
 
 - **Events** are things that happened — loads, moves, warnings, identity alerts. Every event enters the history; those needing attention also show on the bar, named ("Deck 2: …"), and leaving the bar loses nothing.
 

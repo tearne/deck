@@ -1844,7 +1844,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
 
     let sh = Style::default().fg(Color::Rgb(130, 100,  50));  // Shift layer: dim warm amber
     let ba = Style::default().fg(Color::Rgb(170, 170, 170));  // Bare layer:  medium gray
-    let sp = Style::default().fg(Color::Rgb( 60, 100, 160));  // Alt (chord) layer: dim cool blue
+    let sp = Style::default().fg(Color::Rgb( 60, 100, 160));  // Space (chord) layer: dim cool blue
     let gr = Style::default().fg(Color::Rgb( 80, 140,  70));  // nudge / BPM: muted sage
     let wh = Style::default().fg(Color::White);               // F-key bracket exception
 
@@ -1864,7 +1864,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("-BPM", gr),
         Span::styled("    G         ┆   J  K  L +Lvl", ba),
     ]);
-    // Row 9: Alt (chord) — F's ╰ bracket stays white
+    // Row 9: Space (chord) — F's ╰ bracket stays white
     let row9 = Line::from(vec![
         Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
         Span::styled("╰", wh),
@@ -1880,13 +1880,13 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
     // Row 13: separator — modifier legend as vertical ╭│╰ box flush-right
     let row13 = Line::from(vec![
-        Span::styled("──────────────────────────────────────────────────────────────────── ", ba),
+        Span::styled("───────────────────────────────────────────────────────────────────── ", ba),
         Span::styled("╭ [Shift]", sh),
     ]);
-    // Row 15: second footer line — ╰ [Alt] flush-right
+    // Row 15: second footer line — ╰ [Space] flush-right
     let row15 = Line::from(vec![
-        Span::styled("/ art   p palette   Alt+= swap1↔2   Alt+- swap2↔3   Y/^ fps          ", ba),
-        Span::styled("╰ [Alt]", sp),
+        Span::styled("/ art   p palette   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck        ", ba),
+        Span::styled("╰ [Space]", sp),
     ]);
 
     let lines: Vec<Line<'static>> = vec![
@@ -1904,9 +1904,9 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%", sp),
         row13,
         Line::from(vec![
-            Span::styled("` vinyl  ¬ nudge  -/= zoom  {/} height  [/] latency  ", ba),
+            Span::styled("` vinyl  ¬ nudge  -/= zoom  {/} height  [/] latency ", ba),
             Span::styled("N msgs", sh),
-            Span::styled("  Esc quit  │ [Bare]", ba),
+            Span::styled("  Esc quit  │ [Bare] ", ba),
         ]),
         row15,
     ];
