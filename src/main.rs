@@ -2452,9 +2452,12 @@ fn tui_loop(
                                     else { 0.01 };
                     let sign = if keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::BaseBpmIncrease) { 1.0f32 } else { -1.0f32 };
                     if let Some(ref mut d) = decks[selected_deck] {
+                        // Metadata correction: the playback BPM scales with the base so
+                        // the speed ratio — and therefore the audio — never changes.
+                        let ratio = d.tempo.bpm / d.tempo.base_bpm;
                         d.tempo.base_bpm = (d.tempo.base_bpm + sign * step).clamp(40.0, 240.0);
+                        d.tempo.bpm = (d.tempo.base_bpm * ratio).clamp(40.0, 240.0);
                         d.tempo.bpm_established = true;
-                        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                         shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                         anchor_beat_grid_to_cue(d);
                         if let Some(ref hash) = d.tempo.analysis_hash {
