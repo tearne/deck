@@ -1670,12 +1670,12 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_a);
                     }
                     render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
-                    title_spans.extend(overview_title_line(deck).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, frame_count, rs.beat_on, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[0] {
@@ -1700,12 +1700,12 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_b);
                     }
                     render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
-                    title_spans.extend(overview_title_line(deck).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, frame_count, rs.beat_on, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[1] {
@@ -1730,12 +1730,12 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_c);
                     }
                     render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
-                    title_spans.extend(overview_title_line(deck).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, frame_count, rs.beat_on, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[2] {

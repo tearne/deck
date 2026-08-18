@@ -231,7 +231,7 @@ The looked-up colours are emitted as xterm-256 indexed colours rather than truec
 
 The full-track waveform — a miniature map of the whole song. Playhead and cue point shown as vertical lines; spectral colour is shared with the detail view.
 
-Its corners carry the deck's text on a navy backing: top-left the title (deck number, play state, playlist badge, track name); bottom-right the readout — tempo and offset │ level and gain │ bar interval, spectrum and filter. Bottom-left holds only transient state (tap counter, nudge arrows), and a countdown prompt briefly displaces the readout. A narrow terminal costs waveform, never title or readout.
+Its corners carry the deck's text on a navy backing: top-left the deck number, tempo (BPM or percentage — the fixed-column readout the eye returns to), playlist badge, and track name; bottom-right the readout — mode and grid offset │ level and gain │ bar interval, spectrum and filter. Bottom-left holds only transient state (tap counter, nudge arrows), and a countdown prompt briefly displaces the readout. A narrow terminal costs waveform, never title or readout.
 
 Rendered at half-column braille resolution: each character encodes two adjacent audio columns, doubling horizontal detail within the terminal width.
 

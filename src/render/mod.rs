@@ -578,9 +578,9 @@ impl SharedDetailRenderer {
 
 /// Play state, badge, and track name for the overview's top-left overlay; a
 /// lingering rename offer marks the title it concerns with an amber ⚠.
-pub(crate) fn overview_title_line(deck: &Deck) -> Line<'static> {
-    let play_icon = if deck.audio.player.is_paused() { "⏸" } else { "▶" };
-    let mut spans = vec![Span::styled(format!("{play_icon} "), Style::default().fg(Color::DarkGray))];
+pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool) -> Line<'static> {
+    let mut spans = tempo_spans(deck, frame_count, beat_on, analysing);
+    spans.push(Span::raw(" "));
     let (badge, _) = playlist_badge(deck);
     spans.extend(badge);
     spans.push(Span::styled(
@@ -729,7 +729,6 @@ fn tempo_spans(
                 if deck.metronome_mode {
                     spans.push(Span::styled("\u{266A}", Style::default().fg(Color::Red)));
                 }
-                spans.push(Span::styled(format!(" {:+}ms", deck.tempo.offset_ms), dim));
             }
         } else {
             // base_bpm adjusts in 0.01 steps → 2dp; playback bpm adjusts in 0.1 steps → 1dp.
@@ -760,7 +759,6 @@ fn tempo_spans(
             if deck.metronome_mode {
                 spans.push(Span::styled("\u{266A}", Style::default().fg(Color::Red)));
             }
-            spans.push(Span::styled(format!(" {:+}ms", deck.tempo.offset_ms), dim));
         }
         spans
     };
@@ -854,8 +852,6 @@ fn spectrum_filter_spans(deck: &Deck, overview_width: usize, analysing: bool) ->
 pub(crate) fn readout_corner_line(
     deck: &Deck,
     overview_width: usize,
-    frame_count: usize,
-    beat_on: bool,
     analysing: bool,
 ) -> Line<'static> {
     let sep = Span::styled("│", Style::default().fg(Color::Rgb(70, 70, 90)));
@@ -864,8 +860,10 @@ pub(crate) fn readout_corner_line(
         DeckMode::Beat     => "BEAT",
     };
     let mut spans = vec![Span::styled(mode_tag, Style::default().fg(Color::Rgb(110, 110, 130))), sep.clone()];
-    spans.extend(tempo_spans(deck, frame_count, beat_on, analysing));
-    spans.push(sep.clone());
+    if deck.mode == DeckMode::Beat && deck.tempo.bpm_established {
+        spans.push(Span::styled(format!("{:+}ms", deck.tempo.offset_ms), Style::default().fg(Color::DarkGray)));
+        spans.push(sep.clone());
+    }
     spans.extend(meter_spans(deck));
     spans.push(sep);
     spans.extend(spectrum_filter_spans(deck, overview_width, analysing));
