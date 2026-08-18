@@ -21,7 +21,7 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
-` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
+` mode    ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
 / art   p palette   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck      ╰ [Space]
 ```
 
@@ -41,7 +41,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `quit` | `esc` | Quit (confirmation only while a deck is playing) |
 | `help` | `?` | Toggle keyboard help overlay |
 | `message_history` | `N` | Toggle message history overlay (k/j scroll, Esc close) |
-| `vinyl_mode_toggle` | `` ` `` | Toggle vinyl/beat mode |
+| `mode_cycle` | `` ` `` | Cycle the selected deck's mode (Playback/Beat); `vinyl_mode_toggle` still parses as an alias |
 | `nudge_mode_toggle` | `¬` | Toggle nudge jump/warp |
 | `zoom_in` | `-` | Zoom in |
 | `zoom_out` | `=` | Zoom out |
@@ -154,14 +154,6 @@ Actions are prefixed `deck1_`, `deck2_`, `deck3_`. Default keys are shown left t
 | `deckN_filter_reset` | `space+7`, `space+u` | `space+8`, `space+i` | `space+9`, `space+o` | Filter to flat |
 | `deckN_filter_slope_increase` | `&` | `*` | `(` | Filter slope up |
 | `deckN_filter_slope_decrease` | `U` | `I` | `O` | Filter slope down |
-
-### Loop (experimental)
-
-| Action | Default | Description |
-|--------|---------|-------------|
-| `loop_tap` | `g` | Tap loop entry |
-| `loop_exit` | `H` | Exit loop |
-
 
 ## Fixed Keys
 

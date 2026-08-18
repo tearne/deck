@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -7,6 +7,7 @@ use rodio::Player;
 
 use crate::audio::{butterworth_biquad, SeekHandle, WaveformData, FILTER_CUTOFFS_HZ};
 use crate::cache::CacheEntry;
+use serde::{Deserialize, Serialize};
 
 pub(crate) type Rgb = (u8, u8, u8);
 /// Four-stop spectral palette: (treble, mid-treble, mid-bass, bass).
@@ -39,11 +40,6 @@ pub(crate) struct DeckAudio {
     pub(crate) filter_poles: Arc<AtomicU8>,
     /// Pitch shift in semitones (±6); shared with PitchSource on the audio thread.
     pub(crate) pitch_semitones: Arc<AtomicI8>,
-    /// Loop mode atomics, shared with TrackingSource. start/end are interleaved-sample
-    /// indices (already multiplied by channels), matching the units used by `position`.
-    pub(crate) loop_active: Arc<AtomicBool>,
-    pub(crate) loop_start: Arc<AtomicUsize>,
-    pub(crate) loop_end: Arc<AtomicUsize>,
 }
 
 pub(crate) struct TempoState {
@@ -62,24 +58,15 @@ pub(crate) struct TempoState {
     pub(crate) redetecting: bool,
     pub(crate) redetect_saved_hash: Option<String>,
     pub(crate) background_rx: Option<std::sync::mpsc::Receiver<(String, f32, i64, bool, Option<String>)>>,
-    /// Absolute playback speed multiplier (1.0 = nominal). Used in vinyl mode and when
-    /// no BPM is established. Independent of BPM state; passed directly to `player.set_speed`.
-    pub(crate) vinyl_speed: f32,
+    /// Absolute playback speed multiplier (1.0 = nominal). Used in Playback mode and
+    /// when no BPM is established. Independent of BPM state; passed directly to `player.set_speed`.
+    pub(crate) playback_speed: f32,
 }
 
 pub(crate) struct TapState {
     pub(crate) tap_times: Vec<f64>,
     pub(crate) last_tap_wall: Option<Instant>,
     pub(crate) was_tap_active: bool,
-}
-
-/// Per-deck loop mode state. Sample fields are in mono frames (not interleaved samples),
-/// to match how the rest of the deck reasons about playhead position. The atomics on
-/// DeckAudio carry the interleaved equivalents for the audio thread.
-pub(crate) struct LoopState {
-    pub(crate) active: bool,
-    pub(crate) start_sample: usize,
-    pub(crate) end_sample: usize,
 }
 
 /// Everything the rendered overview depends on. The overview is rebuilt only
@@ -126,6 +113,13 @@ pub(crate) struct SpectrumState {
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum NudgeMode { Jump, Warp }
+
+/// A deck's operating mode. Playback ignores the beat grid entirely; Beat
+/// unlocks BPM-relative jumps and displays. Clip joins with clip-mode-core.
+/// Per deck, remembered per track.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DeckMode { Playback, Beat }
 
 pub(crate) const TAG_FIELD_LABELS: &[&str] = &[
     " Artist", "  Title", "  Album", "   Year", "  Track", "  Genre", "Comment",
@@ -219,6 +213,7 @@ pub(crate) struct Deck {
     pub(crate) pitch_semitones: i8,
     pub(crate) nudge: i8,
     pub(crate) nudge_mode: NudgeMode,
+    pub(crate) mode: DeckMode,
     pub(crate) metronome_mode: bool,
     pub(crate) last_metro_beat: Option<i128>,
     pub(crate) cue_sample: Option<usize>,
@@ -235,10 +230,6 @@ pub(crate) struct Deck {
     pub(crate) mixer: Mixer,
     pub(crate) tempo: TempoState,
     pub(crate) tap: TapState,
-    /// Separate tap session for loop entry; lives alongside `tap` so the two gestures
-    /// don't interfere when both keys are bound on the same deck.
-    pub(crate) loop_tap: TapState,
-    pub(crate) loop_state: LoopState,
     pub(crate) display: DisplayState,
     pub(crate) spectrum: SpectrumState,
 }
@@ -262,6 +253,7 @@ impl Deck {
             pitch_semitones: 0,
             nudge: 0,
             nudge_mode: NudgeMode::Jump,
+            mode: DeckMode::Beat,
             metronome_mode: false,
             last_metro_beat: None,
             cue_sample: None,
@@ -285,22 +277,12 @@ impl Deck {
                 redetecting: false,
                 redetect_saved_hash: None,
                 background_rx: None,
-                vinyl_speed: 1.0,
+                playback_speed: 1.0,
             },
             tap: TapState {
                 tap_times: Vec::new(),
                 last_tap_wall: None,
                 was_tap_active: false,
-            },
-            loop_tap: TapState {
-                tap_times: Vec::new(),
-                last_tap_wall: None,
-                was_tap_active: false,
-            },
-            loop_state: LoopState {
-                active: false,
-                start_sample: 0,
-                end_sample: 0,
             },
             display: DisplayState {
                 smooth_display_samp: 0.0,
@@ -518,7 +500,7 @@ pub(crate) fn do_jump(seek_handle: &SeekHandle, player: &rodio::Player, bpm: f32
     }
 }
 
-/// Seek by a fixed number of seconds (vinyl mode jump).
+/// Seek by a fixed number of seconds (Playback-mode jump).
 pub(crate) fn do_time_jump(seek_handle: &SeekHandle, player: &Player, track_end: f64, secs: f64) {
     let current = seek_handle.current_pos().as_secs_f64();
     let playing  = !player.is_paused();
@@ -541,6 +523,7 @@ pub(crate) fn cache_entry_for_deck(d: &Deck) -> CacheEntry {
         cue_sample: d.cue_sample,
         offset_established: d.tempo.offset_established,
         gain_db: d.mixer.gain_db,
+        mode: Some(d.mode),
     }
 }
 

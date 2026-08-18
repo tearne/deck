@@ -2,7 +2,7 @@ use crossterm::event::KeyCode;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Action {
-    Quit, Help, MessageHistory, VinylModeToggle,
+    Quit, Help, MessageHistory, ModeCycle,
     ZoomIn, ZoomOut, HeightIncrease, HeightDecrease,
     LatencyIncrease, LatencyDecrease,
     FpsIncrease, FpsDecrease,
@@ -15,7 +15,6 @@ pub(crate) enum Action {
     PlayPause, OpenBrowser,
     PitchUp, PitchDown, PitchReset,
     BpmTap, MetronomeToggle, DetectBpm,
-    LoopTap, LoopExit,
     BpmIncrease, BpmDecrease,
     BaseBpmIncrease, BaseBpmDecrease,
     SpeedReset,
@@ -52,7 +51,9 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("help",              Action::Help),
     ("message_history",   Action::MessageHistory),
 
-    ("vinyl_mode_toggle",   Action::VinylModeToggle),
+    ("mode_cycle",          Action::ModeCycle),
+    // Legacy alias from the global vinyl/beat toggle era.
+    ("vinyl_mode_toggle",   Action::ModeCycle),
     ("zoom_in",           Action::ZoomIn),
     ("zoom_out",          Action::ZoomOut),
     ("height_increase",   Action::HeightIncrease),
@@ -77,8 +78,6 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("bpm_tap",             Action::BpmTap),
     ("metronome_toggle",    Action::MetronomeToggle),
     ("detect_bpm",          Action::DetectBpm),
-    ("loop_tap",            Action::LoopTap),
-    ("loop_exit",           Action::LoopExit),
     ("bpm_increase",        Action::BpmIncrease),
     ("bpm_decrease",        Action::BpmDecrease),
     ("base_bpm_increase",   Action::BaseBpmIncrease),

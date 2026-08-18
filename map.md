@@ -52,7 +52,6 @@ Application
 │ │   ├ Quiet-Frame Search
 │ │   ├ Fade Envelope
 │ │   └ Pipeline Flush
-│ ├ Loop Prototype
 │ ├ Beat Grid
 │ │ └ Cue Point
 │ └ Audio Pipeline
@@ -100,7 +99,6 @@ Application
 [Down](#spectrum-analyser)
 [Down](#detail-waveform)
 [Down](#transport)
-[Down](#loop-prototype)
 [Down](#beat-grid)
 [Down](#audio-pipeline)
 
@@ -237,7 +235,7 @@ Its corners carry the deck's text on a navy backing: top-left the title (deck nu
 
 Rendered at half-column braille resolution: each character encodes two adjacent audio columns, doubling horizontal detail within the terminal width.
 
-In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In vinyl mode, bar markers and the warning flash are suppressed.
+In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In Playback mode, bar markers and the warning flash are suppressed.
 
 **See also**
 
@@ -385,10 +383,10 @@ When the playhead falls between character boundaries, braille bit manipulation s
 [Down](#speed-control)
 [Down](#click-free-seek)
 
-Play, pause, seek, and position control. Reaching the end of the track pauses the transport and returns the playhead to the start, the view staying interactive. Two top-level modes shape behaviour:
+Play, pause, seek, and position control. Reaching the end of the track pauses the transport and returns the playhead to the start, the view staying interactive. The deck's mode shapes behaviour:
 
 - **Beat mode** — BPM-relative operations: beat jump by N beats, speed as BPM ratio
-- **Vinyl mode** — hides BPM machinery, speed as percentage, beat jumps remapped to fixed time intervals
+- **Playback mode** — hides BPM machinery, speed as percentage, beat jumps remapped to fixed time intervals
 
 **See also**
 
@@ -399,19 +397,17 @@ Play, pause, seek, and position control. Reaching the end of the track pauses th
 
 [Up](#transport)
 
-A global toggle that applies to all decks simultaneously. The mode determines how speed is represented and how beat jumps behave.
+Each deck runs in its own mode, cycled with the mode key on the selected deck — an empty deck has none. A track reopens in the mode it last used, remembered per identity alongside cue and gain.
 
-- **Beat mode** — speed is a BPM ratio (`bpm / base_bpm`), beat grid and tick marks visible, beat jumps land on beat boundaries
-- **Vinyl mode** — speed is a percentage of nominal (`vinyl_speed`, 1.0 = nominal), beat grid hidden, beat jumps remapped to fixed time intervals (N × 0.5s); BPM analysis and re-detection are suppressed
+- **Playback** — no BPM required: speed as a percentage of nominal (`playback_speed`, 1.0 = nominal), jumps at fixed time intervals, grid machinery hidden and analysis suppressed.
 
-Switching modes preserves audio speed — no audible change on toggle. Beat-to-vinyl converts the current BPM ratio to `vinyl_speed`; vinyl-to-beat converts `vinyl_speed` back to a BPM.
+- **Beat** — speed as a BPM ratio (`bpm / base_bpm`), beat grid and tick marks visible, jumps move by exact beat/bar multiples, preserving grid phase.
 
-The active mode is stored in cache and restored on startup. Default is beat mode.
+Switching preserves audio speed — no audible change on the cycle. Each deck's readout leads with its mode tag (`BEAT│` / `PLAY│`).
 
 **See also**
 
-- [Session State](#session-state) — stores and restores the active mode
-
+- [Track Database](#track-database) — where the per-track mode memory lives
 
 # Nudge
 
@@ -434,10 +430,10 @@ Warp needs the terminal to report key releases; where it can't, the mode toggle 
 
 [Up](#transport)
 
-Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction. Each jump lands exactly N beat periods ahead or behind.
+Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction.
 
-- **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds, landing precisely on the next tick mark
-- **Vinyl mode** — remapped to fixed time intervals: N × 0.5s (the beat period at 120 BPM)
+- **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds: exactly N beat periods away, grid phase preserved
+- **Playback mode** — remapped to fixed time intervals: N × 0.5s (the beat period at 120 BPM)
 
 Backward past the start clamps to position 0. Forward past the end is a no-op.
 
@@ -464,7 +460,7 @@ A left-click on the overview waveform seeks to the start of the nearest bar at o
 Adjusts playback speed like a turntable — faster playback raises pitch, slower lowers it. The representation depends on mode:
 
 - **Beat mode** — two tiers: `base_bpm_increase`/`base_bpm_decrease` adjust the native BPM in 0.01 steps; `bpm_increase`/`bpm_decrease` adjust the playback BPM in 0.1 steps. Playback speed is the ratio `bpm / base_bpm`.
-- **Vinyl mode** — the same keys adjust `vinyl_speed` in 0.001 steps (±0.1%). Speed is passed directly to the player.
+- **Playback mode** — the same keys adjust `playback_speed` in 0.001 steps (±0.1%). Speed is passed directly to the player.
 
 Clamped to 40.0–240.0 BPM in beat mode. All underlying values retain full precision; rounding is display-only.
 
@@ -520,25 +516,6 @@ The pitch shifter and filter carry internal state (buffered samples, filter hist
 
 - **Pitch shifter (PitchSource):** internal SoundTouch buffers flushed on seek. Processes in 512-frame chunks; output buffered in a VecDeque.
 - **Filter (FilterSource):** crossfades from previous filter state to new state over 256 samples. Biquad history (per-channel) is pre-allocated — no allocations on the audio path.
-
-
-# Loop Prototype
-
-[Up](#deck)
-
-Experimental, deck 3 only: capture a seamless loop by tapping, then refine it by ear. `g` tapped on the beat — the first tap marks the loop start — and stopping after ≥4 taps activates it: the tapped tempo sets the period, the tap count rounds up to a power-of-two bars of length. The audio thread cycles the bounds; the overview gives way to three loop panels for close-up trimming, `4`/`r` and `5`/`t` nudging start and end by ±1 ms. `H` exits.
-
-Independent of the beat grid — the loop's tempo comes from its own taps.
-
-**Detail**
-
-- Taps: 2 s inter-tap reset; 1 s silence ends the session; <4 taps discards; deck must be playing.
-- Length: tap count → bars (÷4, ceiling) → next power of two, × 4 beats.
-- Trim keys are the 8/16-bar jump keys, overridden only while the loop is active.
-
-**See also**
-
-- [Keymap](#keymap) — `loop_tap` (`g`) and `loop_exit` (`H`) are configurable
 
 
 # Beat Grid
@@ -934,7 +911,7 @@ The kitty keyboard protocol; support is detected at startup. Where it is absent,
 
 [Up](#application)
 
-Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, cue point, and gain trim (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
+Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, cue point, gain trim, and last-used mode (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
 
 Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache. When a workspace is set, the database also mirrors to a copy in the workspace root (`track-data.json`, same filename), so it travels with the music.
 
@@ -954,7 +931,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 [Up](#application)
 
-Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, vinyl/beat mode, and cover-art brightness.
+Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, and cover-art brightness.
 
 Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 

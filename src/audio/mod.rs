@@ -131,14 +131,8 @@ pub(crate) struct TrackingSource {
     pub(crate) pending_target: Arc<AtomicUsize>,
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
-    /// Loop mode: when active, position wraps from loop_end back to loop_start
     /// via the standard fade-on-seek mechanism. Stored as interleaved-sample indices.
-    pub(crate) loop_active: Arc<AtomicBool>,
-    pub(crate) loop_start: Arc<AtomicUsize>,
-    pub(crate) loop_end: Arc<AtomicUsize>,
-    /// Shared with PitchSource. Set on loop wrap so the pitch buffer flushes
     /// across the seam (matches the seek-with-fade pipeline-flush behaviour).
-    pub(crate) flush_pitch: Arc<AtomicBool>,
     /// Shared with PitchSource. Snapped to loop_start on loop wrap so the display
     /// follows the wrap without waiting for the fade to complete — matches the
     /// behaviour of SeekHandle.seek_to().
@@ -154,16 +148,12 @@ impl TrackingSource {
         pending_target: Arc<AtomicUsize>,
         sample_rate: u32,
         channels: u16,
-        loop_active: Arc<AtomicBool>,
-        loop_start: Arc<AtomicUsize>,
-        loop_end: Arc<AtomicUsize>,
-        flush_pitch: Arc<AtomicBool>,
         output_position: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             samples, position, fade_remaining, fade_len, pending_target,
             sample_rate, channels,
-            loop_active, loop_start, loop_end, flush_pitch, output_position,
+            output_position,
         }
     }
 }
@@ -206,21 +196,6 @@ impl Iterator for TrackingSource {
             // player queue — allows seeking and replaying after end-of-track.
             let pos = self.position.fetch_add(1, Ordering::Relaxed);
             let sample = self.samples.get(pos).copied().unwrap_or(0.0);
-            // Loop wrap: when the playhead reaches loop_end, queue a seek to loop_start
-            // via the same fade-on-seek path used for manual seeks. Only trigger if no
-            // seek is already in flight (avoids races with manual seeks).
-            if self.loop_active.load(Ordering::Relaxed)
-                && self.pending_target.load(Ordering::Relaxed) == usize::MAX
-            {
-                let loop_end = self.loop_end.load(Ordering::Relaxed);
-                if pos + 1 >= loop_end {
-                    let loop_start = self.loop_start.load(Ordering::Relaxed);
-                    let fl = self.fade_len.load(Ordering::Relaxed);
-                    self.flush_pitch.store(true, Ordering::Relaxed);
-                    self.pending_target.store(loop_start, Ordering::SeqCst);
-                    self.fade_remaining.store(-fl, Ordering::SeqCst);
-                }
-            }
             Some(sample)
         }
     }

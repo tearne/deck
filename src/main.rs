@@ -51,7 +51,7 @@ use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
     anchor_beat_grid_to_cue, apply_offset_step, cache_entry_for_deck, compute_spectrum,
-    compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, NudgeMode,
+    compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, DeckMode, NudgeMode,
     PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
 };
 use library::WorkspaceLibrary;
@@ -59,7 +59,7 @@ use messages::{Event, EventStream, Severity, Source};
 use render::{
     extract_tick_viewport, halfblock_art, DEFAULT_ZOOM_IDX,
     bottom_transient_line, countdown_prompt_line, overlay_bottom_left, overlay_bottom_right, overlay_top_left,
-    overview_empty, overview_title_line, readout_corner_line, refresh_overview_for_deck, render_detail_empty, render_detail_waveform, render_loop_panels,
+    overview_empty, overview_title_line, readout_corner_line, refresh_overview_for_deck, render_detail_empty, render_detail_waveform,
     title_empty_span,
     render_keyboard_help, render_message_history, render_shared_tick_row,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
@@ -731,16 +731,12 @@ fn build_deck(
     let gain_linear          = Arc::new(AtomicU32::new(1.0f32.to_bits()));
     let filter_poles         = Arc::new(AtomicU8::new(2));
     let pitch_semitones      = Arc::new(AtomicI8::new(0));
-    let loop_active          = Arc::new(AtomicBool::new(false));
-    let loop_start           = Arc::new(AtomicUsize::new(0));
-    let loop_end             = Arc::new(AtomicUsize::new(0));
     let player = Player::connect_new(mixer);
     player.append(PitchSource::new(
         FilterSource::new(
             TrackingSource::new(
                 samples, position, fade_remaining, fade_len, pending_target, sample_rate, channels,
-                Arc::clone(&loop_active), Arc::clone(&loop_start), Arc::clone(&loop_end),
-                Arc::clone(&flush_pitch), Arc::clone(&output_position),
+                Arc::clone(&output_position),
             ),
             Arc::clone(&filter_offset_shared),
             Arc::clone(&filter_state_reset),
@@ -809,9 +805,6 @@ fn build_deck(
             deck_volume_atomic,
             gain_linear,
             pitch_semitones,
-            loop_active,
-            loop_start,
-            loop_end,
         },
         bpm_rx,
     );
@@ -1228,7 +1221,6 @@ fn tui_loop(
     let mut scheme_idx: usize = 0;
     let mut art_bright_idx: u8 = session.get_art_bright_idx();
     let mut zoom_idx: usize = DEFAULT_ZOOM_IDX;
-    let mut vinyl_mode: bool = session.get_vinyl_mode();
 
     let shared_renderer = SharedDetailRenderer::new(zoom_idx);
     let mut detail_height: usize = display_cfg.detail_height.max(DET_MIN as usize);
@@ -1362,7 +1354,7 @@ fn tui_loop(
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         let service_start = Instant::now();
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, vinyl_mode, &mut stream);
+            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, &mut stream);
         }
         let service_dur = service_start.elapsed();
 
@@ -1406,7 +1398,7 @@ fn tui_loop(
                 _ => shared_renderer.display_pos_c.store(pos_interleaved, Ordering::Relaxed),
             }
             let spinner_active = !d.tempo.analysis_settled || d.tempo.redetecting;
-            let analysing      = vinyl_mode || spinner_active || !d.tempo.bpm_established;
+            let analysing      = d.mode == DeckMode::Playback || spinner_active || !d.tempo.bpm_established;
             let beat_period    = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
             let flash_window   = beat_period.mul_f64(0.15);
             let smooth_pos_ns  = (display_samp / d.audio.sample_rate as f64 * 1_000_000_000.0) as i128
@@ -1623,10 +1615,10 @@ fn tui_loop(
             }
 
             // Update tempo and cue state for background buffer rendering.
-            // In vinyl mode: suppress ticks (analysing=true); the cue column stays visible.
+            // In Playback mode: suppress ticks (analysing=true); the cue column stays visible.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
                 let (base_bpm, offset_ms, analysing, cue_sample) = deck.map(|d| {
-                    let analysing = vinyl_mode || !d.tempo.analysis_settled || d.tempo.redetecting || !d.tempo.bpm_established;
+                    let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled || d.tempo.redetecting || !d.tempo.bpm_established;
                     (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
@@ -1639,13 +1631,12 @@ fn tui_loop(
                     Some(NudgeMode::Warp) => "  [WARP]",
                     _ => "  [JUMP]",
                 };
-                let vinyl_label = if vinyl_mode { "  [VINYL]" } else { "  [BEAT]" };
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
-                        format!("  zoom:{}s  lat:{}ms  fps:{}/{}/{}{}{}",
+                        format!("  zoom:{}s  lat:{}ms  fps:{}/{}/{}{}",
                             zoom_secs, audio_latency_ms,
                             fps_display.0, fps_display.1, fps_display.2,
-                            nudge_label, vinyl_label),
+                            nudge_label),
                         Style::default().fg(Color::DarkGray),
                     ))),
                     area_detail_info,
@@ -1684,7 +1675,7 @@ fn tui_loop(
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, frame_count, rs.beat_on, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[0] {
@@ -1714,7 +1705,7 @@ fn tui_loop(
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, frame_count, rs.beat_on, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[1] {
@@ -1734,13 +1725,9 @@ fn tui_loop(
                 let mut title_spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
                 if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
                     deck.display.overview_rect = area_overview_c;
-                    if deck.loop_state.active {
-                        render_loop_panels(frame, deck, area_overview_c, rs.display_pos_samp, deck.display.palette);
-                    } else {
-                        refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
-                        if let Some(ref cached) = deck.display.overview_cache {
-                            frame.render_widget(&cached.paragraph, area_overview_c);
-                        }
+                    refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    if let Some(ref cached) = deck.display.overview_cache {
+                        frame.render_widget(&cached.paragraph, area_overview_c);
                     }
                     render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
                     title_spans.extend(overview_title_line(deck).spans);
@@ -1748,7 +1735,7 @@ fn tui_loop(
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, frame_count, rs.beat_on, rs.spinner_active, vinyl_mode));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, frame_count, rs.beat_on, rs.spinner_active));
                     overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[2] {
@@ -1916,7 +1903,7 @@ fn tui_loop(
                                 && row >= rect.y as usize && row < (rect.y + rect.height) as usize
                             {
                                 let click_col = col - rect.x as usize;
-                                let target_secs = if vinyl_mode {
+                                let target_secs = if d.mode == DeckMode::Playback {
                                     d.total_duration * click_col as f64 / rect.width as f64
                                 } else {
                                     d.display.last_bar_cols.iter()
@@ -2449,7 +2436,7 @@ fn tui_loop(
                 // Base BPM ramp — fires on Press and Repeat with time-based step size.
                 // The ramp resets only when no base-BPM key has been seen for >500 ms,
                 // so a quick release-and-repress continues at the current tier.
-                if !vinyl_mode
+                if decks[selected_deck].as_ref().is_some_and(|d| d.mode == DeckMode::Beat)
                     && !space_held && !alt
                     && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                     && matches!(keymap.get(&KeyBinding::Key(key.code)),
@@ -2785,8 +2772,8 @@ fn tui_loop(
                         }
                     }
                     Some(Action::MetronomeToggle) => {
-                        if !vinyl_mode {
-                            if let Some(ref mut d) = decks[selected_deck] {
+                        if let Some(ref mut d) = decks[selected_deck] {
+                            if d.mode == DeckMode::Beat {
                                 d.metronome_mode = !d.metronome_mode;
                                 d.last_metro_beat = if d.metronome_mode {
                                     let beat_period = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
@@ -2798,9 +2785,10 @@ fn tui_loop(
                         }
                     }
                     Some(Action::DetectBpm) => {
-                        if !vinyl_mode {
+                        {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            if d.tempo.pending_bpm.is_some() {
+                            if d.mode != DeckMode::Beat {
+                            } else if d.tempo.pending_bpm.is_some() {
                                 d.tempo.pending_bpm = None;
                             } else if d.tempo.redetecting {
                                 let (_, dead_rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
@@ -2835,30 +2823,33 @@ fn tui_loop(
                         history_open = !history_open;
                         if history_open { help_open = false; history_scroll = 0; }
                     }
-                    Some(Action::VinylModeToggle) => {
-                        vinyl_mode = !vinyl_mode;
-                        for slot in 0..3 {
-                            if let Some(ref mut d) = decks[slot] {
-                                if vinyl_mode {
-                                    // Entering vinyl mode: capture current speed as vinyl_speed;
-                                    // clear tap state and stop metronome.
-                                    d.tempo.vinyl_speed = d.tempo.bpm / d.tempo.base_bpm;
-                                    d.audio.player.set_speed(d.tempo.vinyl_speed);
-                                    shared_renderer.store_speed_ratio(slot, d.tempo.vinyl_speed, 1.0);
+                    Some(Action::ModeCycle) => {
+                        // Cycles the selected deck only; an empty deck has no mode.
+                        // Audio speed is preserved across the switch.
+                        if let Some(ref mut d) = decks[selected_deck] {
+                            match d.mode {
+                                DeckMode::Beat => {
+                                    d.mode = DeckMode::Playback;
+                                    d.tempo.playback_speed = d.tempo.bpm / d.tempo.base_bpm;
+                                    d.audio.player.set_speed(d.tempo.playback_speed);
+                                    shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
                                     d.tap.tap_times.clear();
                                     d.tap.last_tap_wall = None;
                                     d.metronome_mode = false;
                                     d.last_metro_beat = None;
-                                } else {
-                                    // Leaving vinyl mode: convert vinyl_speed to BPM adjustment.
-                                    d.tempo.bpm = (d.tempo.base_bpm * d.tempo.vinyl_speed).clamp(40.0, 240.0);
+                                }
+                                DeckMode::Playback => {
+                                    d.mode = DeckMode::Beat;
+                                    d.tempo.bpm = (d.tempo.base_bpm * d.tempo.playback_speed).clamp(40.0, 240.0);
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
-                                    shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
+                                    shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                                     anchor_beat_grid_to_cue(d);
                                 }
                             }
+                            if let Some(ref hash) = d.tempo.analysis_hash {
+                                track_data.set(hash.clone(), cache_entry_for_deck(d));
+                            }
                         }
-                        session.set_vinyl_mode(vinyl_mode);
                     }
                     Some(Action::LatencyDecrease)  => {
                         audio_latency_ms = (audio_latency_ms - 10).max(0);
@@ -2912,10 +2903,10 @@ fn tui_loop(
                         session.set_art_bright_idx(art_bright_idx);
                     }
                     Some(Action::OffsetIncrease) => {
-                        if !vinyl_mode { if let Some(ref mut d) = decks[selected_deck] { apply_offset_step(d, 5); } }
+                        if let Some(ref mut d) = decks[selected_deck] { if d.mode == DeckMode::Beat { apply_offset_step(d, 5); } }
                     }
                     Some(Action::OffsetDecrease) => {
-                        if !vinyl_mode { if let Some(ref mut d) = decks[selected_deck] { apply_offset_step(d, -5); } }
+                        if let Some(ref mut d) = decks[selected_deck] { if d.mode == DeckMode::Beat { apply_offset_step(d, -5); } }
                     }
                     Some(Action::ZoomOut) => { if zoom_idx > 0 { zoom_idx -= 1; } }
                     Some(Action::ZoomIn)  => { if zoom_idx + 1 < ZOOM_LEVELS.len() { zoom_idx += 1; } }
@@ -2923,10 +2914,10 @@ fn tui_loop(
                     Some(Action::HeightIncrease) => { if detail_height < max_det_h { detail_height += 1; } }
                     Some(Action::BpmIncrease) => {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            if vinyl_mode || !d.tempo.bpm_established {
-                                d.tempo.vinyl_speed = (d.tempo.vinyl_speed + 0.001).clamp(0.1, 4.0);
-                                d.audio.player.set_speed(d.tempo.vinyl_speed);
-                                shared_renderer.store_speed_ratio(selected_deck, d.tempo.vinyl_speed, 1.0);
+                            if d.mode == DeckMode::Playback || !d.tempo.bpm_established {
+                                d.tempo.playback_speed = (d.tempo.playback_speed + 0.001).clamp(0.1, 4.0);
+                                d.audio.player.set_speed(d.tempo.playback_speed);
+                                shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
                             } else {
                                 d.tempo.bpm = (d.tempo.bpm + 0.1).min(240.0);
                                 d.tempo.bpm_established = true;
@@ -2938,10 +2929,10 @@ fn tui_loop(
                     }
                     Some(Action::BpmDecrease) => {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            if vinyl_mode || !d.tempo.bpm_established {
-                                d.tempo.vinyl_speed = (d.tempo.vinyl_speed - 0.001).clamp(0.1, 4.0);
-                                d.audio.player.set_speed(d.tempo.vinyl_speed);
-                                shared_renderer.store_speed_ratio(selected_deck, d.tempo.vinyl_speed, 1.0);
+                            if d.mode == DeckMode::Playback || !d.tempo.bpm_established {
+                                d.tempo.playback_speed = (d.tempo.playback_speed - 0.001).clamp(0.1, 4.0);
+                                d.audio.player.set_speed(d.tempo.playback_speed);
+                                shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
                             } else {
                                 d.tempo.bpm = (d.tempo.bpm - 0.1).max(40.0);
                                 d.tempo.bpm_established = true;
@@ -2951,80 +2942,26 @@ fn tui_loop(
                             }
                         }
                     }
-                    Some(Action::JumpForward1bt)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    1); } } }
-                    Some(Action::JumpBackward1bt) => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -1); } } }
-                    Some(Action::JumpForward1b)   => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    4); } } }
-                    Some(Action::JumpBackward1b)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -4); } } }
-                    Some(Action::JumpForward4b)   => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   16); } } }
-                    Some(Action::JumpBackward4b)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  -16); } } }
-                    Some(Action::JumpForward8b)   => {
-                        // Override: while loop mode is active on deck 3, this key trims loop_start +1ms.
-                        if selected_deck == 2 && decks[2].as_ref().map_or(false, |d| d.loop_state.active) {
-                            if let Some(ref mut d) = decks[2] {
-                                let delta = (d.audio.sample_rate as usize) / 1000;
-                                let candidate = d.loop_state.start_sample.saturating_add(delta);
-                                d.loop_state.start_sample = candidate.min(d.loop_state.end_sample.saturating_sub(1));
-                                let ch = d.audio.seek_handle.channels as usize;
-                                d.audio.loop_start.store(d.loop_state.start_sample * ch, Ordering::SeqCst);
-                                shared_renderer.store_loop(2, true, d.loop_state.start_sample, d.loop_state.end_sample);
-                            }
-                        } else if let Some(ref d) = decks[selected_deck] {
-                            if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   32); }
-                        }
-                    }
-                    Some(Action::JumpBackward8b)  => {
-                        // Override: while loop mode is active on deck 3, this key trims loop_start −1ms.
-                        if selected_deck == 2 && decks[2].as_ref().map_or(false, |d| d.loop_state.active) {
-                            if let Some(ref mut d) = decks[2] {
-                                let delta = (d.audio.sample_rate as usize) / 1000;
-                                d.loop_state.start_sample = d.loop_state.start_sample.saturating_sub(delta);
-                                let ch = d.audio.seek_handle.channels as usize;
-                                d.audio.loop_start.store(d.loop_state.start_sample * ch, Ordering::SeqCst);
-                                shared_renderer.store_loop(2, true, d.loop_state.start_sample, d.loop_state.end_sample);
-                            }
-                        } else if let Some(ref d) = decks[selected_deck] {
-                            if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  -32); }
-                        }
-                    }
-                    Some(Action::JumpForward16b)  => {
-                        // Override: while loop mode is active on deck 3, this key trims loop_end +1ms.
-                        if selected_deck == 2 && decks[2].as_ref().map_or(false, |d| d.loop_state.active) {
-                            if let Some(ref mut d) = decks[2] {
-                                let delta = (d.audio.sample_rate as usize) / 1000;
-                                d.loop_state.end_sample = d.loop_state.end_sample.saturating_add(delta);
-                                let ch = d.audio.seek_handle.channels as usize;
-                                d.audio.loop_end.store(d.loop_state.end_sample * ch, Ordering::SeqCst);
-                                shared_renderer.store_loop(2, true, d.loop_state.start_sample, d.loop_state.end_sample);
-                            }
-                        } else if let Some(ref d) = decks[selected_deck] {
-                            if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   64); }
-                        }
-                    }
-                    Some(Action::JumpBackward16b) => {
-                        // Override: while loop mode is active on deck 3, this key trims loop_end −1ms.
-                        if selected_deck == 2 && decks[2].as_ref().map_or(false, |d| d.loop_state.active) {
-                            if let Some(ref mut d) = decks[2] {
-                                let delta = (d.audio.sample_rate as usize) / 1000;
-                                let candidate = d.loop_state.end_sample.saturating_sub(delta);
-                                d.loop_state.end_sample = candidate.max(d.loop_state.start_sample + 1);
-                                let ch = d.audio.seek_handle.channels as usize;
-                                d.audio.loop_end.store(d.loop_state.end_sample * ch, Ordering::SeqCst);
-                                shared_renderer.store_loop(2, true, d.loop_state.start_sample, d.loop_state.end_sample);
-                            }
-                        } else if let Some(ref d) = decks[selected_deck] {
-                            if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  -64); }
-                        }
-                    }
-                    Some(Action::JumpForward32b)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  128); } } }
-                    Some(Action::JumpBackward32b) => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -128); } } }
-                    Some(Action::JumpForward64b)  => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  256); } } }
-                    Some(Action::JumpBackward64b) => { if let Some(ref d) = decks[selected_deck] { if vinyl_mode { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -256); } } }
+                    Some(Action::JumpForward1bt)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    1); } } }
+                    Some(Action::JumpBackward1bt) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -1); } } }
+                    Some(Action::JumpForward1b)   => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    4); } } }
+                    Some(Action::JumpBackward1b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -4); } } }
+                    Some(Action::JumpForward4b)   => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   16); } } }
+                    Some(Action::JumpBackward4b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  -16); } } }
+                    Some(Action::JumpForward8b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, 16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, 32); } } }
+                    Some(Action::JumpBackward8b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -32); } } }
+                    Some(Action::JumpForward16b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, 32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, 64); } } }
+                    Some(Action::JumpBackward16b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -64); } } }
+                    Some(Action::JumpForward32b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  128); } } }
+                    Some(Action::JumpBackward32b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -128); } } }
+                    Some(Action::JumpForward64b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  256); } } }
+                    Some(Action::JumpBackward64b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -256); } } }
                     Some(Action::SpeedReset) => {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            d.tempo.vinyl_speed = 1.0;
+                            d.tempo.playback_speed = 1.0;
                             d.tempo.bpm = d.tempo.base_bpm;
                             d.audio.player.set_speed(1.0);
-                            if vinyl_mode {
+                            if d.mode == DeckMode::Playback {
                                 shared_renderer.store_speed_ratio(selected_deck, 1.0, 1.0);
                             } else {
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
@@ -3032,9 +2969,9 @@ fn tui_loop(
                         }
                     }
                     Some(Action::BpmTap) => {
-                        if !vinyl_mode {
+                        {
                             if let Some(ref mut d) = decks[selected_deck] {
-                                if !d.audio.player.is_paused() {
+                                if d.mode == DeckMode::Beat && !d.audio.player.is_paused() {
                                     let now = Instant::now();
                                     if let Some(last) = d.tap.last_tap_wall {
                                         if now.duration_since(last).as_secs_f64() > 2.0 { d.tap.tap_times.clear(); }
@@ -3087,44 +3024,6 @@ fn tui_loop(
                     Some(Action::NudgeBackward) | Some(Action::NudgeForward)
                     | Some(Action::NudgeModeToggle)
                     | Some(Action::BaseBpmIncrease) | Some(Action::BaseBpmDecrease) => {}
-                    Some(Action::LoopTap) => {
-                        // PoC: loop mode lives on deck 3 only. Pure tap key — no exit overload.
-                        if selected_deck == 2 {
-                            if let Some(ref mut d) = decks[selected_deck] {
-                                if !d.loop_state.active && !d.audio.player.is_paused() {
-                                    let now = Instant::now();
-                                    // Two-second safety reset if the last tap was a while ago.
-                                    if let Some(last) = d.loop_tap.last_tap_wall {
-                                        if now.duration_since(last).as_secs_f64() > 2.0 {
-                                            d.loop_tap.tap_times.clear();
-                                        }
-                                    }
-                                    let display_samp = render[selected_deck]
-                                        .as_ref()
-                                        .map_or(d.display.smooth_display_samp, |rs| rs.display_samp);
-                                    if d.loop_tap.tap_times.is_empty() {
-                                        // First tap marks the loop start (mono frame index).
-                                        d.loop_state.start_sample = display_samp as usize;
-                                    }
-                                    d.loop_tap.tap_times.push(display_samp / d.audio.sample_rate as f64);
-                                    d.loop_tap.last_tap_wall = Some(now);
-                                }
-                            }
-                        }
-                    }
-                    Some(Action::LoopExit) => {
-                        // PoC: deck 3 only. Exit loop mode.
-                        if selected_deck == 2 {
-                            if let Some(ref mut d) = decks[selected_deck] {
-                                if d.loop_state.active {
-                                    d.loop_state.active = false;
-                                    d.loop_tap.tap_times.clear();
-                                    d.audio.loop_active.store(false, Ordering::SeqCst);
-                                    shared_renderer.store_loop(2, false, 0, 0);
-                                }
-                            }
-                        }
-                    }
                     None => {}
                     }
                 } // end if Press
@@ -3151,7 +3050,6 @@ fn service_deck_frame(
     shared_renderer: &SharedDetailRenderer,
     track_data: &mut TrackDatabase,
     audio_latency_ms: i64,
-    vinyl_mode: bool,
     stream: &mut EventStream,
 ) {
     let Some(ref mut d) = decks[slot] else { return; };
@@ -3189,7 +3087,8 @@ fn service_deck_frame(
                 d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
                 d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
                 d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
-                if !vinyl_mode {
+                d.mode = track_data.get(hash.as_str()).and_then(|e| e.mode).unwrap_or(DeckMode::Beat);
+                if d.mode == DeckMode::Beat {
                     if let Some(cue_samp) = d.cue_sample {
                         let cue_secs = cue_samp as f64 / d.audio.sample_rate as f64;
                         d.audio.seek_handle.seek_direct(cue_secs);
@@ -3239,7 +3138,7 @@ fn service_deck_frame(
     // Advance smooth display position.
     if !d.audio.player.is_paused() {
         // Include warp-nudge speed factor so the display tracks the audio speed exactly.
-        let base_speed = if vinyl_mode { d.tempo.vinyl_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+        let base_speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
         let speed = base_speed * (1.0 + d.nudge as f64 * 0.1);
         // Integrate the measured frame interval. Each interval is frame_start minus the
         // previous frame_start, so the sum telescopes to exact wall time — sleep jitter
@@ -3280,7 +3179,7 @@ fn service_deck_frame(
     let paused_snap  = d.audio.player.is_paused() && d.nudge == 0 && drift.abs() > 1.0;
     if large_drift || paused_snap {
         // Snap to nearest half-column so sub_col is stable after seeks.
-        let speed = if vinyl_mode { d.tempo.vinyl_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+        let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
         let col_samp_f64 = col_secs * d.audio.sample_rate as f64 * speed;
         let half_col = col_samp_f64 / 2.0;
         d.display.smooth_display_samp = if half_col > 0.0 {
@@ -3332,32 +3231,6 @@ fn service_deck_frame(
     }
     d.tap.was_tap_active = tap_active_now;
 
-    // Loop tap session timeout: activate loop mode (deck 3 PoC) when tapping stops.
-    // Timeout: 1.0 s of inactivity since the last tap.
-    let loop_tap_active_now = !d.loop_tap.tap_times.is_empty()
-        && d.loop_tap.last_tap_wall.map_or(false, |t| t.elapsed().as_secs_f64() < 1.0);
-    if d.loop_tap.was_tap_active && !loop_tap_active_now && slot == 2 {
-        let tap_count = d.loop_tap.tap_times.len();
-        if tap_count >= 4 {
-            let (tapped_bpm, _) = compute_tap_bpm_offset(&d.loop_tap.tap_times);
-            let beat_period_samples = (60.0 / tapped_bpm as f64 * d.audio.sample_rate as f64) as usize;
-            // Round up to nearest power of 2 bars; loop length in beats = bars × 4.
-            let bars = ((tap_count as f64) / 4.0).ceil() as usize;
-            let bars_pow2 = bars.next_power_of_two().max(1);
-            let loop_beats = bars_pow2 * 4;
-            let loop_len_mono = loop_beats * beat_period_samples;
-            d.loop_state.end_sample = d.loop_state.start_sample + loop_len_mono;
-            d.loop_state.active = true;
-            // Push to audio thread as interleaved-sample indices (frame × channels).
-            let ch = d.audio.seek_handle.channels as usize;
-            d.audio.loop_start.store(d.loop_state.start_sample * ch, Ordering::SeqCst);
-            d.audio.loop_end.store(d.loop_state.end_sample * ch, Ordering::SeqCst);
-            d.audio.loop_active.store(true, Ordering::SeqCst);
-            shared_renderer.store_loop(2, true, d.loop_state.start_sample, d.loop_state.end_sample);
-        }
-        d.loop_tap.tap_times.clear();
-    }
-    d.loop_tap.was_tap_active = loop_tap_active_now;
 
     // Spectrum analyser: chars every half beat, background glow every 8 beats.
     let analysing   = !d.tempo.analysis_settled || d.tempo.redetecting;

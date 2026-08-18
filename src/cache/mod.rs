@@ -55,6 +55,9 @@ pub(crate) struct CacheEntry {
     pub(crate) offset_established: bool,
     #[serde(default)]
     pub(crate) gain_db: i8,
+    /// The mode the track last ran in; applied at load.
+    #[serde(default)]
+    pub(crate) mode: Option<crate::deck::DeckMode>,
 }
 
 /// BTreeMap so both file copies serialise in one deterministic order — a
@@ -171,7 +174,7 @@ mod tests {
     use super::*;
 
     fn entry(bpm: f32, name: &str) -> CacheEntry {
-        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0 }
+        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0, mode: None }
     }
 
     #[test]
@@ -248,8 +251,6 @@ struct SessionFile {
     browser_workspace: Option<String>,
     #[serde(default)]
     audio_latency_ms: i64,
-    #[serde(default)]
-    vinyl_mode: bool,
     #[serde(default = "default_art_bright_idx")]
     art_bright_idx: u8,
 }
@@ -260,7 +261,6 @@ impl Default for SessionFile {
             last_browser_path: None,
             browser_workspace: None,
             audio_latency_ms: 0,
-            vinyl_mode: false,
             art_bright_idx: default_art_bright_idx(),
         }
     }
@@ -271,7 +271,6 @@ pub(crate) struct SessionState {
     last_browser_path: Option<PathBuf>,
     browser_workspace: Option<PathBuf>,
     audio_latency_ms: i64,
-    vinyl_mode: bool,
     art_bright_idx: u8,
     dirty_at: Option<std::time::Instant>,
 }
@@ -294,7 +293,6 @@ impl SessionState {
                 .map(PathBuf::from)
                 .filter(|p| p.is_dir()),
             audio_latency_ms: file.audio_latency_ms,
-            vinyl_mode: file.vinyl_mode,
             art_bright_idx: file.art_bright_idx,
             dirty_at: None,
         }
@@ -336,14 +334,6 @@ impl SessionState {
         self.mark_dirty();
     }
 
-    pub(crate) fn get_vinyl_mode(&self) -> bool {
-        self.vinyl_mode
-    }
-
-    pub(crate) fn set_vinyl_mode(&mut self, mode: bool) {
-        self.vinyl_mode = mode;
-        self.mark_dirty();
-    }
 
     pub(crate) fn get_art_bright_idx(&self) -> u8 {
         self.art_bright_idx
@@ -370,7 +360,6 @@ impl SessionState {
                 .as_ref()
                 .and_then(|p| p.to_str().map(str::to_string)),
             audio_latency_ms: self.audio_latency_ms,
-            vinyl_mode: self.vinyl_mode,
             art_bright_idx: self.art_bright_idx,
         };
         write_json_atomic(&self.path, &file);
