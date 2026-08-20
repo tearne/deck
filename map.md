@@ -53,6 +53,7 @@ Application
 │ │   ├ Fade Envelope
 │ │   └ Pipeline Flush
 │ ├ Beat Grid
+│ │ ├ Grid Refinement
 │ │ └ Cue Point
 │ └ Audio Pipeline
 │   ├ Filter
@@ -521,6 +522,7 @@ The pitch shifter and filter carry internal state (buffered samples, filter hist
 # Beat Grid
 
 [Up](#deck)
+[Down](#grid-refinement)
 [Down](#cue-point)
 
 The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values. Detection assumes a single constant tempo across the track.
@@ -530,16 +532,36 @@ The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a 
 - **Cache lookup** — on load, the audio is hashed (Blake3 over decoded mono samples) and looked up in cache. If found, BPM and offset are applied immediately. If not, a 120 BPM placeholder is used.
 - **Tap** (`bpm_tap`) — press in time with the beat. After 8 taps, `base_bpm` and `offset_ms` are set via linear regression. Outlier taps (residual > half a beat period) are excluded.
 - **Detection** (`detect_bpm`) — manually triggers BPM analysis on the decoded audio. Result goes through a confirmation step if a BPM is already established.
-- **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps
+- **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps; pure metadata — the audible speed never changes.
+- **Refinement** — the anchor-and-tune workflow of [Grid Refinement](#grid-refinement), the precision route.
 
-**Offset** positions the grid relative to the audio. Adjusted in 10ms steps, snapped to multiples of 10ms, wrapped into `[0, beat_period_ms)`. The cue point acts as the grid's zero datum — when `base_bpm` changes, `offset_ms` is recalculated to keep a tick on the cue.
+The **phase offset** positions the grid relative to a datum: a manually pinned anchor, else the cue, else the track start. With an anchor pinned, the offset is recomputed from it (1 ms precision) whenever the tempo changes — tap and detection results change tempo only, phase stays the anchor's. Manual `D`/`C` steps move anchor and offset together.
 
 Cache is keyed by audio hash, making it invariant of filename, tags, and container format.
 
 **See also**
 
 - [Keymap](#keymap) — keys bound to BPM tap, re-detect, and manual adjust
-- [Track Database](#track-database) — BPM and offset persisted per track by audio hash
+- [Track Database](#track-database) — BPM, offset, and anchor persisted per track by audio hash
+
+# Grid Refinement
+
+[Up](#beat-grid)
+
+The grid is tuned by looking, not computed: detach the deck's view (`g`) — playback runs on while the detail waveform follows a free cursor — pin an **anchor** on a downbeat (`a`, exact), then jump progressively further out, adjusting the base BPM until ticks sit on transients at each distance. Each jump multiplies the leverage of the same alignment; a few stages land within hundredths of a BPM, and a mis-tune is recovered by tuning while looking.
+
+While detached, jumps and nudge steer the cursor, ticks show in any deck mode as blue `─┴─` glyph markers, and all grid edits are the normal live ones. The anchor persists per track as the grid's phase source; re-entering resumes refinement.
+
+> [!IMPORTANT] Anything drawn against the detail waveform — anchors, markers-to-come — must go through the **one shared sample-to-column mapping** the waveform and ticks themselves render with, never its own arithmetic. Independently-derived positions disagree at column-rounding boundaries and wiggle as the view scrolls; three rounds of fixes established this.
+
+**Detail**
+
+- The detached view snaps to whole columns (no sub-column smoothing — nothing moves).
+- Blue = grid furniture; lighter cyan = the movable cursor.
+
+**See also**
+
+- [Keymap](#keymap) — `g` configurable; in-view keys (`a`, arrows, Esc) fixed
 
 
 # Cue Point
@@ -548,7 +570,7 @@ Cache is keyed by audio hash, making it invariant of filename, tags, and contain
 
 A single saved position per deck with two distinct actions:
 
-- **Cue set** (`cue`) — only works while paused; stores the current position and snaps the beat grid so a tick falls on the cue
+- **Cue set** (`cue`) — only works while paused; stores the current position, which acts as the grid's zero datum when no anchor is pinned (an anchor outranks it)
 - **Cue play** (`cue_play`) — jumps to the cue and maintains current play state (playing continues, paused stays paused)
 
 Persisted to cache alongside BPM and offset.
@@ -911,7 +933,7 @@ The kitty keyboard protocol; support is detected at startup. Where it is absent,
 
 [Up](#application)
 
-Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, cue point, gain trim, and last-used mode (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
+Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, grid anchor, cue point, gain trim, and last-used mode (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
 
 Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache. When a workspace is set, the database also mirrors to a copy in the workspace root (`track-data.json`, same filename), so it travels with the music.
 

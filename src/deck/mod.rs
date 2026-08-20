@@ -217,6 +217,9 @@ pub(crate) struct Deck {
     pub(crate) metronome_mode: bool,
     pub(crate) last_metro_beat: Option<i128>,
     pub(crate) cue_sample: Option<usize>,
+    /// The grid's phase datum, in mono samples — pinned in the detached view,
+    /// persisted per track. Supersedes the cue as datum; offset derives from it.
+    pub(crate) anchor_sample: Option<usize>,
     pub(crate) rename_hint: Option<String>,
     pub(crate) rename_offer_started: Option<Instant>,
     pub(crate) rename_accepted: Option<String>,
@@ -257,6 +260,7 @@ impl Deck {
             metronome_mode: false,
             last_metro_beat: None,
             cue_sample: None,
+            anchor_sample: None,
             rename_offer_started: rename_hint.as_ref().map(|_| Instant::now()),
             rename_hint,
             rename_accepted: None,
@@ -367,12 +371,18 @@ pub(crate) fn linear_regression_period(tap_times: &[f64]) -> f64 {
 
 /// After a BPM change, re-anchor `offset_ms` so the beat grid stays aligned to
 /// the cue position. With no cue set this is a no-op.
-pub(crate) fn anchor_beat_grid_to_cue(d: &mut Deck) {
-    if let Some(cue_samp) = d.cue_sample {
+/// Re-derive the grid's phase from its datum: the anchor when pinned (1 ms
+/// precision — it is the phase source), else the cue (10 ms convention), else
+/// leave the offset be. Called whenever the base BPM changes.
+pub(crate) fn rederive_grid_phase(d: &mut Deck) {
+    let beat_period_ms = 60_000.0 / d.tempo.base_bpm as f64;
+    if let Some(anchor) = d.anchor_sample {
+        let anchor_ms = anchor as f64 / d.audio.sample_rate as f64 * 1000.0;
+        d.tempo.offset_ms = anchor_ms.rem_euclid(beat_period_ms).round() as i64;
+        d.tempo.offset_established = true;
+    } else if let Some(cue_samp) = d.cue_sample {
         let cue_ms = cue_samp as f64 / d.audio.sample_rate as f64 * 1000.0;
-        let beat_period_ms = 60_000.0 / d.tempo.base_bpm as f64;
-        let raw = cue_ms.rem_euclid(beat_period_ms);
-        d.tempo.offset_ms = (raw / 10.0).round() as i64 * 10;
+        d.tempo.offset_ms = (cue_ms.rem_euclid(beat_period_ms) / 10.0).round() as i64 * 10;
     }
 }
 
@@ -383,6 +393,10 @@ pub(crate) fn anchor_beat_grid_to_cue(d: &mut Deck) {
 /// which would shift `smooth_display_samp` by nearly a full period and trigger a
 /// spurious waveform rerender.
 pub(crate) fn apply_offset_step(d: &mut Deck, delta_ms: i64) {
+    if let Some(anchor) = d.anchor_sample {
+        let delta_samp = delta_ms as f64 / 1000.0 * d.audio.sample_rate as f64;
+        d.anchor_sample = Some((anchor as i64 + delta_samp as i64).max(0) as usize);
+    }
     d.tempo.offset_ms += delta_ms;
     let period = (60_000.0 / d.tempo.base_bpm as f64 / 10.0).round() as i64 * 10;
     d.tempo.offset_ms = d.tempo.offset_ms.rem_euclid(period);
@@ -524,6 +538,7 @@ pub(crate) fn cache_entry_for_deck(d: &Deck) -> CacheEntry {
         offset_established: d.tempo.offset_established,
         gain_db: d.mixer.gain_db,
         mode: Some(d.mode),
+        anchor_sample: d.anchor_sample,
     }
 }
 
@@ -532,3 +547,17 @@ pub(crate) fn cache_entry_for_deck(d: &Deck) -> CacheEntry {
 // The actual use of FilterSource is in main.rs::build_deck.
 #[allow(unused_imports)]
 pub(crate) use crate::audio::FilterSource as _FilterSourceReexport;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn grid_phase_derivation_maths() {
+        // Anchor at 10.5 s, 120 BPM (500 ms period) → offset 10500 % 500 = 0.
+        // Anchor at 10.75 s → 250 ms. 1 ms precision, no 10 ms rounding.
+        let period_ms = 60_000.0 / 120.0f64;
+        let derive = |anchor_ms: f64| anchor_ms.rem_euclid(period_ms).round() as i64;
+        assert_eq!(derive(10_500.0), 0);
+        assert_eq!(derive(10_750.0), 250);
+        assert_eq!(derive(10_753.0), 253);
+    }
+}

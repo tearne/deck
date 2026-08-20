@@ -50,7 +50,7 @@ use cache::{SessionState, TrackDatabase, detect_bpm};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
-    anchor_beat_grid_to_cue, apply_offset_step, cache_entry_for_deck, compute_spectrum,
+    rederive_grid_phase, apply_offset_step, cache_entry_for_deck, compute_spectrum,
     compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, DeckMode, NudgeMode,
     PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
 };
@@ -58,10 +58,10 @@ use library::WorkspaceLibrary;
 use messages::{Event, EventStream, Severity, Source};
 use render::{
     extract_tick_viewport, halfblock_art, DEFAULT_ZOOM_IDX,
-    bottom_transient_line, countdown_prompt_line, overlay_bottom_left, overlay_bottom_right, overlay_top_left,
+    bottom_transient_line, countdown_prompt_line, overlay_bottom_left, overlay_bottom_right, overlay_marker_column, overlay_top_left,
     overview_empty, overview_title_line, readout_corner_line, refresh_overview_for_deck, render_detail_empty, render_detail_waveform,
     title_empty_span,
-    render_keyboard_help, render_message_history, render_shared_tick_row,
+    render_keyboard_help, render_message_history, render_shared_tick_row, sample_screen_col, GRID_BLUE, GRID_CURSOR,
     render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
 };
 use tags::{propose_rename_stem, read_cover_art, read_tags_for_editor, read_track_name};
@@ -1175,7 +1175,9 @@ fn tui_loop(
     // Per-deck display values computed each frame from current deck state.
     struct DeckRenderState {
         display_samp:     f64,
-        display_pos_samp: usize,
+        /// Where the detail view anchors: the playhead normally, the grid
+        /// session's free cursor while one is live on this deck.
+        view_pos_samp: usize,
         analysing:        bool,
         spinner_active:   bool,
         beat_on:          bool,
@@ -1218,7 +1220,6 @@ fn tui_loop(
     }
     const DET_MIN: u16 = 3;
     let mut audio_latency_ms: i64 = ((session.get_latency() as f64 / 10.0).round() as i64 * 10).clamp(0, 250);
-    let mut scheme_idx: usize = 0;
     let mut art_bright_idx: u8 = session.get_art_bright_idx();
     let mut zoom_idx: usize = DEFAULT_ZOOM_IDX;
 
@@ -1229,6 +1230,13 @@ fn tui_loop(
     let mut fps_sample_start = Instant::now();
     let mut fps_sample_frames: u32 = 0;
     let mut fps_display: (u32, u32, u32) = (0, 0, target_fps); // (current, budget, cap)
+    // The detached view: playback runs on while the detail waveform anchors
+    // to a free cursor for grid work. One at a time, on the deck it opened on.
+    struct DetachedView {
+        deck: usize,
+        cursor: f64,
+    }
+    let mut detached: Option<DetachedView> = None;
     let mut help_open = false;
     let mut history_open = false;
     // Lines scrolled back from the newest message while the history is open.
@@ -1339,7 +1347,7 @@ fn tui_loop(
                     stream.record(Event::new(Source::Deck(slot), Severity::Info, format!("loaded {}", new_deck.track_name)));
                     decks[slot] = Some(new_deck);
                     if let Some(ref mut d) = decks[slot] {
-                        d.display.palette = if slot == 0 { PALETTE_SCHEMES[scheme_idx].1 } else { PALETTE_SCHEMES[scheme_idx].2 };
+                        d.display.palette = if slot == 0 { PALETTE_SCHEMES[0].1 } else { PALETTE_SCHEMES[0].2 };
                     }
                 }
                 Ok(Err(e)) => {
@@ -1390,15 +1398,35 @@ fn tui_loop(
             // no buffer fill ahead, so the raw position is the heard position.
             let latency_correction = if d.audio.player.is_paused() { 0.0 } else { audio_latency_ms as f64 * d.audio.sample_rate as f64 / 1000.0 };
             let display_samp = (d.display.smooth_display_samp - latency_correction).max(0.0);
-            let display_pos_samp = display_samp as usize;
-            let pos_interleaved  = display_pos_samp * d.audio.seek_handle.channels as usize;
+            let view_samp = match detached.as_ref().filter(|v| v.deck == slot) {
+                Some(v) => {
+                    // Static view: snap to whole columns so the sub-column smoothing
+                    // never shifts the waveform against the markers mid-placement.
+                    let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+                    // The buffer's own integer column width — the snap grid must be
+                    // the grid everything renders on, or markers wiggle against ticks.
+                    let col_samp = if dc > 0 {
+                        (((zoom_secs as f64) * d.audio.sample_rate as f64 * speed) as usize / dc).max(1) as f64
+                    } else { 1.0 };
+                    (v.cursor / col_samp).round() * col_samp
+                }
+                None => display_samp,
+            };
+            let view_pos_samp = view_samp as usize;
+            // The wide buffer builds around the view, which is the cursor mid-session.
+            let pos_interleaved  = view_pos_samp * d.audio.seek_handle.channels as usize;
             match slot {
                 0 => shared_renderer.display_pos_a.store(pos_interleaved, Ordering::Relaxed),
                 1 => shared_renderer.display_pos_b.store(pos_interleaved, Ordering::Relaxed),
                 _ => shared_renderer.display_pos_c.store(pos_interleaved, Ordering::Relaxed),
             }
             let spinner_active = !d.tempo.analysis_settled || d.tempo.redetecting;
-            let analysing      = d.mode == DeckMode::Playback || spinner_active || !d.tempo.bpm_established;
+            // Detached: the view exists for grid inspection, so ticks show in any mode.
+            let analysing      = if detached.as_ref().is_some_and(|v| v.deck == slot) {
+                spinner_active
+            } else {
+                d.mode == DeckMode::Playback || spinner_active || !d.tempo.bpm_established
+            };
             let beat_period    = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
             let flash_window   = beat_period.mul_f64(0.15);
             let smooth_pos_ns  = (display_samp / d.audio.sample_rate as f64 * 1_000_000_000.0) as i128
@@ -1413,7 +1441,7 @@ fn tui_loop(
                 && remaining_secs < display_cfg.warning_threshold_secs as f64;
             let beat_index     = smooth_pos_ns.div_euclid(beat_period.as_nanos() as i128);
             let warn_beat_on   = warning_active && (beat_index % 2 == 0);
-            Some(DeckRenderState { display_samp, display_pos_samp, analysing, spinner_active, beat_on, warning_active, warn_beat_on })
+            Some(DeckRenderState { display_samp, view_pos_samp, analysing, spinner_active, beat_on, warning_active, warn_beat_on })
         });
 
         shared_renderer.zoom_at.store(zoom_idx, Ordering::Relaxed);
@@ -1615,12 +1643,17 @@ fn tui_loop(
             }
 
             // Update tempo and cue state for background buffer rendering.
-            // In Playback mode: suppress ticks (analysing=true); the cue column stays visible.
+            // In Playback mode: suppress ticks (analysing=true); the cue column stays
+            // visible. A detached view shows the grid in any mode — it exists for
+            // grid inspection.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
-                let (base_bpm, offset_ms, analysing, cue_sample) = deck.map(|d| {
+                let (base_bpm, offset_ms, mut analysing, cue_sample) = deck.map(|d| {
                     let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled || d.tempo.redetecting || !d.tempo.bpm_established;
                     (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
+                if detached.as_ref().is_some_and(|v| v.deck == slot) {
+                    analysing = deck.is_some_and(|d| !d.tempo.analysis_settled || d.tempo.redetecting);
+                }
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
                 shared_renderer.store_cue(slot, cue_sample);
             }
@@ -1650,14 +1683,16 @@ fn tui_loop(
             let tick_w = area_tick_ab.width as usize;
             let tick_centre = ((tick_w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
                 .clamp(0, tick_w.saturating_sub(1));
-            let pos_a = render[0].as_ref().map(|rs| rs.display_pos_samp).unwrap_or(0);
-            let pos_b = render[1].as_ref().map(|rs| rs.display_pos_samp).unwrap_or(0);
-            let pos_c = render[2].as_ref().map(|rs| rs.display_pos_samp).unwrap_or(0);
+            let pos_a = render[0].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
+            let pos_b = render[1].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
+            let pos_c = render[2].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
             let tick_a = extract_tick_viewport(&buf_a, pos_a, tick_centre, tick_w);
             let tick_b = extract_tick_viewport(&buf_b, pos_b, tick_centre, tick_w);
             let tick_c = extract_tick_viewport(&buf_c, pos_c, tick_centre, tick_w);
-            render_shared_tick_row(frame, area_tick_ab, &tick_a, &tick_b);
-            render_shared_tick_row(frame, area_tick_bc, &tick_b, &tick_c);
+            render_shared_tick_row(frame, area_tick_ab, &tick_a, &tick_b,
+                detached.as_ref().is_some_and(|v| v.deck == 0), detached.as_ref().is_some_and(|v| v.deck == 1));
+            render_shared_tick_row(frame, area_tick_bc, &tick_b, &tick_c,
+                detached.as_ref().is_some_and(|v| v.deck == 1), detached.as_ref().is_some_and(|v| v.deck == 2));
 
             // ---- Deck 1 ----
             {
@@ -1669,13 +1704,14 @@ fn tui_loop(
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_a);
                     }
-                    render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.view_pos_samp, deck.display.palette);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, rs.spinner_active,
+                            detached.as_ref().filter(|v| v.deck == 0).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[0] {
@@ -1687,6 +1723,37 @@ fn tui_loop(
                     render_detail_empty(frame, area_detail_a, 0);
                 }
                 overlay_top_left(frame, area_overview_a, Line::from(title_spans), bar_bg);
+                if let Some(ref v) = detached {
+                    if v.deck == 0 {
+                        let dur = d0.as_ref().map(|d| (d.total_duration, d.audio.sample_rate)).unwrap_or((0.0, 44100));
+                        if dur.0 > 0.0 {
+                            let blue = Style::default().fg(GRID_BLUE);
+                            let anchor = d0.as_ref().and_then(|d| d.anchor_sample);
+                            if let Some(anchor) = anchor {
+                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
+                                let col = (frac * area_overview_a.width as f64) as u16;
+                                overlay_marker_column(frame, area_overview_a, col.min(area_overview_a.width.saturating_sub(1)), blue);
+                            }
+                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
+                            let ccol = (cfrac * area_overview_a.width as f64) as u16;
+                            overlay_marker_column(frame, area_overview_a, ccol.min(area_overview_a.width.saturating_sub(1)),
+                                Style::default().fg(GRID_CURSOR));
+                            // The anchor marked in the detail view too — against the same
+                            // whole-column view position the waveform renders at, so the
+                            // marker can't wiggle relative to the wave while scrolling.
+                            if let (Some(rs), Some(anchor)) = (render[0].as_ref(), anchor) {
+                                let w = area_detail_a.width as usize;
+                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
+                                    .clamp(0, w.saturating_sub(1));
+                                if let Some(col) = sample_screen_col(&buf_a, rs.view_pos_samp, centre, anchor) {
+                                    if col >= 0 && (col as usize) < w {
+                                        overlay_marker_column(frame, area_detail_a, col as u16, blue);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- Deck 2 ----
@@ -1699,13 +1766,14 @@ fn tui_loop(
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_b);
                     }
-                    render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.view_pos_samp, deck.display.palette);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, rs.spinner_active,
+                            detached.as_ref().filter(|v| v.deck == 1).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[1] {
@@ -1717,6 +1785,37 @@ fn tui_loop(
                     render_detail_empty(frame, area_detail_b, 1);
                 }
                 overlay_top_left(frame, area_overview_b, Line::from(title_spans), bar_bg);
+                if let Some(ref v) = detached {
+                    if v.deck == 1 {
+                        let dur = d1.as_ref().map(|d| (d.total_duration, d.audio.sample_rate)).unwrap_or((0.0, 44100));
+                        if dur.0 > 0.0 {
+                            let blue = Style::default().fg(GRID_BLUE);
+                            let anchor = d1.as_ref().and_then(|d| d.anchor_sample);
+                            if let Some(anchor) = anchor {
+                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
+                                let col = (frac * area_overview_b.width as f64) as u16;
+                                overlay_marker_column(frame, area_overview_b, col.min(area_overview_b.width.saturating_sub(1)), blue);
+                            }
+                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
+                            let ccol = (cfrac * area_overview_b.width as f64) as u16;
+                            overlay_marker_column(frame, area_overview_b, ccol.min(area_overview_b.width.saturating_sub(1)),
+                                Style::default().fg(GRID_CURSOR));
+                            // The anchor marked in the detail view too — against the same
+                            // whole-column view position the waveform renders at, so the
+                            // marker can't wiggle relative to the wave while scrolling.
+                            if let (Some(rs), Some(anchor)) = (render[1].as_ref(), anchor) {
+                                let w = area_detail_b.width as usize;
+                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
+                                    .clamp(0, w.saturating_sub(1));
+                                if let Some(col) = sample_screen_col(&buf_b, rs.view_pos_samp, centre, anchor) {
+                                    if col >= 0 && (col as usize) < w {
+                                        overlay_marker_column(frame, area_detail_b, col as u16, blue);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- Deck 3 ----
@@ -1729,13 +1828,14 @@ fn tui_loop(
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_c);
                     }
-                    render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.display_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.view_pos_samp, deck.display.palette);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
                     }
                     let bottom_right = countdown_prompt_line(deck)
-                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, rs.spinner_active));
+                        .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, rs.spinner_active,
+                            detached.as_ref().filter(|v| v.deck == 2).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
                 } else {
                     if let Some(ref s) = loading_label[2] {
@@ -1747,6 +1847,37 @@ fn tui_loop(
                     render_detail_empty(frame, area_detail_c, 2);
                 }
                 overlay_top_left(frame, area_overview_c, Line::from(title_spans), bar_bg);
+                if let Some(ref v) = detached {
+                    if v.deck == 2 {
+                        let dur = d2.as_ref().map(|d| (d.total_duration, d.audio.sample_rate)).unwrap_or((0.0, 44100));
+                        if dur.0 > 0.0 {
+                            let blue = Style::default().fg(GRID_BLUE);
+                            let anchor = d2.as_ref().and_then(|d| d.anchor_sample);
+                            if let Some(anchor) = anchor {
+                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
+                                let col = (frac * area_overview_c.width as f64) as u16;
+                                overlay_marker_column(frame, area_overview_c, col.min(area_overview_c.width.saturating_sub(1)), blue);
+                            }
+                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
+                            let ccol = (cfrac * area_overview_c.width as f64) as u16;
+                            overlay_marker_column(frame, area_overview_c, ccol.min(area_overview_c.width.saturating_sub(1)),
+                                Style::default().fg(GRID_CURSOR));
+                            // The anchor marked in the detail view too — against the same
+                            // whole-column view position the waveform renders at, so the
+                            // marker can't wiggle relative to the wave while scrolling.
+                            if let (Some(rs), Some(anchor)) = (render[2].as_ref(), anchor) {
+                                let w = area_detail_c.width as usize;
+                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
+                                    .clamp(0, w.saturating_sub(1));
+                                if let Some(col) = sample_screen_col(&buf_c, rs.view_pos_samp, centre, anchor) {
+                                    if col >= 0 && (col as usize) < w {
+                                        overlay_marker_column(frame, area_detail_c, col as u16, blue);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- Global status bar ----
@@ -2316,6 +2447,10 @@ fn tui_loop(
                     }
                 }
                 // Nudge and mode toggle — handled for all key kinds (Release must be detected).
+                // A live grid session claims the nudge keys for its cursor: the whole
+                // block is skipped, and the warp release-guard is moot because a
+                // session can't start mid-warp (g is a Press like any other).
+                if detached.is_none() {
                 match key.kind {
                     KeyEventKind::Press
                         if keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeModeToggle) =>
@@ -2433,6 +2568,7 @@ fn tui_loop(
                     }
                     _ => {}
                 }
+                }
                 // Base BPM ramp — fires on Press and Repeat with time-based step size.
                 // The ramp resets only when no base-BPM key has been seen for >500 ms,
                 // so a quick release-and-repress continues at the current tier.
@@ -2459,7 +2595,7 @@ fn tui_loop(
                         d.tempo.bpm = (d.tempo.base_bpm * ratio).clamp(40.0, 240.0);
                         d.tempo.bpm_established = true;
                         shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
-                        anchor_beat_grid_to_cue(d);
+                        rederive_grid_phase(d);
                         if let Some(ref hash) = d.tempo.analysis_hash {
                             track_data.set(hash.clone(), cache_entry_for_deck(d));
                         }
@@ -2509,6 +2645,79 @@ fn tui_loop(
                         }
                         continue 'tui;
                     }
+                    // Grid session keys — captured while a session is live; the
+                    // rest fall through so navigation and transport keep working.
+                    if let Some(ref mut v) = detached {
+                        let deck_idx = v.deck;
+                        let mut close = false;
+                        let mut handled = true;
+                        if let Some(ref mut d) = decks[deck_idx] {
+                            let sr = d.audio.sample_rate as f64;
+                            let track_samples = (d.total_duration * sr).max(0.0);
+                            match key.code {
+                                // The anchor: pinned exactly at the cursor, phase re-derived
+                                // live, persisted with the rest of the track's grid data.
+                                KeyCode::Char('a') => {
+                                    d.anchor_sample = Some(v.cursor as usize);
+                                    rederive_grid_phase(d);
+                                    if let Some(ref hash) = d.tempo.analysis_hash {
+                                        track_data.set(hash.clone(), cache_entry_for_deck(d));
+                                    }
+                                }
+                                KeyCode::Left => {
+                                    v.cursor = d.anchor_sample.map(|a| a as f64).unwrap_or_else(|| {
+                                        let period = 60.0 / d.tempo.base_bpm as f64;
+                                        (d.tempo.offset_ms as f64 / 1000.0).rem_euclid(period) * sr
+                                    });
+                                }
+                                KeyCode::Right => {
+                                    let period = 60.0 / d.tempo.base_bpm as f64;
+                                    let t0 = (d.tempo.offset_ms as f64 / 1000.0).rem_euclid(period);
+                                    let n = ((d.total_duration - t0) / period).floor().max(0.0);
+                                    v.cursor = ((t0 + n * period) * sr).min(track_samples);
+                                }
+                                KeyCode::Esc => { close = true; }
+                                _ => {
+                                    // Movement actions steer the cursor, never the audio.
+                                    // Everything else falls through: while detached, grid
+                                    // edits are the ordinary live ones.
+                                    let step_samps = match keymap.get(&KeyBinding::Key(key.code)) {
+                                        Some(Action::NudgeForward)    => Some(0.010 * sr),
+                                        Some(Action::NudgeBackward)   => Some(-0.010 * sr),
+                                        Some(a) => {
+                                            let beats: Option<f64> = match a {
+                                                Action::JumpForward1bt  => Some(1.0),   Action::JumpBackward1bt => Some(-1.0),
+                                                Action::JumpForward1b   => Some(4.0),   Action::JumpBackward1b  => Some(-4.0),
+                                                Action::JumpForward4b   => Some(16.0),  Action::JumpBackward4b  => Some(-16.0),
+                                                Action::JumpForward8b   => Some(32.0),  Action::JumpBackward8b  => Some(-32.0),
+                                                Action::JumpForward16b  => Some(64.0),  Action::JumpBackward16b => Some(-64.0),
+                                                Action::JumpForward32b  => Some(128.0), Action::JumpBackward32b => Some(-128.0),
+                                                Action::JumpForward64b  => Some(256.0), Action::JumpBackward64b => Some(-256.0),
+                                                _ => None,
+                                            };
+                                            beats.map(|n| match d.mode {
+                                                DeckMode::Beat => n * (60.0 / d.tempo.base_bpm as f64) * sr,
+                                                DeckMode::Playback => n * 0.5 * sr,
+                                            })
+                                        }
+                                        None => None,
+                                    };
+                                    if let Some(step) = step_samps {
+                                        v.cursor = (v.cursor + step).clamp(0.0, track_samples);
+                                    } else {
+                                        handled = false;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Deck vanished under the view; drop it.
+                            close = true;
+                        }
+                        if close {
+                            detached = None;
+                        }
+                        if handled { continue 'tui; }
+                    }
                     // Esc dismisses the message or hint on the global bar
                     // (messages stay in the log).
                     if (stream.showing().is_some() || stream.hint_showing().is_some()) && key.code == KeyCode::Esc {
@@ -2524,6 +2733,7 @@ fn tui_loop(
                                     d.tempo.bpm = p_bpm;
                                     d.tempo.base_bpm = p_bpm;
                                     d.tempo.offset_ms = (p_offset as f64 / 10.0).round() as i64 * 10;
+                                    if d.anchor_sample.is_some() { rederive_grid_phase(d); }
                                     d.tempo.bpm_established = true;
                                     d.audio.player.set_speed(1.0);
                                     shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
@@ -2826,6 +3036,19 @@ fn tui_loop(
                         history_open = !history_open;
                         if history_open { help_open = false; history_scroll = 0; }
                     }
+                    Some(Action::GridMode) => {
+                        // Toggle the detached view on the selected deck. A live view
+                        // captures no printable keys except its own, so `g` reaches
+                        // here mid-view and toggles it off.
+                        if detached.as_ref().is_some_and(|v| v.deck == selected_deck) {
+                            detached = None;
+                        } else if let Some(ref d) = decks[selected_deck] {
+                            detached = Some(DetachedView {
+                                deck: selected_deck,
+                                cursor: d.display.smooth_display_samp,
+                            });
+                        }
+                    }
                     Some(Action::ModeCycle) => {
                         // Cycles the selected deck only; an empty deck has no mode.
                         // Audio speed is preserved across the switch.
@@ -2846,7 +3069,7 @@ fn tui_loop(
                                     d.tempo.bpm = (d.tempo.base_bpm * d.tempo.playback_speed).clamp(40.0, 240.0);
                                     d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                     shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
-                                    anchor_beat_grid_to_cue(d);
+                                    rederive_grid_phase(d);
                                 }
                             }
                             if let Some(ref hash) = d.tempo.analysis_hash {
@@ -2893,14 +3116,6 @@ fn tui_loop(
                     Some(Action::Deck3FilterReset)    => { if let Some(ref mut d) = decks[2] { d.mixer.filter_offset = 0; d.audio.filter_offset_shared.store(0, Ordering::Relaxed); } }
                     Some(Action::Deck3FilterSlopeIncrease) => { if let Some(ref mut d) = decks[2] { if d.mixer.filter_poles < 4 { d.mixer.filter_poles += 2; d.audio.filter_poles.store(d.mixer.filter_poles, Ordering::Relaxed); } } }
                     Some(Action::Deck3FilterSlopeDecrease) => { if let Some(ref mut d) = decks[2] { if d.mixer.filter_poles > 2 { d.mixer.filter_poles -= 2; d.audio.filter_poles.store(d.mixer.filter_poles, Ordering::Relaxed); } } }
-                    Some(Action::PaletteCycle) => {
-                        scheme_idx = (scheme_idx + 1) % PALETTE_SCHEMES.len();
-                        for slot in 0..3 {
-                            if let Some(ref mut d) = decks[slot] {
-                                d.display.palette = if slot == 0 { PALETTE_SCHEMES[scheme_idx].1 } else { PALETTE_SCHEMES[scheme_idx].2 };
-                            }
-                        }
-                    }
                     Some(Action::ArtCycle) => {
                         art_bright_idx = [2u8, 0, 1][art_bright_idx as usize]; // dim→bright→off→dim
                         session.set_art_bright_idx(art_bright_idx);
@@ -2926,7 +3141,7 @@ fn tui_loop(
                                 d.tempo.bpm_established = true;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
-                                anchor_beat_grid_to_cue(d);
+                                rederive_grid_phase(d);
                             }
                         }
                     }
@@ -2941,7 +3156,7 @@ fn tui_loop(
                                 d.tempo.bpm_established = true;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
-                                anchor_beat_grid_to_cue(d);
+                                rederive_grid_phase(d);
                             }
                         }
                     }
@@ -2989,6 +3204,7 @@ fn tui_loop(
                                         d.tempo.base_bpm = tapped_bpm;
                                         d.tempo.bpm = (d.tempo.base_bpm * speed_ratio).clamp(40.0, 240.0);
                                         d.tempo.offset_ms = tapped_offset;
+                                        if d.anchor_sample.is_some() { rederive_grid_phase(d); }
                                         d.tempo.bpm_established = true;
                                         d.tempo.offset_established = true;
                                         d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
@@ -3003,7 +3219,7 @@ fn tui_loop(
                             if d.audio.player.is_paused() {
                                 let raw_samp = d.display.smooth_display_samp as usize;
                                 d.cue_sample = Some(raw_samp);
-                                anchor_beat_grid_to_cue(d);
+                                rederive_grid_phase(d);
                                 if let Some(ref hash) = d.tempo.analysis_hash.clone() {
                                     track_data.set(hash.clone(), cache_entry_for_deck(d));
                                 }
@@ -3087,10 +3303,15 @@ fn service_deck_frame(
             } else {
                 // Restore cue_sample, offset_established, and gain_db from the track database if present.
                 d.cue_sample = track_data.get(hash.as_str()).and_then(|e| e.cue_sample);
+                d.anchor_sample = track_data.get(hash.as_str()).and_then(|e| e.anchor_sample);
                 d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
                 d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
                 d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                 d.mode = track_data.get(hash.as_str()).and_then(|e| e.mode).unwrap_or(DeckMode::Beat);
+                if d.anchor_sample.is_some() {
+                    // The anchor is the phase source; the stored offset is derived data.
+                    rederive_grid_phase(d);
+                }
                 if d.mode == DeckMode::Beat {
                     if let Some(cue_samp) = d.cue_sample {
                         let cue_secs = cue_samp as f64 / d.audio.sample_rate as f64;
@@ -3226,6 +3447,10 @@ fn service_deck_frame(
         d.tempo.offset_ms  = tapped_offset;
         d.tempo.bpm_established = true;
         d.tempo.offset_established = true;
+        if d.anchor_sample.is_some() {
+            // Tap sets the tempo; the anchor keeps owning the phase.
+            rederive_grid_phase(d);
+        }
         d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
         shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
         if let Some(ref hash) = d.tempo.analysis_hash {

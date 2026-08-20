@@ -58,6 +58,9 @@ pub(crate) struct CacheEntry {
     /// The mode the track last ran in; applied at load.
     #[serde(default)]
     pub(crate) mode: Option<crate::deck::DeckMode>,
+    /// The grid's phase datum in mono samples, when one has been pinned.
+    #[serde(default)]
+    pub(crate) anchor_sample: Option<usize>,
 }
 
 /// BTreeMap so both file copies serialise in one deterministic order — a
@@ -174,7 +177,7 @@ mod tests {
     use super::*;
 
     fn entry(bpm: f32, name: &str) -> CacheEntry {
-        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0, mode: None }
+        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0, mode: None, anchor_sample: None }
     }
 
     #[test]

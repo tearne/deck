@@ -14,6 +14,11 @@ use crate::deck::{
 };
 use crate::messages::{Event, Severity};
 
+/// The grid-work accent for the fixed furniture: ticks, tag, and anchor.
+pub(crate) const GRID_BLUE: ratatui::style::Color = ratatui::style::Color::Rgb(40, 100, 210);
+/// The movable cursor keeps a lighter cyan, standing out against the furniture.
+pub(crate) const GRID_CURSOR: ratatui::style::Color = ratatui::style::Color::Rgb(60, 150, 255);
+
 pub(crate) const ZOOM_LEVELS: &[f32] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
 
@@ -630,6 +635,15 @@ pub(crate) fn overlay_top_left(frame: &mut ratatui::Frame, area: ratatui::layout
     frame.render_widget(Paragraph::new(line).style(bg), rect);
 }
 
+/// A one-column vertical marker over `area` at `col` — grid anchors on the
+/// overview. Drawn after the cached waveform, so no cache invalidation.
+pub(crate) fn overlay_marker_column(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, col: u16, style: Style) {
+    if area.height == 0 || col >= area.width { return; }
+    let rect = ratatui::layout::Rect { x: area.x + col, y: area.y, width: 1, height: area.height };
+    let lines: Vec<Line> = (0..area.height).map(|_| Line::from(Span::styled("┃", style))).collect();
+    frame.render_widget(Paragraph::new(lines), rect);
+}
+
 /// As [`overlay_top_left`], anchored to the bottom-left corner.
 pub(crate) fn overlay_bottom_left(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line<'static>, bg: Style) {
     if area.height == 0 || area.width == 0 { return; }
@@ -853,13 +867,17 @@ pub(crate) fn readout_corner_line(
     deck: &Deck,
     overview_width: usize,
     analysing: bool,
+    grid_status: Option<String>,
 ) -> Line<'static> {
     let sep = Span::styled("│", Style::default().fg(Color::Rgb(70, 70, 90)));
-    let mode_tag = match deck.mode {
-        DeckMode::Playback => "PLAY",
-        DeckMode::Beat     => "BEAT",
+    let (mode_tag, tag_style) = match grid_status {
+        Some(status) => (status, Style::default().fg(GRID_BLUE)),
+        None => (match deck.mode {
+            DeckMode::Playback => "PLAY",
+            DeckMode::Beat     => "BEAT",
+        }.to_string(), Style::default().fg(Color::Rgb(110, 110, 130))),
     };
-    let mut spans = vec![Span::styled(mode_tag, Style::default().fg(Color::Rgb(110, 110, 130))), sep.clone()];
+    let mut spans = vec![Span::styled(mode_tag, tag_style), sep.clone()];
     if deck.mode == DeckMode::Beat && deck.tempo.bpm_established {
         spans.push(Span::styled(format!("{:+}ms", deck.tempo.offset_ms), Style::default().fg(Color::DarkGray)));
         spans.push(sep.clone());
@@ -1256,6 +1274,29 @@ pub(crate) fn compose_shared_tick_row(tick_a: &[u8], tick_b: &[u8], width: usize
 /// shifted: right sub-col (0xB8) at buffer column c becomes left sub-col (0x47) at
 /// screen column c, and left sub-col (0x47) at buffer column c becomes right sub-col
 /// (0xB8) at screen column c−1.
+/// Screen column of `sample` in the detail viewport, through the same
+/// buffer-anchored arithmetic the waveform and ticks render with — overlay
+/// markers computed here can never drift against them. Right half-columns
+/// round rightward, matching the glyph-tick centring.
+pub(crate) fn sample_screen_col(
+    buf: &BrailleBuffer,
+    view_pos: usize,
+    centre_col: usize,
+    sample: usize,
+) -> Option<i64> {
+    if buf.samples_per_col == 0 || buf.buf_cols == 0 { return None; }
+    let half_col   = buf.samples_per_col as f64 / 2.0;
+    let delta      = view_pos as i64 - buf.anchor_sample as i64;
+    let delta_half = (delta as f64 / half_col).round() as i64;
+    let delta_cols = delta_half.div_euclid(2);
+    let sub_col    = delta_half.rem_euclid(2) != 0;
+    let viewport_off = buf.buf_cols as i64 / 2 + delta_cols - centre_col as i64;
+    let view_start = buf.anchor_sample as f64 - (buf.buf_cols / 2) as f64 * buf.samples_per_col as f64;
+    let disp_half  = ((sample as f64 - view_start) / half_col).round() as i64;
+    let screen_half = disp_half - 2 * viewport_off - (sub_col as i64);
+    Some((screen_half + 1).div_euclid(2))
+}
+
 pub(crate) fn extract_tick_viewport(
     buf:        &BrailleBuffer,
     display_pos: usize,
@@ -1592,13 +1633,40 @@ pub(crate) fn render_shared_tick_row(
     area: ratatui::layout::Rect,
     tick_a: &[u8],
     tick_b: &[u8],
+    a_detached: bool,
+    b_detached: bool,
 ) {
     let w = area.width as usize;
     let display_row = compose_shared_tick_row(tick_a, tick_b, w);
-    let s: String = display_row.iter().map(|&byte| {
-        if byte != 0 { char::from_u32(0x2800 | byte as u32).unwrap_or(' ') } else { ' ' }
+    // A detached deck's ticks read blue — the grid-work accent — so the
+    // alignment instrument itself signals the mode. Only that deck's ticks
+    // change; its row-mate keeps gray.
+    let blue = Style::default().fg(GRID_BLUE);
+    let gray = Style::default().fg(Color::Gray);
+    let mut cells: Vec<(char, Style)> = display_row.iter().map(|&byte| {
+        let ch = if byte != 0 { char::from_u32(0x2800 | byte as u32).unwrap_or(' ') } else { ' ' };
+        (ch, gray)
     }).collect();
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(s, Style::default().fg(Color::Gray)))), area);
+    // A detached deck's ticks become three-wide glyph markers centred on the
+    // tick's column — the braille half-column form reads off-centre once the
+    // detached view snaps to whole columns. The stem points at the deck the
+    // ticks belong to (`┴` above the row, `┬` below); the row-mate's braille
+    // ticks stay as they are.
+    let mut glyphs = |ticks: &[u8], stem: char| {
+        for (c, &byte) in ticks.iter().enumerate() {
+            if byte == 0 { continue; }
+            let centre = if byte == 0xB8 { (c + 1).min(w.saturating_sub(1)) } else { c };
+            for (col, ch) in [(centre.wrapping_sub(1), '─'), (centre, stem), (centre + 1, '─')] {
+                if col < w {
+                    cells[col] = (ch, blue);
+                }
+            }
+        }
+    };
+    if a_detached { glyphs(tick_a, '┴'); }
+    if b_detached { glyphs(tick_b, '┬'); }
+    let spans: Vec<Span> = cells.into_iter().map(|(ch, style)| Span::styled(ch.to_string(), style)).collect();
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
@@ -1650,7 +1718,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("F", wh),
         Span::styled(" ", ba),
         Span::styled("-BPM", gr),
-        Span::styled("    G         ┆   J  K  L +Lvl", ba),
+        Span::styled("    G Grid    ┆   J  K  L +Lvl", ba),
     ]);
     // Row 9: Space (chord) — F's ╰ bracket stays white
     let row9 = Line::from(vec![
@@ -1673,7 +1741,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
     let row15 = Line::from(vec![
-        Span::styled("/ art   p palette   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck        ", ba),
+        Span::styled("/ art   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck                    ", ba),
         Span::styled("╰ [Space]", sp),
     ]);
 

@@ -15,14 +15,14 @@ The spatial layout below matches the in-app help overlay (`?`). Left block = sel
     Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
     ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
       ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain
-      A +Ptch   S +PFL    D +Ndge   F -BPM    G         ┆   J  K  L +Lvl
+      A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid    ┆   J  K  L +Lvl
       ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%
         ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
 ───────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` mode    ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   p palette   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck      ╰ [Space]
+/ art   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck                  ╰ [Space]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
@@ -51,8 +51,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `latency_decrease` | `[` | Audio latency −10 ms |
 | `fps_increase` | `^` | Increase FPS cap |
 | `fps_decrease` | `Y` | Decrease FPS cap |
-| `palette_cycle` | `p` | Cycle colour palette |
 | `art_cycle` | `/` | Cycle album art brightness |
+| `grid_mode` | `g` | Open a Grid session on the selected deck (see Grid mode keys) |
 
 ### Deck Selection & Swap
 
@@ -158,6 +158,16 @@ Actions are prefixed `deck1_`, `deck2_`, `deck3_`. Default keys are shown left t
 ## Fixed Keys
 
 Not configurable — hardcoded in the application.
+
+### Detached view (grid work; playback never interrupted)
+
+Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead and follows a free cursor; jumps and nudge steer the cursor instead of the audio, and tick marks render in any deck mode. All grid edits are the normal live ones (`V`/`F` base BPM, `D`/`C` offset, `b` tap).
+
+| Key | Action |
+|-----|--------|
+| `a` | Pin the anchor at the cursor — the grid's persisted phase source |
+| `←` / `→` | Jump the cursor to the anchor / the last grid tick |
+| `Esc` or `g` | Re-attach the view |
 
 ### Browser
 
