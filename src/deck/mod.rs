@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use rodio::Player;
 
 use crate::audio::{butterworth_biquad, SeekHandle, WaveformData, FILTER_CUTOFFS_HZ};
-use crate::cache::CacheEntry;
+use crate::cache::{CacheEntry, Grid};
 use crate::config::{Action, KeyBinding};
 use crossterm::event::KeyCode;
 use std::collections::HashMap;
@@ -56,7 +56,6 @@ pub(crate) struct TempoState {
     /// so an unhashable track settles instead of spinning forever.
     pub(crate) analysis_settled: bool,
     pub(crate) bpm_established: bool,
-    pub(crate) offset_established: bool,
     /// Absolute playback speed multiplier (1.0 = nominal). Used in Playback mode and
     /// when no BPM is established. Independent of BPM state; passed directly to `player.set_speed`.
     pub(crate) playback_speed: f32,
@@ -277,7 +276,6 @@ impl Deck {
                 analysis_hash: None,
                 analysis_settled: false,
                 bpm_established: false,
-                offset_established: false,
                 playback_speed: 1.0,
             },
             tap: TapState {
@@ -375,7 +373,6 @@ pub(crate) fn rederive_grid_phase(d: &mut Deck) {
     if let Some(anchor) = d.anchor_sample {
         let anchor_ms = anchor as f64 / d.audio.sample_rate as f64 * 1000.0;
         d.tempo.offset_ms = anchor_ms.rem_euclid(beat_period_ms).round() as i64;
-        d.tempo.offset_established = true;
     } else if let Some(cue_samp) = d.cue_sample {
         let cue_ms = cue_samp as f64 / d.audio.sample_rate as f64 * 1000.0;
         d.tempo.offset_ms = (cue_ms.rem_euclid(beat_period_ms) / 10.0).round() as i64 * 10;
@@ -396,7 +393,6 @@ pub(crate) fn apply_offset_step(d: &mut Deck, delta_ms: i64) {
     d.tempo.offset_ms += delta_ms;
     let period = (60_000.0 / d.tempo.base_bpm as f64 / 10.0).round() as i64 * 10;
     d.tempo.offset_ms = d.tempo.offset_ms.rem_euclid(period);
-    d.tempo.offset_established = true;
     if d.audio.player.is_paused() {
         let delta_samp = delta_ms as f64 / 1000.0 * d.audio.sample_rate as f64;
         d.display.smooth_display_samp = (d.display.smooth_display_samp + delta_samp).max(0.0);
@@ -600,11 +596,9 @@ pub(crate) fn do_time_jump(seek_handle: &SeekHandle, player: &Player, track_end:
 
 pub(crate) fn cache_entry_for_deck(d: &Deck) -> CacheEntry {
     CacheEntry {
-        bpm: d.tempo.base_bpm,
-        offset_ms: d.tempo.offset_ms,
+        grid: d.tempo.bpm_established.then(|| Grid { bpm: d.tempo.base_bpm, offset_ms: d.tempo.offset_ms }),
         name: d.filename.clone(),
         cue_sample: d.cue_sample,
-        offset_established: d.tempo.offset_established,
         gain_db: d.mixer.gain_db,
         mode: Some(d.mode),
         anchor_sample: d.anchor_sample,

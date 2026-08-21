@@ -772,14 +772,15 @@ fn build_deck(
             };
             // is_fresh=false → applied immediately and marks bpm_established=true (confirmed).
             // is_fresh=true  → applied immediately only when bpm_established is false, leaves it false (unconfirmed).
-            let (bpm, offset_ms, is_fresh) = if let Some(entry) = entries.get(&hash) {
-                let snapped = (entry.offset_ms as f64 / 10.0).round() as i64 * 10;
-                let period  = (60_000.0 / entry.bpm as f64 / 10.0).round() as i64 * 10;
+            let (bpm, offset_ms, is_fresh) = if let Some(grid) = entries.get(&hash).and_then(|e| e.grid) {
+                let snapped = (grid.offset_ms as f64 / 10.0).round() as i64 * 10;
+                let period  = (60_000.0 / grid.bpm as f64 / 10.0).round() as i64 * 10;
                 let snapped = snapped.rem_euclid(period);
-                (entry.bpm, snapped, false)
+                (grid.bpm, snapped, false)
             } else {
-                // No cache entry: use 120 as a placeholder; leave bpm_established false so the UI
-                // signals that the BPM has not been confirmed.
+                // No confirmed grid (no record, or a played-but-never-tapped track): use 120
+                // as a placeholder; leave bpm_established false so the UI signals that the
+                // BPM has not been confirmed.
                 (120.0f32, 0i64, true)
             };
             let _ = bpm_tx.send((hash, bpm, offset_ms, is_fresh, None));
@@ -3224,7 +3225,6 @@ fn tui_loop(
                                         d.tempo.offset_ms = tapped_offset;
                                         if d.anchor_sample.is_some() { rederive_grid_phase(d); }
                                         d.tempo.bpm_established = true;
-                                        d.tempo.offset_established = true;
                                         d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                         shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                                     }
@@ -3306,17 +3306,15 @@ fn service_deck_frame(
                 // nothing and can't be referenced by a playlist. The event carries the
                 // error detail — the log line is the fault's whole record.
                 d.cue_sample = None;
-                d.tempo.offset_established = false;
                 d.mixer.gain_db = 0;
                 d.audio.gain_linear.store(1.0f32.to_bits(), Ordering::Relaxed);
                 let detail = identity_error.unwrap_or_else(|| "unknown".to_string());
                 stream.emit(Event::new(Source::Deck(slot), Severity::Error, format!("Content identity unavailable ({detail}) — not saved, unusable in playlists")));
                 d.tempo.analysis_hash = None;
             } else {
-                // Restore cue_sample, offset_established, and gain_db from the track database if present.
+                // Restore cue_sample, anchor, gain_db, and mode from the track database if present.
                 d.cue_sample = track_data.get(hash.as_str()).and_then(|e| e.cue_sample);
                 d.anchor_sample = track_data.get(hash.as_str()).and_then(|e| e.anchor_sample);
-                d.tempo.offset_established = track_data.get(hash.as_str()).map_or(false, |e| e.offset_established);
                 d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
                 d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
                 d.mode = track_data.get(hash.as_str()).and_then(|e| e.mode).unwrap_or(DeckMode::Beat);
@@ -3448,7 +3446,6 @@ fn service_deck_frame(
         d.tempo.bpm        = (d.tempo.base_bpm * speed_ratio).clamp(40.0, 240.0);
         d.tempo.offset_ms  = tapped_offset;
         d.tempo.bpm_established = true;
-        d.tempo.offset_established = true;
         if d.anchor_sample.is_some() {
             // Tap sets the tempo; the anchor keeps owning the phase.
             rederive_grid_phase(d);

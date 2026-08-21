@@ -42,24 +42,67 @@ fn idle_elapsed(dirty_at: Option<std::time::Instant>) -> bool {
 // Track database — per-track memory keyed by audio hash, in the data dir
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct CacheEntry {
+/// A confirmed beat grid: the BPM and phase offset together. Stored only once
+/// the operator has established the tempo — a record with no grid is a track
+/// that was played but never tapped, and must not reopen at the placeholder.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Grid {
     pub(crate) bpm: f32,
     pub(crate) offset_ms: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(from = "RawCacheEntry")]
+pub(crate) struct CacheEntry {
+    pub(crate) grid: Option<Grid>,
     /// Filename at time of first detection — informational only, not used as key.
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) cue_sample: Option<usize>,
     #[serde(default)]
-    pub(crate) offset_established: bool,
-    #[serde(default)]
     pub(crate) gain_db: i8,
     /// The mode the track last ran in; applied at load.
     #[serde(default)]
     pub(crate) mode: Option<crate::deck::DeckMode>,
-    /// The grid's phase datum in mono samples, when one has been pinned.
+    /// The grid's phase datum in mono samples, when one has been pinned. Kept
+    /// outside `grid`: an anchor can be pinned before the tempo is confirmed.
     #[serde(default)]
     pub(crate) anchor_sample: Option<usize>,
+}
+
+/// The on-disk record as read, accepting both shapes: the current nullable
+/// `grid`, and the legacy flat `bpm` / `offset_ms`, which read as confirmed.
+#[derive(Deserialize)]
+struct RawCacheEntry {
+    #[serde(default)]
+    grid: Option<Grid>,
+    #[serde(default)]
+    bpm: Option<f32>,
+    #[serde(default)]
+    offset_ms: i64,
+    name: String,
+    #[serde(default)]
+    cue_sample: Option<usize>,
+    #[serde(default)]
+    gain_db: i8,
+    #[serde(default)]
+    mode: Option<crate::deck::DeckMode>,
+    #[serde(default)]
+    anchor_sample: Option<usize>,
+}
+
+impl From<RawCacheEntry> for CacheEntry {
+    fn from(raw: RawCacheEntry) -> Self {
+        let legacy_grid = raw.bpm.map(|bpm| Grid { bpm, offset_ms: raw.offset_ms });
+        CacheEntry {
+            grid: raw.grid.or(legacy_grid),
+            name: raw.name,
+            cue_sample: raw.cue_sample,
+            gain_db: raw.gain_db,
+            mode: raw.mode,
+            anchor_sample: raw.anchor_sample,
+        }
+    }
 }
 
 /// BTreeMap so both file copies serialise in one deterministic order — a
@@ -176,7 +219,25 @@ mod tests {
     use super::*;
 
     fn entry(bpm: f32, name: &str) -> CacheEntry {
-        CacheEntry { bpm, offset_ms: 0, name: name.to_string(), cue_sample: None, offset_established: false, gain_db: 0, mode: None, anchor_sample: None }
+        CacheEntry { grid: Some(Grid { bpm, offset_ms: 0 }), name: name.to_string(), cue_sample: None, gain_db: 0, mode: None, anchor_sample: None }
+    }
+
+    fn bpm_of(e: &CacheEntry) -> f32 { e.grid.expect("confirmed grid").bpm }
+
+    #[test]
+    fn legacy_flat_record_reads_as_confirmed_and_null_grid_round_trips() {
+        let legacy = r#"{"A": {"bpm": 128.0, "offset_ms": 310, "name": "a", "offset_established": true, "gain_db": 2}}"#;
+        let entries: TrackEntries = serde_json::from_str(legacy).unwrap();
+        let a = entries.get("A").unwrap();
+        assert_eq!(a.grid, Some(Grid { bpm: 128.0, offset_ms: 310 }), "flat fields become a confirmed grid");
+        assert_eq!(a.gain_db, 2);
+
+        let unconfirmed = CacheEntry { grid: None, name: "b".into(), cue_sample: Some(44100), gain_db: -1, mode: None, anchor_sample: None };
+        let text = serde_json::to_string(&unconfirmed).unwrap();
+        assert!(text.contains("\"grid\":null"), "absence is written explicitly: {text}");
+        let back: CacheEntry = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.grid, None, "a never-confirmed record stays unconfirmed");
+        assert_eq!(back.cue_sample, Some(44100));
     }
 
     #[test]
@@ -201,8 +262,8 @@ mod tests {
         db.set_mirror(Some(&workspace));
         db.sync_with_mirror();
 
-        assert_eq!(db.get("Y").unwrap().bpm, 120.0, "local-only entry kept");
-        assert_eq!(db.get("Z").unwrap().bpm, 90.0, "workspace-only entry added");
+        assert_eq!(bpm_of(db.get("Y").unwrap()), 120.0, "local-only entry kept");
+        assert_eq!(bpm_of(db.get("Z").unwrap()), 90.0, "workspace-only entry added");
         assert_eq!(db.get("X").unwrap().name, "x-from-workspace", "workspace wins on conflict");
 
         db.save();
@@ -232,10 +293,10 @@ mod tests {
         assert!(text.trim_start().starts_with("{\n  \"_about\""), "header leads the file");
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("stays plain valid JSON");
         assert!(parsed.get("_about").is_some());
-        assert_eq!(read_entries(&path).get("A").unwrap().bpm, 128.0, "roundtrip");
+        assert_eq!(bpm_of(read_entries(&path).get("A").unwrap()), 128.0, "roundtrip");
 
         std::fs::write(&path, serde_json::to_string(&entries).unwrap()).unwrap();
-        assert_eq!(read_entries(&path).get("A").unwrap().bpm, 128.0, "legacy fallback");
+        assert_eq!(bpm_of(read_entries(&path).get("A").unwrap()), 128.0, "legacy fallback");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
