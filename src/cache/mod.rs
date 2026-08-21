@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 fn default_art_bright_idx() -> u8 { 1 }
+fn default_panel_pct() -> u16 { 30 }
 
 /// Filename shared by the canonical `.local` database and its workspace mirror,
 /// so relocating one to the other is a plain file copy.
@@ -254,6 +255,9 @@ struct SessionFile {
     audio_latency_ms: i64,
     #[serde(default = "default_art_bright_idx")]
     art_bright_idx: u8,
+    /// Browser panel width as a percentage of the browser area.
+    #[serde(default = "default_panel_pct")]
+    browser_panel_pct: u16,
 }
 
 impl Default for SessionFile {
@@ -263,6 +267,7 @@ impl Default for SessionFile {
             browser_workspace: None,
             audio_latency_ms: 0,
             art_bright_idx: default_art_bright_idx(),
+            browser_panel_pct: default_panel_pct(),
         }
     }
 }
@@ -273,6 +278,7 @@ pub(crate) struct SessionState {
     browser_workspace: Option<PathBuf>,
     audio_latency_ms: i64,
     art_bright_idx: u8,
+    browser_panel_pct: u16,
     dirty_at: Option<std::time::Instant>,
 }
 
@@ -295,6 +301,7 @@ impl SessionState {
                 .filter(|p| p.is_dir()),
             audio_latency_ms: file.audio_latency_ms,
             art_bright_idx: file.art_bright_idx,
+            browser_panel_pct: file.browser_panel_pct.clamp(15, 70),
             dirty_at: None,
         }
     }
@@ -345,6 +352,16 @@ impl SessionState {
         self.mark_dirty();
     }
 
+    pub(crate) fn get_panel_pct(&self) -> u16 {
+        self.browser_panel_pct
+    }
+
+    /// Step the panel width by `delta` percentage points, clamped 15–70.
+    pub(crate) fn step_panel_pct(&mut self, delta: i16) {
+        self.browser_panel_pct = (self.browser_panel_pct as i16 + delta).clamp(15, 70) as u16;
+        self.mark_dirty();
+    }
+
     pub(crate) fn flush_if_idle(&mut self) {
         if idle_elapsed(self.dirty_at) {
             self.save();
@@ -362,6 +379,7 @@ impl SessionState {
                 .and_then(|p| p.to_str().map(str::to_string)),
             audio_latency_ms: self.audio_latency_ms,
             art_bright_idx: self.art_bright_idx,
+            browser_panel_pct: self.browser_panel_pct,
         };
         write_json_atomic(&self.path, &file);
     }

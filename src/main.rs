@@ -62,7 +62,7 @@ use render::{
     overview_empty, overview_title_line, readout_corner_line, refresh_overview_for_deck, render_detail_empty, render_detail_waveform,
     title_empty_span,
     render_keyboard_help, render_message_history, render_shared_tick_row, sample_screen_col, GRID_BLUE, GRID_CURSOR,
-    render_tag_editor, SharedDetailRenderer, ZOOM_LEVELS,
+    SharedDetailRenderer, ZOOM_LEVELS,
 };
 use tags::{propose_rename_stem, read_cover_art, read_tags_for_editor, read_track_name};
 
@@ -399,7 +399,7 @@ enum EditFocus { Browser, Playlist }
 
 enum Preview {
     Empty,
-    Track { fields: [String; 7] },
+    Track { fields: [String; 7], current_name: String, proposed_name: Option<String> },
     Playlist(PlaylistPanel),
 }
 
@@ -1061,7 +1061,7 @@ fn handle_tag_editor_key(
                         *val = trimmed;
                     }
                     let stem = editor.preview();
-                    let needs_rename = stem != editor.current_stem;
+                    let needs_rename = editor.rename_enabled && stem != editor.current_stem;
                     let old = editor.current_path();
                     let target = editor.target_path();
                     if needs_rename && target.exists() {
@@ -1124,8 +1124,14 @@ fn handle_tag_editor_key(
         _ => {
             let editor = tag_editor.as_mut().unwrap();
             match key.code {
-                KeyCode::Tab | KeyCode::Down => { editor.active_field = (editor.active_field + 1) % TAG_FIELD_LABELS.len(); }
-                KeyCode::BackTab | KeyCode::Up => { editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len() - 1) % TAG_FIELD_LABELS.len(); }
+                KeyCode::Tab | KeyCode::Down => { editor.active_field = (editor.active_field + 1) % (TAG_FIELD_LABELS.len() + 1); }
+                KeyCode::BackTab | KeyCode::Up => { editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len()) % (TAG_FIELD_LABELS.len() + 1); }
+                _ if editor.active_field == TAG_FIELD_LABELS.len() => {
+                    // The rename toggle stop: Space (or left/right) flips it.
+                    if matches!(key.code, KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right) {
+                        editor.rename_enabled = !editor.rename_enabled;
+                    }
+                }
                 KeyCode::Left => { let (_, cursor) = editor.active_field_mut(); if *cursor > 0 { *cursor -= 1; } }
                 KeyCode::Right => { let (text, cursor) = editor.active_field_mut(); let len = text.chars().count(); if *cursor < len { *cursor += 1; } }
                 KeyCode::Home => { let (_, cursor) = editor.active_field_mut(); *cursor = 0; }
@@ -1498,7 +1504,16 @@ fn tui_loop(
                 let ws = session.workspace().map(|p| p.to_path_buf());
                 panel = Panel::Preview(match highlighted {
                     Some((path, EntryKind::Audio)) => match read_tags_for_editor(&path) {
-                        Some(fields) => Preview::Track { fields },
+                        Some(fields) => {
+                            let current_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                            // The proposed rename shows only when it differs — in
+                            // compliance mode, that is the fix about to be made.
+                            let stem = propose_rename_stem(&path);
+                            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            let proposed = if ext.is_empty() { stem.clone() } else { format!("{stem}.{ext}") };
+                            let proposed_name = (proposed != current_name).then_some(proposed);
+                            Preview::Track { fields, current_name, proposed_name }
+                        }
                         None => Preview::Empty,
                     },
                     Some((path, EntryKind::Playlist)) => Preview::Playlist(PlaylistPanel::open(path, ws.as_deref())),
@@ -1940,9 +1955,10 @@ fn tui_loop(
                     frame.render_widget(ratatui::widgets::Clear, inner);
                     inner
                 };
+                let panel_pct = session.get_panel_pct();
                 let cols = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .constraints([Constraint::Percentage(100 - panel_pct), Constraint::Percentage(panel_pct)])
                     .split(area);
                 let selected_playing = [&d0, &d1, &d2][selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
                 render_browser(frame, cols[0], bs, selected_deck, selected_playing);
@@ -1951,13 +1967,18 @@ fn tui_loop(
                     render::dim_area(frame, cols[0]);
                     render::render_tag_editor_panel(frame, cols[1], editor);
                 } else {
-                    // Dim the browser while the playlist list is the active target.
+                    // Exactly one side reads as driven: the browser dims while the
+                    // panel is the active target, the panel dims while it only
+                    // previews — same hue-preserving fade both ways.
                     if panel.dim_browser() {
                         render::dim_area(frame, cols[0]);
                     }
                     let playing_of = |p: &PlaylistPanel| decks.iter().flatten()
                         .find_map(|d| d.playlist.as_ref().filter(|a| a.path == p.path).map(|a| a.index));
                     render::render_panel(frame, cols[1], &panel, &playing_of);
+                    if !panel.dim_browser() {
+                        render::dim_area(frame, cols[1]);
+                    }
                 }
             } else if c[10].height >= 3 && art_bright_idx < 2 {
                 let brightness = [1.0f32, 0.35, 0.0][art_bright_idx as usize];
@@ -2002,11 +2023,16 @@ fn tui_loop(
                 history_scroll = render_message_history(frame, c[10], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
             }
 
-            // Tag editor overlay — a standalone modal only when the browser is closed
-            // (the load-time rename offer); with the browser open it's in the panel.
+            // Tag editor via the rename offer (browser closed): same panel
+            // presentation, in the same right-hand geometry the browser uses.
             if browser_state.is_none() {
                 if let Some(ref editor) = tag_editor {
-                    render_tag_editor(frame, editor, area);
+                    let panel_pct = session.get_panel_pct();
+                    let cols = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(100 - panel_pct), Constraint::Percentage(panel_pct)])
+                        .split(c[10]);
+                    render::render_tag_editor_panel(frame, cols[1], editor);
                 }
             }
 
@@ -2120,6 +2146,8 @@ fn tui_loop(
                     match keymap.get(&KeyBinding::AltChord(key.code)) {
                         Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; continue; }
                         Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; continue; }
+                        Some(Action::PanelWiden)  => { session.step_panel_pct(5);  continue; }
+                        Some(Action::PanelNarrow) => { session.step_panel_pct(-5); continue; }
                         _ => {}
                     }
                 }
@@ -2735,7 +2763,35 @@ fn tui_loop(
                                         tag_editor = TagEditorState::for_track(&d.path);
                                         if tag_editor.is_none() {
                                             stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                        } else {
+                                            // The offer lands on the same screen as the browser
+                                            // route: browser at the file, compliance markers on,
+                                            // editor in the panel. Saving then resumes the normal
+                                            // cleanup flow among the file's neighbours.
+                                            let track_path = d.path.clone();
+                                            if let Some(dir) = track_path.parent() {
+                                                let workspace = session.workspace().map(|p| p.to_path_buf());
+                                                if let Ok(mut bs) = BrowserState::new(dir.to_path_buf(), workspace) {
+                                                    let _ = bs.go_to(dir.to_path_buf(), Some(&track_path), "rename offer".to_string());
+                                                    bs.compliance_on = true;
+                                                    if bs.compliance_on {
+                                                        edit_resume_anchor = bs.entries.iter().position(|e| e.path == track_path)
+                                                            .and_then(|i| bs.entries.get(i + 1))
+                                                            .or_else(|| bs.entries.first())
+                                                            .map(|e| e.path.clone());
+                                                    }
+                                                    browser_state = Some(bs);
+                                                    preview_output = Some(PreviewOutput::new(mixer));
+                                                }
+                                            }
                                         }
+                                        d.rename_offer_started = None;
+                                        rename_offer_consumed = true;
+                                    }
+                                    KeyCode::Esc => {
+                                        // Esc steps up one level: dismiss the offer
+                                        // (countdown or lingering ⚠), never fall
+                                        // through to quit.
                                         d.rename_offer_started = None;
                                         rename_offer_consumed = true;
                                     }
@@ -2977,6 +3033,7 @@ fn tui_loop(
                         history_open = !history_open;
                         if history_open { help_open = false; history_scroll = 0; }
                     }
+                    Some(Action::PanelWiden) | Some(Action::PanelNarrow) => {} // browser-only
                     Some(Action::GridMode) => {
                         // Toggle the detached view on the selected deck. A live view
                         // captures no printable keys except its own, so `g` reaches

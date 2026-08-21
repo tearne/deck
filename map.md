@@ -147,7 +147,7 @@ Keeps track filenames matching their tags. The convention is `Title - Artist` (a
 
 **See also**
 
-- [Metadata Editor](#metadata-editor) — the modal the offer opens
+- [Metadata Editor](#metadata-editor) — the editor the offer opens, on the same browser screen the `e` route uses
 - [File Operations](#file-operations) — editing the same file on demand, from the browser
 - [Keymap](#keymap) — fixed rename/editor keys
 
@@ -170,9 +170,9 @@ The browser's command mode acts on the highlighted file: `e` edits its tags and 
 
 [Up](#file-operations)
 
-The modal that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. Confirming writes the edited metadata back to the file and renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. While open it captures all input.
+The editor that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. A `[x] Rename File` toggle heads the filename section (on by default; off makes the save tags-only). Confirming writes the edited metadata back to the file and, when the toggle is on, renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. It renders in the browser's right-hand panel, the browser dimmed beside it, and captures all input while open.
 
-Reached two ways: by `e` on a highlighted file in the browser, or via the load-time rename offer (see Renaming).
+Reached two ways onto one screen: `e` on a highlighted file in the browser, or the load-time rename offer — which opens the browser at the file with compliance markers on, so a save resumes the cleanup flow.
 
 > [!IMPORTANT] A tag edit must never change the track's **content identity** — the hash of the audio payload, with tags excluded by design, so only tag/container bytes may shift, never the payload itself. The editor enforces this as a **required safeguard**: it computes the identity (over the audio payload) before and after every write and, on any change, raises a critical alert and preserves the original and edited files under the shared `~/.local/state/deck/error_reports/` (dated, type-tagged) for analysis. A changed identity silently breaks every playlist referencing the track, so this is not optional and never auto-undone (the original is kept for recovery).
 
@@ -750,9 +750,9 @@ Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the curs
 
 [Up](#browser)
 
-The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's tags, or a playlist's entries. It follows the highlight passively until the operator focuses it.
+The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's metadata (in the tag editor's own form, with the proposed rename when one applies), or a playlist's entries. It follows the highlight passively until the operator focuses it.
 
-Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. While the panel has focus the browser dims, so which list is being driven is never in doubt.
+Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. Focus is shown by light: whichever list is being driven is bright, the other dimmed — the panel fades while it merely follows the highlight, the browser fades while the panel is the target.
 
 **See also**
 
@@ -952,7 +952,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 [Up](#application)
 
-Global player state remembered between runs: last-visited browser directory, search workspace, audio latency, and cover-art brightness.
+Global player state remembered between runs: last-visited browser directory, search workspace, browser panel width, audio latency, and cover-art brightness.
 
 Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 

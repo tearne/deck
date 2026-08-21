@@ -9,8 +9,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::audio::WaveformData;
 use crate::deck::{
-    Deck, DeckMode, SpecPalette, TagEditorState,
-    TAG_EDITOR_MAX_WIDTH, TAG_EDITOR_MIN_WIDTH, TAG_FIELD_LABELS,
+    Deck, DeckMode, SpecPalette,
+    TAG_FIELD_LABELS,
 };
 use crate::messages::{Event, Severity};
 
@@ -1117,15 +1117,9 @@ pub(crate) fn halfblock_art(bytes: &[u8], cols: u16, rows: u16, brightness: f32)
     }).collect()
 }
 
-pub(crate) fn popup_area(width: u16, height: u16, area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    ratatui::layout::Rect { x, y, width: width.min(area.width), height: height.min(area.height) }
-}
-
 pub(crate) fn render_editor_field(label: &'static str, text: &str, active: bool, cursor: usize, text_width: usize) -> Vec<Line<'static>> {
-    let label_style  = Style::default().fg(Color::Rgb(40, 60, 100));
-    let text_style   = Style::default().fg(if active { Color::White } else { Color::Rgb(60, 80, 120) });
+    let label_style  = Style::default().fg(Color::Rgb(90, 110, 150));
+    let text_style   = Style::default().fg(if active { Color::White } else { Color::Rgb(200, 220, 255) });
     let cursor_style = Style::default().fg(Color::Black).bg(Color::Yellow);
     let chars: Vec<char> = text.chars().collect();
     let cursor = cursor.min(chars.len());
@@ -1172,65 +1166,12 @@ pub(crate) fn render_editor_field(label: &'static str, text: &str, active: bool,
 pub(crate) fn section_divider(label: &'static str, inner_width: usize) -> Line<'static> {
     let fill = "─".repeat(inner_width.saturating_sub(4 + label.len()));
     Line::from(vec![
-        Span::styled("── ", Style::default().fg(Color::Rgb(40, 60, 100))),
-        Span::styled(label, Style::default().fg(Color::Rgb(80, 110, 160))),
-        Span::styled(format!(" {fill}"), Style::default().fg(Color::Rgb(40, 60, 100))),
+        Span::styled("── ", Style::default().fg(Color::Rgb(70, 90, 130))),
+        Span::styled(label, Style::default().fg(Color::Rgb(120, 140, 175))),
+        Span::styled(format!(" {fill}"), Style::default().fg(Color::Rgb(70, 90, 130))),
     ])
 }
 
-pub(crate) fn render_tag_editor(frame: &mut ratatui::Frame, editor: &TagEditorState, full_area: ratatui::layout::Rect) {
-    let popup_width = full_area.width.clamp(TAG_EDITOR_MIN_WIDTH, TAG_EDITOR_MAX_WIDTH);
-    let text_width  = popup_width as usize - 2 - 9; // inner − label prefix
-    let inner_width = popup_width as usize - 2;
-    let label_dim = Style::default().fg(Color::Rgb(40, 60, 100));
-    let hint_dim  = Style::default().fg(Color::Rgb(40, 60, 100));
-    let proposed  = editor.preview();
-    let with_ext  = |stem: &str| -> String {
-        if editor.extension.is_empty() { stem.to_string() }
-        else { format!("{stem}.{}", editor.extension) }
-    };
-    let mut lines: Vec<Line<'static>> = std::iter::once(section_divider("Tags", inner_width))
-        .chain(TAG_FIELD_LABELS.iter().enumerate()
-            .flat_map(|(i, &label)| {
-                let (val, cur) = &editor.fields[i];
-                render_editor_field(label, val, editor.active_field == i, *cur, text_width)
-            }))
-        .collect();
-    lines.push(section_divider("Filename", inner_width));
-    lines.push(Line::from(vec![
-        Span::styled(" Current: ", label_dim),
-        Span::styled(with_ext(&editor.current_stem), Style::default().fg(Color::Rgb(60, 80, 120))),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Proposed: ", label_dim),
-        Span::styled(with_ext(&proposed), Style::default().fg(Color::Yellow)),
-    ]));
-    if let Some(ref err) = editor.collision_error {
-        lines.push(Line::from(Span::styled(format!(" \u{26a0} {err}"), Style::default().fg(Color::Red))));
-    } else {
-        lines.push(Line::from(""));
-    }
-    lines.push(Line::from(Span::styled("          Enter to confirm  Esc to cancel", hint_dim)));
-    let popup_height = (lines.len() as u16 + 2).min(full_area.height); // +2 for borders
-    let popup = popup_area(popup_width, popup_height, full_area);
-    let navy = Style::default().bg(Color::Rgb(20, 20, 38));
-    let blue = Color::Rgb(40, 60, 100);
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(Span::styled(" Edit tags and rename file ", Style::default().fg(Color::Yellow)))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(blue))
-        .style(navy);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    frame.render_widget(Paragraph::new(lines), inner);
-}
-
-// Compose the braille display row for the shared tick strip.
-// Each tick occupies two adjacent characters: a main char at column c and a spillover into c+1.
-// Deck A (up): 1 tip dot (row 1, sub-col position) + 3-wide base (row 2).
-// Deck B (down): 3-wide base (row 3) + 1 tip dot (row 4, sub-col position).
-// Left/right sub-column is determined by bit 0 of the raw tick byte (0x47=left, 0xB8=right).
 pub(crate) fn compose_shared_tick_row(tick_a: &[u8], tick_b: &[u8], width: usize) -> Vec<u8> {
     let mut row = vec![0u8; width];
     for c in 0..width {
@@ -1843,6 +1784,9 @@ pub(crate) fn render_message_history(
     scroll
 }
 
+/// Dim every cell in `area` in place — used to de-emphasise the browser half while
+/// the playlist pane holds focus.
+
 /// The permanent context panel. Renders whichever state it's in: an empty frame,
 /// a track's metadata, or a playlist (preview / browse / edit).
 pub(crate) fn render_panel(
@@ -1858,7 +1802,10 @@ pub(crate) fn render_panel(
             let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(55, 62, 78)));
             frame.render_widget(Paragraph::new("").block(block), area);
         }
-        Panel::Preview(Preview::Track { fields }) => render_track_meta(frame, area, fields),
+        Panel::Preview(Preview::Track { fields, current_name, proposed_name }) => {
+            let owned: Vec<(String, usize)> = fields.iter().map(|f| (f.clone(), 0)).collect();
+            render_metadata_panel(frame, area, &owned, None, current_name, proposed_name.as_deref(), None, None);
+        }
         Panel::Preview(Preview::Playlist(pp)) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Preview),
         Panel::Browse(pp) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Browse),
         Panel::Edit { panel: pp, focus } => {
@@ -2124,77 +2071,163 @@ fn render_playlist_panel(
 /// The tag editor rendered in the context panel: labelled fields with a caret on
 /// the active one, the resulting filename, and a hint. Input is the same handler
 /// as the full-screen modal.
-pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, editor: &crate::deck::TagEditorState) {
-    const LABELS: [&str; 7] = ["Artist", "Title", "Album", "Year", "Track", "Genre", "Comment"];
-    let rows = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Min(2),
-        ratatui::layout::Constraint::Length(2),
-    ]).split(area);
-
-    let label_style = Style::default().fg(Color::Rgb(90, 110, 150));
-    let mut lines: Vec<Line> = LABELS.iter().zip(&editor.fields).enumerate().map(|(i, (label, (value, cursor)))| {
-        let mut spans = vec![Span::styled(format!("{label:>7}: "), label_style)];
-        if i == editor.active_field {
-            // Caret: split the value at the cursor and reverse the char under it.
-            let at = (*cursor).min(value.chars().count());
-            let before: String = value.chars().take(at).collect();
-            let under: String = value.chars().nth(at).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
-            let after: String = value.chars().skip(at + 1).collect();
-            spans.push(Span::styled(before, Style::default().fg(Color::White)));
-            spans.push(Span::styled(under, Style::default().fg(Color::Black).bg(Color::Rgb(240, 180, 60))));
-            spans.push(Span::styled(after, Style::default().fg(Color::White)));
-        } else {
-            spans.push(Span::styled(value.clone(), Style::default().fg(Color::Rgb(200, 220, 255))));
+/// The one metadata panel: identical form for passive preview and active
+/// editing — the symmetric dim carries the state difference, so the RHS never
+/// changes shape at the moment of focus. Colours follow the browser family
+/// over the navy-and-blue frame.
+pub(crate) fn render_metadata_panel(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    fields: &[(String, usize)],
+    active_field: Option<usize>,
+    current_name: &str,
+    proposed_name: Option<&str>,
+    collision_error: Option<&str>,
+    rename_toggle: Option<(bool, bool)>, // (enabled, focused) — edit mode only
+) {
+    let inner_width = (area.width as usize).saturating_sub(2).max(12);
+    let text_width  = inner_width.saturating_sub(9);
+    let label = Style::default().fg(Color::Rgb(90, 110, 150));
+    let mut lines: Vec<Line<'static>> = std::iter::once(section_divider("Tags", inner_width))
+        .chain(TAG_FIELD_LABELS.iter().enumerate()
+            .flat_map(|(i, &lab)| {
+                let (val, cur) = &fields[i];
+                render_editor_field(lab, val, active_field == Some(i), *cur, text_width)
+            }))
+        .collect();
+    // The decision is the section header: `── [x] Rename File ──` — in edit
+    // mode the divider itself is the toggle (Tab to it, Space flips).
+    let rename_on = rename_toggle.map_or(true, |(enabled, _)| enabled);
+    match rename_toggle {
+        Some((enabled, focused)) => {
+            let text = format!("[{}] Rename File", if enabled { "x" } else { " " });
+            let toggle_style = if focused {
+                Style::default().fg(Color::White).bg(Color::Rgb(60, 80, 130))
+            } else {
+                Style::default().fg(Color::Rgb(120, 140, 175))
+            };
+            let frame_style = Style::default().fg(Color::Rgb(70, 90, 130));
+            let fill = "─".repeat(inner_width.saturating_sub(4 + text.chars().count()));
+            lines.push(Line::from(vec![
+                Span::styled("── ", frame_style),
+                Span::styled(text, toggle_style),
+                Span::styled(format!(" {fill}"), frame_style),
+            ]));
         }
-        Line::from(spans)
-    }).collect();
-
-    let with_ext = |stem: &str| if editor.extension.is_empty() { stem.to_string() } else { format!("{stem}.{}", editor.extension) };
-    let proposed = editor.preview();
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Filename", Style::default().fg(Color::Rgb(120, 140, 175)).add_modifier(Modifier::BOLD))));
-    lines.push(Line::from(vec![
-        Span::styled(" current: ", label_style),
-        Span::styled(with_ext(&editor.current_stem), Style::default().fg(Color::Rgb(120, 140, 175))),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("proposed: ", label_style),
-        Span::styled(with_ext(&proposed), Style::default().fg(Color::Rgb(240, 200, 90))),
-    ]));
-    if let Some(err) = &editor.collision_error {
-        lines.push(Line::from(Span::styled(format!("  {err}"), Style::default().fg(Color::Rgb(240, 120, 120)))));
+        None => lines.push(section_divider("Filename", inner_width)),
     }
+    lines.push(Line::from(vec![
+        Span::styled(" Current: ", label),
+        Span::styled(current_name.to_string(), Style::default().fg(Color::Rgb(200, 220, 255))),
+    ]));
+    if let Some(proposed) = proposed_name {
+        let (label_style, value_style) = if rename_on {
+            (label, Style::default().fg(Color::Yellow))
+        } else {
+            let dim = Style::default().fg(Color::Rgb(70, 70, 80));
+            (dim, dim)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Proposed: ", label_style),
+            Span::styled(proposed.to_string(), value_style),
+        ]));
+    }
+    if let Some(err) = collision_error {
+        lines.push(Line::from(Span::styled(format!(" \u{26a0} {err}"), Style::default().fg(Color::Red))));
+    }
+    if active_field.is_some() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Enter to confirm  Esc to cancel", label)));
+    }
+    let navy = Style::default().bg(Color::Rgb(20, 20, 38));
+    let blue = Color::Rgb(40, 60, 100);
+    let title = if active_field.is_some() { " Edit tags and rename file " } else { " Tags " };
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(Span::styled(title, Style::default().fg(Color::Yellow)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(blue))
+        .style(navy);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
 
-    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(240, 180, 60))).title(" edit tags ");
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: false }), rows[0]);
-    frame.render_widget(
-        Paragraph::new("Tab/↑↓ field · type to edit · Enter save (Artist+Title required) · Esc cancel")
-            .style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
-        rows[1],
+pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, editor: &crate::deck::TagEditorState) {
+    let with_ext = |stem: &str| -> String {
+        if editor.extension.is_empty() { stem.to_string() } else { format!("{stem}.{}", editor.extension) }
+    };
+    let proposed = editor.preview();
+    render_metadata_panel(
+        frame, area,
+        &editor.fields,
+        Some(editor.active_field),
+        &with_ext(&editor.current_stem),
+        Some(&with_ext(&proposed)),
+        editor.collision_error.as_deref(),
+        Some((editor.rename_enabled, editor.active_field == TAG_FIELD_LABELS.len())),
     );
 }
-
-/// A track's tag fields, read-only, for the preview panel.
-fn render_track_meta(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, fields: &[String; 7]) {
-    const LABELS: [&str; 7] = ["Artist", "Title", "Album", "Year", "Track", "Genre", "Comment"];
-    let lines: Vec<Line> = LABELS.iter().zip(fields).map(|(label, value)| {
-        Line::from(vec![
-            Span::styled(format!("{label:>7}: "), Style::default().fg(Color::Rgb(90, 110, 150))),
-            Span::styled(value.clone(), Style::default().fg(Color::Rgb(200, 220, 255))),
-        ])
-    }).collect();
-    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(70, 90, 110))).title(" metadata ");
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(ratatui::widgets::Wrap { trim: true }), area);
-}
-
-/// Dim every cell in `area` in place — used to de-emphasise the browser half while
-/// the playlist pane holds focus.
 pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+    // Blend target and strengths. Foregrounds keep more of themselves than
+    // backgrounds: pastel palettes lose perceived hue much faster than
+    // saturated ones, and the fg carries the colour identity.
+    const TARGET: (f32, f32, f32) = (45.0, 45.0, 55.0);
+    const KEEP_FG: f32 = 0.55;
+    const KEEP_BG: f32 = 0.35;
+    fn to_rgb(c: Color) -> Option<(u8, u8, u8)> {
+        Some(match c {
+            Color::Rgb(r, g, b) => (r, g, b),
+            Color::Black => (0, 0, 0),
+            Color::Red => (205, 49, 49),
+            Color::Green => (13, 188, 121),
+            Color::Yellow => (229, 229, 16),
+            Color::Blue => (36, 114, 200),
+            Color::Magenta => (188, 63, 188),
+            Color::Cyan => (17, 168, 205),
+            Color::Gray => (200, 200, 200),
+            Color::DarkGray => (102, 102, 102),
+            Color::LightRed => (241, 76, 76),
+            Color::LightGreen => (35, 209, 139),
+            Color::LightYellow => (245, 245, 67),
+            Color::LightBlue => (59, 142, 234),
+            Color::LightMagenta => (214, 112, 214),
+            Color::LightCyan => (41, 184, 219),
+            Color::White => (229, 229, 229),
+            Color::Indexed(i) => xterm_rgb(i),
+            Color::Reset => return None,
+        })
+    }
+    fn xterm_rgb(i: u8) -> (u8, u8, u8) {
+        match i {
+            0..=15 => [(0,0,0),(205,49,49),(13,188,121),(229,229,16),(36,114,200),(188,63,188),(17,168,205),(229,229,229),
+                       (102,102,102),(241,76,76),(35,209,139),(245,245,67),(59,142,234),(214,112,214),(41,184,219),(255,255,255)][i as usize],
+            16..=231 => {
+                let v = i - 16;
+                let level = |n: u8| if n == 0 { 0 } else { 55 + 40 * n };
+                (level(v / 36), level((v / 6) % 6), level(v % 6))
+            }
+            _ => { let g = 8 + 10 * (i - 232); (g, g, g) }
+        }
+    }
+    fn blend(c: Color, keep: f32) -> Color {
+        match to_rgb(c) {
+            Some((r, g, b)) => Color::Rgb(
+                (r as f32 * keep + TARGET.0 * (1.0 - keep)) as u8,
+                (g as f32 * keep + TARGET.1 * (1.0 - keep)) as u8,
+                (b as f32 * keep + TARGET.2 * (1.0 - keep)) as u8,
+            ),
+            None => Color::Rgb(TARGET.0 as u8, TARGET.1 as u8, TARGET.2 as u8),
+        }
+    }
     let buf = frame.buffer_mut();
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buf[(x, y)];
-            let dimmed = cell.style().add_modifier(Modifier::DIM).fg(Color::Rgb(90, 90, 110));
+            let style = cell.style();
+            let dimmed = Style::default()
+                .fg(blend(style.fg.unwrap_or(Color::Reset), KEEP_FG))
+                .bg(blend(style.bg.unwrap_or(Color::Reset), KEEP_BG));
             cell.set_style(dimmed);
         }
     }

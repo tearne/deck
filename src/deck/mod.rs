@@ -120,12 +120,13 @@ pub(crate) enum DeckMode { Playback, Beat }
 pub(crate) const TAG_FIELD_LABELS: &[&str] = &[
     " Artist", "  Title", "  Album", "   Year", "  Track", "  Genre", "Comment",
 ];
-pub(crate) const TAG_EDITOR_MAX_WIDTH: u16 = 64;
-pub(crate) const TAG_EDITOR_MIN_WIDTH: u16 = 36; // 2 borders + 9 label + at least ~25 chars of text
 
 pub(crate) struct TagEditorState {
     pub(crate) fields:          Vec<(String, usize)>,
     pub(crate) active_field:    usize,
+    /// Whether saving also renames the file to match the tags. On by default;
+    /// off makes the save tags-only. The ninth focus stop toggles it.
+    pub(crate) rename_enabled:  bool,
     /// Directory of the file being edited, so save can write and rename without
     /// reference to any deck.
     pub(crate) dir:             std::path::PathBuf,
@@ -146,7 +147,7 @@ impl TagEditorState {
         let dir = path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
         let current_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        Some(TagEditorState { fields, active_field: 0, dir, current_stem, extension, collision_error: None })
+        Some(TagEditorState { fields, active_field: 0, rename_enabled: true, dir, current_stem, extension, collision_error: None })
     }
 
     /// The file's current full path (before any pending rename).

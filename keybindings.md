@@ -58,8 +58,10 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `select_next_deck` | `alt+j` | Cycle to next deck (wraps; works in the browser too) |
-| `select_prev_deck` | `alt+k` | Cycle to previous deck (wraps; works in the browser too) |
+| `select_next_deck` | `alt+j`, `alt+down` | Cycle to next deck (wraps; works in the browser too) |
+| `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
+| `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
+| `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |
 | `playlist_next` | `space+n` | Selected deck: skip to next playlist track |
 | `playlist_prev` | `space+p` | Selected deck: skip to previous playlist track |
 | `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 |
@@ -197,8 +199,9 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Down` | Next field |
+| `Tab` / `Down` | Next field (the rename toggle is the last stop) |
 | `Shift+Tab` / `Up` | Previous field |
+| `Space` (on the toggle) | Flip the `[x] Rename File` section header (default on) |
 | `Left` / `Right` | Move cursor |
 | `Home` / `End` | Cursor to start / end |
 | `Backspace` / `Delete` | Delete character |
