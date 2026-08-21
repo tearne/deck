@@ -1,7 +1,5 @@
-use color_eyre::Result as EyreResult;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use stratum_dsp::{analyze_audio, AnalysisConfig};
 
 fn default_art_bright_idx() -> u8 { 1 }
 
@@ -370,11 +368,5 @@ impl SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// BPM detection
 // ---------------------------------------------------------------------------
 
-pub(crate) fn detect_bpm(samples: &[f32], sample_rate: u32) -> EyreResult<f32> {
-    let result = analyze_audio(samples, sample_rate, AnalysisConfig::default())
-        .map_err(|e| color_eyre::eyre::eyre!("stratum-dsp: {e:?}"))?;
-    Ok(result.bpm)
-}

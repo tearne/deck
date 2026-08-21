@@ -3,7 +3,7 @@ members = ["resilient-playlists"]
 
 [package]
 name = "deck"
-version = "0.27.11"
+version = "0.28.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
@@ -15,7 +15,6 @@ ratatui = "0.30.0"
 rodio = { version = "0.22.2", features = ["symphonia-all"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-stratum-dsp = "1.0.0"
 toml = "0.8"
 symphonia = { version = "0.5.5", features = ["all"] }
 color-eyre = "0.6.5"

@@ -46,7 +46,7 @@ mod xdg;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
 use browser::{BrowserMode, BrowserResult, BrowserState, EntryKind, handle_browser_key, render_browser};
-use cache::{SessionState, TrackDatabase, detect_bpm};
+use cache::{SessionState, TrackDatabase};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
@@ -1420,7 +1420,7 @@ fn tui_loop(
                 1 => shared_renderer.display_pos_b.store(pos_interleaved, Ordering::Relaxed),
                 _ => shared_renderer.display_pos_c.store(pos_interleaved, Ordering::Relaxed),
             }
-            let spinner_active = !d.tempo.analysis_settled || d.tempo.redetecting;
+            let spinner_active = !d.tempo.analysis_settled;
             // Detached: the view exists for grid inspection, so ticks show in any mode.
             let analysing      = if detached.as_ref().is_some_and(|v| v.deck == slot) {
                 spinner_active
@@ -1648,11 +1648,11 @@ fn tui_loop(
             // grid inspection.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
                 let (base_bpm, offset_ms, mut analysing, cue_sample) = deck.map(|d| {
-                    let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled || d.tempo.redetecting || !d.tempo.bpm_established;
+                    let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled || !d.tempo.bpm_established;
                     (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
                 if detached.as_ref().is_some_and(|v| v.deck == slot) {
-                    analysing = deck.is_some_and(|d| !d.tempo.analysis_settled || d.tempo.redetecting);
+                    analysing = deck.is_some_and(|d| !d.tempo.analysis_settled);
                 }
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
                 shared_renderer.store_cue(slot, cue_sample);
@@ -2724,31 +2724,6 @@ fn tui_loop(
                         stream.dismiss();
                         continue 'tui;
                     }
-                    // BPM confirmation intercept — check both decks.
-                    let mut bpm_intercepted = false;
-                    for slot in 0..3 {
-                        if let Some(ref mut d) = decks[slot] {
-                            if let Some((hash, p_bpm, p_offset, _)) = d.tempo.pending_bpm.take() {
-                                if confirms_destructive(key.code) {
-                                    d.tempo.bpm = p_bpm;
-                                    d.tempo.base_bpm = p_bpm;
-                                    d.tempo.offset_ms = (p_offset as f64 / 10.0).round() as i64 * 10;
-                                    if d.anchor_sample.is_some() { rederive_grid_phase(d); }
-                                    d.tempo.bpm_established = true;
-                                    d.audio.player.set_speed(1.0);
-                                    shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
-                                    d.tempo.offset_established = true;
-                                    track_data.set(hash.clone(), cache_entry_for_deck(d));
-                                    d.tempo.analysis_hash = Some(hash);
-                                }
-                                // Any key dismisses the confirmation.
-                                bpm_intercepted = true;
-                                break;
-                            }
-                        }
-                    }
-                    if bpm_intercepted { continue 'tui; }
-
                     // Rename offer — 'y' and 'h' are intercepted when offer is visible;
                     // any other key dismisses the offer and falls through to normal handling.
                     let mut rename_offer_consumed = false;
@@ -2997,40 +2972,6 @@ fn tui_loop(
                             }
                         }
                     }
-                    Some(Action::DetectBpm) => {
-                        {
-                        if let Some(ref mut d) = decks[selected_deck] {
-                            if d.mode != DeckMode::Beat {
-                            } else if d.tempo.pending_bpm.is_some() {
-                                d.tempo.pending_bpm = None;
-                            } else if d.tempo.redetecting {
-                                let (_, dead_rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
-                                d.tempo.background_rx = Some(std::mem::replace(&mut d.tempo.bpm_rx, dead_rx));
-                                d.tempo.redetecting = false;
-                                d.tempo.analysis_hash = d.tempo.redetect_saved_hash.take();
-                            } else if d.tempo.analysis_hash.is_some() {
-                                if let Some(bg_rx) = d.tempo.background_rx.take() {
-                                    d.tempo.redetect_saved_hash = d.tempo.analysis_hash.take();
-                                    d.tempo.bpm_rx = bg_rx;
-                                    d.tempo.redetecting = true;
-                                } else {
-                                    let mono_bg = Arc::clone(&d.audio.mono);
-                                    let (tx, rx) = mpsc::channel::<(String, f32, i64, bool, Option<String>)>();
-                                    let hash_bg = d.tempo.analysis_hash.clone().unwrap_or_default();
-                                    let sr_bg = d.audio.sample_rate;
-                                    thread::spawn(move || {
-                                        if let Ok(bpm) = detect_bpm(&mono_bg, sr_bg) {
-                                            let _ = tx.send((hash_bg, bpm, 0, true, None));
-                                        }
-                                    });
-                                    d.tempo.bpm_rx = rx;
-                                    d.tempo.redetect_saved_hash = d.tempo.analysis_hash.take();
-                                    d.tempo.redetecting = true;
-                                }
-                            }
-                        }
-                        }
-                    }
                     Some(Action::Help)            => { help_open = !help_open; history_open = false; }
                     Some(Action::MessageHistory)  => {
                         history_open = !history_open;
@@ -3275,14 +3216,8 @@ fn service_deck_frame(
 
     shared_renderer.store_gain(slot, f32::from_bits(d.audio.gain_linear.load(Ordering::Relaxed)));
 
-    // Auto-reject pending BPM confirmation after 15 seconds.
-    if let Some((_, _, _, received_at)) = &d.tempo.pending_bpm {
-        if received_at.elapsed().as_secs() >= 15 {
-            d.tempo.pending_bpm = None;
-        }
-    }
 
-    // Poll BPM detection results.
+    // Poll the load-time analysis result (hash + cached grid).
     if let Ok((hash, new_bpm, new_offset, is_fresh, identity_error)) = d.tempo.bpm_rx.try_recv() {
         if !is_fresh || !d.tempo.bpm_established {
             d.tempo.bpm      = new_bpm;
@@ -3322,17 +3257,7 @@ fn service_deck_frame(
                 d.tempo.analysis_hash = Some(hash);
             }
             d.tempo.analysis_settled   = true;
-            if !is_fresh || d.tempo.redetecting { d.tempo.bpm_established = true; }
-            d.tempo.redetecting        = false;
-            d.tempo.redetect_saved_hash = None;
-            d.tempo.background_rx      = None;
-        } else {
-            d.tempo.analysis_hash      = Some(hash.clone());
-            d.tempo.analysis_settled   = true;
-            d.tempo.redetecting        = false;
-            d.tempo.redetect_saved_hash = None;
-            d.tempo.background_rx      = None;
-            d.tempo.pending_bpm        = Some((hash, new_bpm, new_offset, Instant::now()));
+            if !is_fresh { d.tempo.bpm_established = true; }
         }
     }
 
@@ -3461,7 +3386,7 @@ fn service_deck_frame(
 
 
     // Spectrum analyser: chars every half beat, background glow every 8 beats.
-    let analysing   = !d.tempo.analysis_settled || d.tempo.redetecting;
+    let analysing   = !d.tempo.analysis_settled;
     let half_period = if analysing { Duration::from_millis(250) } else { beat_period / 4 };
     let bar_period  = beat_period * 8;
     let chars_due   = d.spectrum.last_update.map_or(true,    |t| t.elapsed() >= half_period);

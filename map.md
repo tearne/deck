@@ -24,7 +24,7 @@ Designed to perform well on slow hardware. Three recurring constraints:
 
 - **Recompute only on change** — dirty flags, drift thresholds, adaptive frame timing. Most iterations are no-ops.
 
-These hold across several threads: decode runs in the background so the UI stays live and shows progress, then hashing and BPM detection follow on another pass; waveform rasterisation has its own thread (see Wide Buffer), and audio playback its own. State crosses threads through lock-free or low-contention primitives, so the audio thread never stalls.
+These hold across several threads: decode runs in the background so the UI stays live and shows progress, then hashing and the grid-cache lookup follow on another pass; waveform rasterisation has its own thread (see Wide Buffer), and audio playback its own. State crosses threads through lock-free or low-contention primitives, so the audio thread never stalls.
 
 ```
 Application
@@ -130,7 +130,7 @@ Two decks can be swapped wholesale — their entire state trades places, and sel
 [Up](#deck)
 [Down](#renaming)
 
-Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and BPM analysis follow on a further background pass (see Beat Grid).
+Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and the grid-cache lookup follow on a further background pass (see Beat Grid).
 
 Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
 
@@ -525,23 +525,22 @@ The pitch shifter and filter carry internal state (buffered samples, filter hist
 [Down](#grid-refinement)
 [Down](#cue-point)
 
-The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values. Detection assumes a single constant tempo across the track.
+The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values; a single constant tempo across the track is assumed.
 
 **BPM** is established by one of:
 
 - **Cache lookup** — on load, the audio is hashed (Blake3 over decoded mono samples) and looked up in cache. If found, BPM and offset are applied immediately. If not, a 120 BPM placeholder is used.
 - **Tap** (`bpm_tap`) — press in time with the beat. After 8 taps, `base_bpm` and `offset_ms` are set via linear regression. Outlier taps (residual > half a beat period) are excluded.
-- **Detection** (`detect_bpm`) — manually triggers BPM analysis on the decoded audio. Result goes through a confirmation step if a BPM is already established.
 - **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps; pure metadata — the audible speed never changes.
 - **Refinement** — the anchor-and-tune workflow of [Grid Refinement](#grid-refinement), the precision route.
 
-The **phase offset** positions the grid relative to a datum: a manually pinned anchor, else the cue, else the track start. With an anchor pinned, the offset is recomputed from it (1 ms precision) whenever the tempo changes — tap and detection results change tempo only, phase stays the anchor's. Manual `D`/`C` steps move anchor and offset together.
+The **phase offset** positions the grid relative to a datum: a manually pinned anchor, else the cue, else the track start. With an anchor pinned, the offset is recomputed from it (1 ms precision) whenever the tempo changes — tap results change tempo only, phase stays the anchor's. Manual `D`/`C` steps move anchor and offset together.
 
 Cache is keyed by audio hash, making it invariant of filename, tags, and container format.
 
 **See also**
 
-- [Keymap](#keymap) — keys bound to BPM tap, re-detect, and manual adjust
+- [Keymap](#keymap) — keys bound to BPM tap and manual adjust
 - [Track Database](#track-database) — BPM, offset, and anchor persisted per track by audio hash
 
 # Grid Refinement
@@ -982,7 +981,7 @@ Application messages appear in three places:
 
 Three kinds of message pass through them:
 
-- **Prompts** await a keypress beside what they ask about: deck prompts (BPM confirmation, rename offer) on the deck overlay, app prompts (quit and load confirmations) on the bar. Never recorded. Destructive confirmations accept only `y` — a reflexive Enter dismisses.
+- **Prompts** await a keypress beside what they ask about: the deck's rename offer on its overlay, app prompts (quit and load confirmations) on the bar. Never recorded. Destructive confirmations accept only `y` — a reflexive Enter dismisses.
 
 - **Events** are things that happened — loads, moves, warnings, identity alerts. Every event enters the history; those needing attention also show on the bar, named ("Deck 2: …"), and leaving the bar loses nothing.
 

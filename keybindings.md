@@ -77,7 +77,6 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | Action | Default | Description |
 |--------|---------|-------------|
 | `bpm_tap` | `b` | Tap BPM |
-| `detect_bpm` | `space+b` | Trigger BPM detection |
 | `bpm_increase` | `v` | Playback BPM +0.1 |
 | `bpm_decrease` | `f` | Playback BPM −0.1 |
 | `base_bpm_increase` | `V` | Native BPM +0.01 |
@@ -210,8 +209,8 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 
 | Key | Context | Action |
 |-----|---------|--------|
-| `y` | BPM detection, quit, load-to-playing-deck | Confirm (only `y` — a reflexive Enter dismisses) |
-| any other key | BPM detection, quit, load-to-playing-deck | Cancel |
+| `y` | quit, load-to-playing-deck | Confirm (only `y` — a reflexive Enter dismisses) |
+| any other key | quit, load-to-playing-deck | Cancel |
 | `y` | Rename offer | Open tag editor |
 | `Ctrl-C` | Any | Quit unconditionally |
 

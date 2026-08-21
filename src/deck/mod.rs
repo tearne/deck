@@ -54,10 +54,6 @@ pub(crate) struct TempoState {
     pub(crate) analysis_settled: bool,
     pub(crate) bpm_established: bool,
     pub(crate) offset_established: bool,
-    pub(crate) pending_bpm: Option<(String, f32, i64, Instant)>,
-    pub(crate) redetecting: bool,
-    pub(crate) redetect_saved_hash: Option<String>,
-    pub(crate) background_rx: Option<std::sync::mpsc::Receiver<(String, f32, i64, bool, Option<String>)>>,
     /// Absolute playback speed multiplier (1.0 = nominal). Used in Playback mode and
     /// when no BPM is established. Independent of BPM state; passed directly to `player.set_speed`.
     pub(crate) playback_speed: f32,
@@ -277,10 +273,6 @@ impl Deck {
                 analysis_settled: false,
                 bpm_established: false,
                 offset_established: false,
-                pending_bpm: None,
-                redetecting: false,
-                redetect_saved_hash: None,
-                background_rx: None,
                 playback_speed: 1.0,
             },
             tap: TapState {
@@ -311,7 +303,6 @@ impl Deck {
     pub(crate) fn rename_offer_active(&self) -> bool {
         self.rename_offer_started.is_some()
             && self.rename_hint.is_some()
-            && self.tempo.pending_bpm.is_none()
             && self.rename_accepted.is_none()
     }
 }

@@ -602,16 +602,6 @@ pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool
 /// confirmation, or the rename offer's active phase. The meters return when
 /// the prompt resolves.
 pub(crate) fn countdown_prompt_line(deck: &Deck) -> Option<Line<'static>> {
-    if let Some((_, p_bpm, _, received_at)) = &deck.tempo.pending_bpm {
-        let secs_left = 15u64.saturating_sub(received_at.elapsed().as_secs());
-        let yellow = Style::default().fg(Color::Yellow);
-        let countdown_style = if secs_left <= 5 { Style::default().fg(Color::Red) } else { yellow };
-        return Some(Line::from(vec![
-            Span::styled(format!("BPM detected: {p_bpm:.2}  [y] accept  [n] reject  ("), yellow),
-            Span::styled(format!("{secs_left}s"), countdown_style),
-            Span::styled(")", yellow),
-        ]));
-    }
     if deck.rename_offer_active() {
         let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
         if elapsed < 10 {
@@ -1757,7 +1747,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         row9,
         Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain", sh),
         row11,
-        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%", sp),
+        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰         ┆   ╰  ╰  ╰ 0%", sp),
         row13,
         Line::from(vec![
             Span::styled("` mode   ¬ nudge  -/= zoom  {/} height  [/] latency ", ba),
