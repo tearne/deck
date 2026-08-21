@@ -366,6 +366,8 @@ The correction is applied to the running value itself, so it accumulates frame t
 
 When the playhead falls between character boundaries, braille bit manipulation shifts the display by half a character width, giving sub-character precision without re-rendering.
 
+Applies only while playing: a paused deck snaps to the dot grid and the detached view to the character grid, so static views render deterministically with nothing left to per-frame rounding.
+
 > [!IMPORTANT] Char colour on half-col shift — since braille can move by half a column but colour characters can't, we assume that colour changes are gradual enough to avoid obvious misalignment.
 
 **Detail**
@@ -417,7 +419,7 @@ Switching preserves audio speed — no audible change on the cycle. Each deck's 
 Fine position adjustment with two sub-modes (jump and warp):
 
 - **While playing** — jump mode seeks ±10ms per press; warp mode applies a continuous ±10% speed offset while held, returning to normal on release
-- **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump fires on each press; warp fires continuously at half-column intervals as the position drifts
+- **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump moves one display dot per press — the step follows zoom, finer zoomed in; warp fires continuously at half-column intervals as the position drifts
 
 Warp needs the terminal to report key releases; where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
 

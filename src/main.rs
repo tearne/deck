@@ -858,6 +858,14 @@ fn confirms_destructive(key: KeyCode) -> bool {
     key == KeyCode::Char('y')
 }
 
+/// One display-dot of audio at the current zoom — the paused-nudge step, so a
+/// press always moves exactly one visible unit regardless of zoom level.
+fn dot_step_secs(zoom_secs: f32, cols: usize, speed: f64) -> f64 {
+    if cols == 0 { return 0.010 }
+    let col_samp_secs = ((zoom_secs as f64) * speed / cols as f64).max(0.0005);
+    col_samp_secs / 2.0
+}
+
 /// The display name of a key bound to `action`, chords as `Alt+X`. Prefers a
 /// chord when both layers bind the action.
 fn bound_key_name(keymap: &HashMap<KeyBinding, Action>, action: Action) -> Option<String> {
@@ -1404,18 +1412,25 @@ fn tui_loop(
             // no buffer fill ahead, so the raw position is the heard position.
             let latency_correction = if d.audio.player.is_paused() { 0.0 } else { audio_latency_ms as f64 * d.audio.sample_rate as f64 / 1000.0 };
             let display_samp = (d.display.smooth_display_samp - latency_correction).max(0.0);
+            // Whole-column snap whenever nothing is in motion — the detached view
+            // always, and any paused deck. Sub-column smoothing exists for scroll
+            // motion; a static view gains only marker ambiguity from it. The snap
+            // grid is the buffer's own integer column width, so ticks and marks
+            // extract at constant parity — no wobble across scrub steps.
+            let grid_snap = |pos: f64, halves: f64| {
+                let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+                let col_samp = if dc > 0 {
+                    (((zoom_secs as f64) * d.audio.sample_rate as f64 * speed) as usize / dc).max(1) as f64
+                } else { 1.0 };
+                let unit = col_samp / halves;
+                (pos / unit).round() * unit
+            };
             let view_samp = match detached.as_ref().filter(|v| v.deck == slot) {
-                Some(v) => {
-                    // Static view: snap to whole columns so the sub-column smoothing
-                    // never shifts the waveform against the markers mid-placement.
-                    let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
-                    // The buffer's own integer column width — the snap grid must be
-                    // the grid everything renders on, or markers wiggle against ticks.
-                    let col_samp = if dc > 0 {
-                        (((zoom_secs as f64) * d.audio.sample_rate as f64 * speed) as usize / dc).max(1) as f64
-                    } else { 1.0 };
-                    (v.cursor / col_samp).round() * col_samp
-                }
+                // Detached: character grid — its glyph markers are character-sized.
+                Some(v) => grid_snap(v.cursor, 1.0),
+                // Paused: dot grid — the braille cell's native finest resolution;
+                // one nudge press is one dot, so every press visibly steps.
+                None if d.audio.player.is_paused() => grid_snap(display_samp, 2.0),
                 None => display_samp,
             };
             let view_pos_samp = view_samp as usize;
@@ -2536,7 +2551,9 @@ fn tui_loop(
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     if d.audio.player.is_paused() {
-                                        let target = (current - 0.010).max(0.0);
+                                        let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+                                        let step = dot_step_secs(zoom_secs, dc, speed);
+                                        let target = (current - step).max(0.0);
                                         d.audio.seek_handle.set_position(target);
                                         d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
@@ -2564,7 +2581,9 @@ fn tui_loop(
                                 NudgeMode::Jump => {
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     if d.audio.player.is_paused() {
-                                        let target = (current + 0.010).min(d.total_duration);
+                                        let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+                                        let step = dot_step_secs(zoom_secs, dc, speed);
+                                        let target = (current + step).min(d.total_duration);
                                         d.audio.seek_handle.set_position(target);
                                         d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
                                         scrub_audio(mixer, &d.audio.seek_handle.samples, d.audio.seek_handle.channels as u16,
@@ -2709,9 +2728,14 @@ fn tui_loop(
                                     // Movement actions steer the cursor, never the audio.
                                     // Everything else falls through: while detached, grid
                                     // edits are the ordinary live ones.
+                                    let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
+                                    // One character-cell of audio per press: the detached
+                                    // view is on the character grid, so a press is always
+                                    // exactly one visible step.
+                                    let char_samps = 2.0 * dot_step_secs(zoom_secs, dc, speed) * sr;
                                     let step_samps = match keymap.get(&KeyBinding::Key(key.code)) {
-                                        Some(Action::NudgeForward)    => Some(0.010 * sr),
-                                        Some(Action::NudgeBackward)   => Some(-0.010 * sr),
+                                        Some(Action::NudgeForward)    => Some(char_samps),
+                                        Some(Action::NudgeBackward)   => Some(-char_samps),
                                         Some(a) => {
                                             let beats: Option<f64> = match a {
                                                 Action::JumpForward1bt  => Some(1.0),   Action::JumpBackward1bt => Some(-1.0),

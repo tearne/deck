@@ -757,10 +757,33 @@ pub(crate) fn scrub_audio(
     mono_len: usize,
 ) {
     use rodio::buffer::SamplesBuffer;
-    let start = (mono_pos * channels as usize).min(samples.len());
-    let end = ((mono_pos + mono_len) * channels as usize).min(samples.len());
+    // A scrub burst needs enough audio to hear as sound rather than a click —
+    // at fine zoom one column is only a few ms — and soft edges: an unfaded
+    // start or stop is an amplitude discontinuity that lands as a loud tick.
+    // Length window: at least 35 ms (audible as sound, not a click), at most
+    // 80 ms — key-repeat retriggers every ~33 ms, so longer bursts stack into
+    // audible distortion when zoomed out. The gain trim keeps even two
+    // overlapping bursts clear of clipping.
+    let min_len = (sample_rate as usize) * 35 / 1000;
+    let max_len = (sample_rate as usize) * 80 / 1000;
+    let mono_len = mono_len.clamp(min_len, max_len);
+    let fade_frames = ((sample_rate as usize) * 5 / 1000).max(1);
+    let ch = channels as usize;
+    let start = (mono_pos * ch).min(samples.len());
+    let end = ((mono_pos + mono_len) * ch).min(samples.len());
     if start >= end { return; }
-    let snippet: Vec<f32> = samples[start..end].to_vec();
+    let mut snippet: Vec<f32> = samples[start..end].iter().map(|s| s * 0.65).collect();
+    let frames = snippet.len() / ch;
+    let ramp = fade_frames.min(frames / 2);
+    for f in 0..ramp {
+        let g_in  = f as f32 / ramp as f32;
+        let g_out = g_in;
+        for c in 0..ch {
+            snippet[f * ch + c] *= g_in;
+            let tail = (frames - 1 - f) * ch + c;
+            snippet[tail] *= g_out;
+        }
+    }
     let src = SamplesBuffer::new(
         NonZero::new(channels).unwrap(),
         NonZero::new(sample_rate).unwrap(),
