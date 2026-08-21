@@ -137,6 +137,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `jump_backward_32b` | `R` | Jump −32 bars |
 | `jump_forward_64b` | `%` | Jump +64 bars |
 | `jump_backward_64b` | `T` | Jump −64 bars |
+| `ghosts_toggle` | `!` | Toggle ghost playheads (jump key labels at each landing, Beat mode) |
 
 ### Mixer (per deck)
 

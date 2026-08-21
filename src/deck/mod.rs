@@ -7,6 +7,9 @@ use rodio::Player;
 
 use crate::audio::{butterworth_biquad, SeekHandle, WaveformData, FILTER_CUTOFFS_HZ};
 use crate::cache::CacheEntry;
+use crate::config::{Action, KeyBinding};
+use crossterm::event::KeyCode;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub(crate) type Rgb = (u8, u8, u8);
@@ -74,6 +77,7 @@ pub(crate) struct OverviewKey {
     pub(crate) height: usize,
     pub(crate) playhead_col: usize,
     pub(crate) cue_col: Option<usize>,
+    pub(crate) ghosts: Vec<(usize, char)>,
     pub(crate) analysing: bool,
     pub(crate) warning_active: bool,
     pub(crate) warn_beat_on: bool,
@@ -489,20 +493,93 @@ pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filte
 /// While playing: swallow jumps that would hit either end-stop (preserves beat alignment).
 /// Forward guard keeps at least one jump-size from the end.
 /// While paused: clamp to boundaries so the user can navigate to the start or end deliberately.
-pub(crate) fn do_jump(seek_handle: &SeekHandle, player: &rodio::Player, bpm: f32, track_end: f64, beats: i32) {
-    let jump    = beats.unsigned_abs() as f64 * 60.0 / bpm as f64;
-    let current = seek_handle.current_pos().as_secs_f64();
-    let playing = !player.is_paused();
-    if beats < 0 {
-        let target = current - jump;
-        if playing && target < 0.0 { return; }
-        let clamped = target.max(0.0);
-        if playing { seek_handle.seek_to(clamped); } else { seek_handle.seek_direct(clamped); }
+/// The beat-jump sizes, largest first: the forward and backward actions and the
+/// distance in beats. Playback mode reads the same table as fixed time, half a
+/// second per beat. Shared by the jump keys, the detached cursor, and ghosts.
+pub(crate) const JUMP_SIZES: [(Action, Action, i32); 7] = [
+    (Action::JumpForward64b, Action::JumpBackward64b, 256),
+    (Action::JumpForward32b, Action::JumpBackward32b, 128),
+    (Action::JumpForward16b, Action::JumpBackward16b, 64),
+    (Action::JumpForward8b,  Action::JumpBackward8b,  32),
+    (Action::JumpForward4b,  Action::JumpBackward4b,  16),
+    (Action::JumpForward1b,  Action::JumpBackward1b,  4),
+    (Action::JumpForward1bt, Action::JumpBackward1bt, 1),
+];
+
+/// Signed beat count for a jump action, or None if `action` is not a jump.
+pub(crate) fn jump_beats(action: Action) -> Option<i32> {
+    JUMP_SIZES.iter().find_map(|&(fwd, back, beats)| {
+        if action == fwd { Some(beats) } else if action == back { Some(-beats) } else { None }
+    })
+}
+
+/// Seconds per beat in Playback mode, where jumps are fixed-time.
+pub(crate) const PLAYBACK_JUMP_BEAT_SECS: f64 = 0.5;
+
+/// Where a jump of `jump` seconds from `current` lands, or None where the key
+/// refuses. Backward clamps to the start (refused while playing if it would
+/// clamp); forward while playing is refused if a further jump would overrun
+/// the end, so a landing always leaves room to jump on.
+pub(crate) fn jump_landing(current: f64, jump: f64, playing: bool, track_end: f64) -> Option<f64> {
+    if jump < 0.0 {
+        let target = current + jump;
+        if playing && target < 0.0 { return None; }
+        Some(target.max(0.0))
     } else {
         let target = current + jump;
-        if playing && target + jump > track_end { return; }
-        let clamped = target.min(track_end);
-        if playing { seek_handle.seek_to(clamped); } else { seek_handle.seek_direct(clamped); }
+        if playing && target + jump > track_end { return None; }
+        Some(target.min(track_end))
+    }
+}
+
+/// Where one beat-jump key would land from the current position: the landing
+/// sample and the bare key bound to it. Largest jumps first, so a view that
+/// collapses two landings onto one column keeps the larger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GhostLanding {
+    pub(crate) sample: usize,
+    pub(crate) key: char,
+}
+
+/// Ghost playheads for a deck: each jump key's landing from `current_samp`,
+/// under the live Beat Jump rules. Beat mode only — Playback draws none. The
+/// single-beat jump is skipped: too close to the playhead to aim.
+pub(crate) fn ghost_landings(
+    deck: &Deck,
+    current_samp: f64,
+    keymap: &HashMap<KeyBinding, Action>,
+) -> Vec<GhostLanding> {
+    if deck.mode != DeckMode::Beat || deck.total_duration <= 0.0 { return Vec::new(); }
+    let sr      = deck.audio.sample_rate as f64;
+    let current = current_samp / sr;
+    let playing = !deck.audio.player.is_paused();
+    let mut out = Vec::with_capacity(JUMP_SIZES.len() * 2);
+    for &(fwd, back, beats) in JUMP_SIZES.iter().filter(|&&(_, _, b)| b > 1) {
+        let jump = beats as f64 * 60.0 / deck.tempo.base_bpm as f64;
+        for (action, signed) in [(fwd, jump), (back, -jump)] {
+            let Some(key) = bare_key_char(keymap, action) else { continue };
+            if let Some(t) = jump_landing(current, signed, playing, deck.total_duration) {
+                out.push(GhostLanding { sample: (t * sr) as usize, key });
+            }
+        }
+    }
+    out
+}
+
+/// The unchorded printable key bound to `action`, if any — the label a ghost wears.
+fn bare_key_char(keymap: &HashMap<KeyBinding, Action>, action: Action) -> Option<char> {
+    keymap.iter().find_map(|(binding, bound)| match binding {
+        KeyBinding::Key(KeyCode::Char(c)) if *bound == action => Some(*c),
+        _ => None,
+    })
+}
+
+pub(crate) fn do_jump(seek_handle: &SeekHandle, player: &rodio::Player, bpm: f32, track_end: f64, beats: i32) {
+    let jump    = beats as f64 * 60.0 / bpm as f64;
+    let current = seek_handle.current_pos().as_secs_f64();
+    let playing = !player.is_paused();
+    if let Some(target) = jump_landing(current, jump, playing, track_end) {
+        if playing { seek_handle.seek_to(target); } else { seek_handle.seek_direct(target); }
     }
 }
 

@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::audio::WaveformData;
 use crate::deck::{
+    GhostLanding,
     Deck, DeckMode, SpecPalette,
     TAG_FIELD_LABELS,
 };
@@ -18,6 +19,9 @@ use crate::messages::{Event, Severity};
 pub(crate) const GRID_BLUE: ratatui::style::Color = ratatui::style::Color::Rgb(40, 100, 210);
 /// The movable cursor keeps a lighter cyan, standing out against the furniture.
 pub(crate) const GRID_CURSOR: ratatui::style::Color = ratatui::style::Color::Rgb(60, 150, 255);
+/// Ghost playheads — the jump keys' landing labels — in a violet apart from the
+/// magenta cue and the grey grid furniture.
+pub(crate) const GHOST_VIOLET: ratatui::style::Color = ratatui::style::Color::Rgb(160, 90, 255);
 
 pub(crate) const ZOOM_LEVELS: &[f32] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
@@ -915,6 +919,7 @@ pub(crate) fn refresh_overview_for_deck(
     analysing: bool,
     warning_active: bool,
     warn_beat_on: bool,
+    ghosts: &[GhostLanding],
 ) {
     use crate::deck::{OverviewCache, OverviewKey};
     let overview_width  = rect.width  as usize;
@@ -931,11 +936,13 @@ pub(crate) fn refresh_overview_for_deck(
         ((frac * overview_width as f64).round() as usize)
             .min(overview_width.saturating_sub(1))
     });
+    let ghosts = overview_ghost_labels(deck, ghosts, playhead_col, overview_width);
     let key = OverviewKey {
         width: overview_width,
         height: rect.height as usize,
         playhead_col,
         cue_col,
+        ghosts: ghosts.clone(),
         analysing,
         warning_active,
         warn_beat_on,
@@ -948,10 +955,28 @@ pub(crate) fn refresh_overview_for_deck(
         return;
     }
     let (lines, bar_cols, bar_times) =
-        overview_lines(deck, rect, playhead_col, cue_col, analysing, warning_active, warn_beat_on);
+        overview_lines(deck, rect, playhead_col, cue_col, &ghosts, analysing, warning_active, warn_beat_on);
     deck.display.last_bar_cols  = bar_cols;
     deck.display.last_bar_times = bar_times;
     deck.display.overview_cache = Some(OverviewCache { key, paragraph: Paragraph::new(lines) });
+}
+
+/// Ghost labels by overview column, largest jump winning a shared column and
+/// the playhead's own column left clear.
+fn overview_ghost_labels(
+    deck: &Deck,
+    landings: &[GhostLanding],
+    playhead_col: usize,
+    overview_width: usize,
+) -> Vec<(usize, char)> {
+    let mut labels: Vec<(usize, char)> = Vec::new();
+    for g in landings {
+        let frac = (g.sample as f64 / deck.audio.sample_rate as f64 / deck.total_duration).clamp(0.0, 1.0);
+        let col = ((frac * overview_width as f64).round() as usize).min(overview_width.saturating_sub(1));
+        if col == playhead_col || labels.iter().any(|&(c, _)| c == col) { continue; }
+        labels.push((col, g.key));
+    }
+    labels
 }
 
 fn overview_lines(
@@ -959,6 +984,7 @@ fn overview_lines(
     rect: ratatui::layout::Rect,
     playhead_col: usize,
     cue_col: Option<usize>,
+    ghosts: &[(usize, char)],
     analysing: bool,
     warning_active: bool,
     warn_beat_on: bool,
@@ -996,6 +1022,8 @@ fn overview_lines(
         mask
     };
     let lut = SpectralLut::new(deck.display.palette, 0.8);
+    let ghost_row = overview_height / 2;
+    let ghost_at = |c: usize| ghosts.iter().find(|&&(gc, _)| gc == c).map(|&(_, k)| k);
 
     let ov_lines: Vec<Line<'static>> = ov_braille
         .into_iter()
@@ -1015,6 +1043,8 @@ fn overview_lines(
                     (Color::Rgb(255, 255, 255), '\u{28FF}')
                 } else if cue_col == Some(c) {
                     (Color::Rgb(255, 0, 255), '\u{28FF}')
+                } else if let (true, Some(k)) = (r == ghost_row, ghost_at(c)) {
+                    (GHOST_VIOLET, k)
                 } else if is_bar_col[c] {
                     if warn_beat_on {
                         (Color::Rgb(120, 60, 60), '│')
@@ -1457,6 +1487,7 @@ pub(crate) fn render_detail_waveform(
     display_cfg: &crate::config::DisplayConfig,
     display_pos_samp: usize,
     palette: SpecPalette,
+    ghosts: &[GhostLanding],
 ) {
     let detail_width      = detail_area.width  as usize;
     let detail_panel_rows = detail_area.height as usize;
@@ -1493,6 +1524,10 @@ pub(crate) fn render_detail_waveform(
             if cbc >= vs && cbc < vs + detail_width { Some(cbc - vs) } else { None }
         })
     });
+
+    let ghost_labels = detail_ghost_labels(&buf, display_pos_samp, centre_col, detail_width, ghosts);
+    let ghost_row = detail_panel_rows / 2;
+    let ghost_at = |c: usize| ghost_labels.iter().find(|&&(gc, _)| gc == c).map(|&(_, k)| k);
 
     let waveform_rows = detail_panel_rows;
 
@@ -1538,6 +1573,8 @@ pub(crate) fn render_detail_waveform(
                     (Color::Rgb(255, 255, 255), '\u{28FF}')
                 } else if cue_screen_col == Some(c) {
                     (Color::Rgb(255, 0, 255), '\u{28FF}')
+                } else if let (true, Some(k)) = (r == ghost_row, ghost_at(c)) {
+                    (GHOST_VIOLET, k)
                 } else {
                     (spectral, char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
                 };
@@ -1557,6 +1594,32 @@ pub(crate) fn render_detail_waveform(
         .collect();
 
     frame.render_widget(Paragraph::new(detail_lines), detail_area);
+}
+
+/// Ghost labels by detail screen column. A ghost is a fixed distance from the
+/// playhead, which sits at `centre_col`, so it is placed as a whole-column
+/// offset from there — rounding the landing's absolute sample separately from
+/// the playhead's made the two flip against each other and the label wobble.
+/// Off-screen landings and the playhead's own column are dropped, and the
+/// larger jump keeps a shared column.
+fn detail_ghost_labels(
+    buf: &BrailleBuffer,
+    view_pos: usize,
+    centre_col: usize,
+    width: usize,
+    landings: &[GhostLanding],
+) -> Vec<(usize, char)> {
+    if buf.samples_per_col == 0 { return Vec::new(); }
+    let mut labels: Vec<(usize, char)> = Vec::new();
+    for g in landings {
+        let offset_cols = ((g.sample as f64 - view_pos as f64) / buf.samples_per_col as f64).round() as i64;
+        let col = centre_col as i64 + offset_cols;
+        if col < 0 || col >= width as i64 { continue; }
+        let col = col as usize;
+        if col == centre_col || labels.iter().any(|&(c, _)| c == col) { continue; }
+        labels.push((col, g.key));
+    }
+    labels
 }
 
 pub(crate) fn render_shared_tick_row(

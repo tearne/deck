@@ -79,6 +79,8 @@ jump_forward_32b  = "$"
 jump_backward_32b = "R"
 jump_forward_64b  = "%"
 jump_backward_64b = "T"
+# Ghost playheads: key labels at each jump key's landing (Beat mode)
+ghosts_toggle     = "!"
 
 # Mixer — Deck 1
 deck1_level_up          = "j"

@@ -1252,6 +1252,8 @@ fn tui_loop(
     }
     let mut detached: Option<DetachedView> = None;
     let mut help_open = false;
+    // Ghost playheads off by default — an experiment, shown on request.
+    let mut ghosts_on = false;
     let mut history_open = false;
     // Lines scrolled back from the newest message while the history is open.
     let mut history_scroll: usize = 0;
@@ -1730,11 +1732,13 @@ fn tui_loop(
                 let mut title_spans = vec![Span::styled("1", num1_style), Span::styled(" ", label_style)];
                 if let (Some(deck), Some(rs)) = (&mut d0, &render[0]) {
                     deck.display.overview_rect = area_overview_a;
-                    refresh_overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    let ghosts = if ghosts_on { deck::ghost_landings(deck, rs.display_samp, &keymap) } else { Vec::new() };
+                    let detail_ghosts: &[deck::GhostLanding] = if detached.as_ref().is_some_and(|v| v.deck == 0) { &[] } else { &ghosts };
+                    refresh_overview_for_deck(deck, area_overview_a, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on, &ghosts);
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_a);
                     }
-                    render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.view_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
@@ -1792,11 +1796,13 @@ fn tui_loop(
                 let mut title_spans = vec![Span::styled("2", num2_style), Span::styled(" ", label_style)];
                 if let (Some(deck), Some(rs)) = (&mut d1, &render[1]) {
                     deck.display.overview_rect = area_overview_b;
-                    refresh_overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    let ghosts = if ghosts_on { deck::ghost_landings(deck, rs.display_samp, &keymap) } else { Vec::new() };
+                    let detail_ghosts: &[deck::GhostLanding] = if detached.as_ref().is_some_and(|v| v.deck == 1) { &[] } else { &ghosts };
+                    refresh_overview_for_deck(deck, area_overview_b, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on, &ghosts);
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_b);
                     }
-                    render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.view_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
@@ -1854,11 +1860,13 @@ fn tui_loop(
                 let mut title_spans = vec![Span::styled("3", num3_style), Span::styled(" ", label_style)];
                 if let (Some(deck), Some(rs)) = (&mut d2, &render[2]) {
                     deck.display.overview_rect = area_overview_c;
-                    refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on);
+                    let ghosts = if ghosts_on { deck::ghost_landings(deck, rs.display_samp, &keymap) } else { Vec::new() };
+                    let detail_ghosts: &[deck::GhostLanding] = if detached.as_ref().is_some_and(|v| v.deck == 2) { &[] } else { &ghosts };
+                    refresh_overview_for_deck(deck, area_overview_c, rs.display_samp, rs.analysing, rs.warning_active, rs.warn_beat_on, &ghosts);
                     if let Some(ref cached) = deck.display.overview_cache {
                         frame.render_widget(&cached.paragraph, area_overview_c);
                     }
-                    render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.view_pos_samp, deck.display.palette);
+                    render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
                     title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
@@ -2736,22 +2744,10 @@ fn tui_loop(
                                     let step_samps = match keymap.get(&KeyBinding::Key(key.code)) {
                                         Some(Action::NudgeForward)    => Some(char_samps),
                                         Some(Action::NudgeBackward)   => Some(-char_samps),
-                                        Some(a) => {
-                                            let beats: Option<f64> = match a {
-                                                Action::JumpForward1bt  => Some(1.0),   Action::JumpBackward1bt => Some(-1.0),
-                                                Action::JumpForward1b   => Some(4.0),   Action::JumpBackward1b  => Some(-4.0),
-                                                Action::JumpForward4b   => Some(16.0),  Action::JumpBackward4b  => Some(-16.0),
-                                                Action::JumpForward8b   => Some(32.0),  Action::JumpBackward8b  => Some(-32.0),
-                                                Action::JumpForward16b  => Some(64.0),  Action::JumpBackward16b => Some(-64.0),
-                                                Action::JumpForward32b  => Some(128.0), Action::JumpBackward32b => Some(-128.0),
-                                                Action::JumpForward64b  => Some(256.0), Action::JumpBackward64b => Some(-256.0),
-                                                _ => None,
-                                            };
-                                            beats.map(|n| match d.mode {
-                                                DeckMode::Beat => n * (60.0 / d.tempo.base_bpm as f64) * sr,
-                                                DeckMode::Playback => n * 0.5 * sr,
-                                            })
-                                        }
+                                        Some(&a) => deck::jump_beats(a).map(|n| match d.mode {
+                                            DeckMode::Beat => n as f64 * (60.0 / d.tempo.base_bpm as f64) * sr,
+                                            DeckMode::Playback => n as f64 * deck::PLAYBACK_JUMP_BEAT_SECS * sr,
+                                        }),
                                         None => None,
                                     };
                                     if let Some(step) = step_samps {
@@ -3053,6 +3049,7 @@ fn tui_loop(
                         }
                     }
                     Some(Action::Help)            => { help_open = !help_open; history_open = false; }
+                    Some(Action::GhostsToggle)    => { ghosts_on = !ghosts_on; }
                     Some(Action::MessageHistory)  => {
                         history_open = !history_open;
                         if history_open { help_open = false; history_scroll = 0; }
@@ -3182,20 +3179,19 @@ fn tui_loop(
                             }
                         }
                     }
-                    Some(Action::JumpForward1bt)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    1); } } }
-                    Some(Action::JumpBackward1bt) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -0.5); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -1); } } }
-                    Some(Action::JumpForward1b)   => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,    4); } } }
-                    Some(Action::JumpBackward1b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -2.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   -4); } } }
-                    Some(Action::JumpForward4b)   => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,    8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,   16); } } }
-                    Some(Action::JumpBackward4b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   -8.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  -16); } } }
-                    Some(Action::JumpForward8b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, 16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, 32); } } }
-                    Some(Action::JumpBackward8b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -16.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -32); } } }
-                    Some(Action::JumpForward16b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, 32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, 64); } } }
-                    Some(Action::JumpBackward16b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -32.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -64); } } }
-                    Some(Action::JumpForward32b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,   64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  128); } } }
-                    Some(Action::JumpBackward32b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  -64.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -128); } } }
-                    Some(Action::JumpForward64b)  => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration,  128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration,  256); } } }
-                    Some(Action::JumpBackward64b) => { if let Some(ref d) = decks[selected_deck] { if d.mode == DeckMode::Playback { do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, -128.0); } else { deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, -256); } } }
+                    Some(&action @ (Action::JumpForward1bt | Action::JumpBackward1bt | Action::JumpForward1b | Action::JumpBackward1b
+                       | Action::JumpForward4b | Action::JumpBackward4b | Action::JumpForward8b | Action::JumpBackward8b
+                       | Action::JumpForward16b | Action::JumpBackward16b | Action::JumpForward32b | Action::JumpBackward32b
+                       | Action::JumpForward64b | Action::JumpBackward64b)) => {
+                        let beats = deck::jump_beats(action).unwrap_or(0);
+                        if let Some(ref d) = decks[selected_deck] {
+                            if d.mode == DeckMode::Playback {
+                                do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, beats as f64 * deck::PLAYBACK_JUMP_BEAT_SECS);
+                            } else {
+                                deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, beats);
+                            }
+                        }
+                    }
                     Some(Action::SpeedReset) => {
                         if let Some(ref mut d) = decks[selected_deck] {
                             d.tempo.playback_speed = 1.0;
