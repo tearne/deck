@@ -827,7 +827,7 @@ fn move_file_to_directory(source: &Path, dest_dir: &Path) -> (Event, Option<Path
         return (files(Severity::Error, format!("A file named {} already exists there", filename.to_string_lossy())), None);
     }
     match std::fs::rename(source, &destination) {
-        Ok(()) => (files(Severity::Success, format!("Moved to {}", dest_dir.display())), Some(destination)),
+        Ok(()) => (files(Severity::Success, format!("Moved {} to {}", filename.to_string_lossy(), dest_dir.display())), Some(destination)),
         // EXDEV: rename can't cross filesystems, and a copy-then-delete fallback
         // would need progress and interruption handling out of proportion here.
         Err(e) if e.raw_os_error() == Some(18) => (files(Severity::Error, "Can't move across filesystems".into()), None),

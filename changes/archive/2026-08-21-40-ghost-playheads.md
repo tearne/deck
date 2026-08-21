@@ -53,3 +53,7 @@ Ghost columns and their labels join the key that decides whether the overview is
 - Playback-mode fixed-time jumps keep their own seek routine (it never refuses a clamped backward jump, unlike beat jumps); only the beats table is shared.
 - Visual check: the 1-beat ghost dropped (too close to aim); detail ghosts repositioned as a column offset from the playhead's centre column — rounding their absolute sample through the buffer mapping separately from the playhead's rounding made labels flip a column at wide zoom. Ghosts are relative to the playhead, not the grid, so the shared-mapping rule is not what they need. 0.29.15.
 - Ghosts put behind a global toggle, `ghosts_toggle` = `!`, off by default; not persisted. 0.29.16.
+
+## Conclusion
+
+Shipped as an experiment behind a toggle (`!`, off by default) rather than always-on as the Intent pictured — the marks read as clutter more than aim once seen, and the toggle lets the idea sit until the Clip-mode displays give it a second look. Patch bump confirmed (0.29.16). Map catch-up pending: Overview Waveform and Detail Waveform (ghost labels and their toggle), Beat Jump (single shared jump-size table; ghosts placed as a playhead offset, not via the grid mapping).
