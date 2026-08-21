@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI8, AtomicU8, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use rodio::Player;
 
 use crate::audio::{butterworth_biquad, SeekHandle, WaveformData, FILTER_CUTOFFS_HZ};
-use crate::cache::{CacheEntry, Grid};
+use crate::cache::{CacheEntry, DeckSnapshot, Grid};
 use crate::config::{Action, KeyBinding};
 use crossterm::event::KeyCode;
 use std::collections::HashMap;
@@ -228,6 +228,9 @@ pub(crate) struct Deck {
     /// Set when the deck was loaded from a playlist; drives auto-advance and the
     /// position indicator. Dropped when a standalone track is loaded or the deck clears.
     pub(crate) playlist: Option<ActivePlaylist>,
+    /// A session restore's transport state, waiting for the load-time grid result
+    /// so speed lands on the right BPM and position outlives the cue seek.
+    pub(crate) restore_transport: Option<RestoreTransport>,
 
     pub(crate) audio: DeckAudio,
     pub(crate) mixer: Mixer,
@@ -267,6 +270,7 @@ impl Deck {
             cover_art: None,
             cover_art_cache: None,
             playlist: None,
+            restore_transport: None,
             audio,
             tempo: TempoState {
                 bpm: 120.0,
@@ -489,6 +493,66 @@ pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filte
 /// While playing: swallow jumps that would hit either end-stop (preserves beat alignment).
 /// Forward guard keeps at least one jump-size from the end.
 /// While paused: clamp to boundaries so the user can navigate to the start or end deliberately.
+/// Position and speed from a session snapshot, applied once the grid is known.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RestoreTransport {
+    pub(crate) position_secs: f64,
+    pub(crate) bpm: f32,
+    pub(crate) playback_speed: f32,
+}
+
+/// The deck as it is now, in the shape the session file keeps.
+pub(crate) fn snapshot_of_deck(d: &Deck) -> DeckSnapshot {
+    DeckSnapshot {
+        path: d.path.to_string_lossy().into_owned(),
+        position_secs: d.audio.seek_handle.current_pos().as_secs_f64(),
+        playlist_path: d.playlist.as_ref().map(|p| p.path.to_string_lossy().into_owned()),
+        playlist_index: d.playlist.as_ref().map_or(0, |p| p.index),
+        bpm: d.tempo.bpm,
+        playback_speed: d.tempo.playback_speed,
+        volume: d.mixer.volume,
+        pitch_semitones: d.pitch_semitones,
+        filter_offset: d.mixer.filter_offset,
+        filter_poles: d.mixer.filter_poles,
+        pfl_level: d.mixer.pfl_level,
+    }
+}
+
+/// Put a snapshot's mixer state onto a freshly built deck. PFL routing (which
+/// deck the headphones follow) is the caller's, since it is global.
+pub(crate) fn apply_mixer_snapshot(d: &mut Deck, snap: &DeckSnapshot) {
+    d.mixer.volume = snap.volume.clamp(0.0, 1.0);
+    d.audio.deck_volume_atomic.store(d.mixer.volume.to_bits(), Ordering::Relaxed);
+    d.pitch_semitones = snap.pitch_semitones.clamp(-6, 6);
+    d.audio.pitch_semitones.store(d.pitch_semitones, Ordering::Relaxed);
+    d.mixer.filter_offset = snap.filter_offset.clamp(-16, 16);
+    d.audio.filter_offset_shared.store(d.mixer.filter_offset, Ordering::Relaxed);
+    d.mixer.filter_poles = if snap.filter_poles >= 4 { 4 } else { 2 };
+    d.audio.filter_poles.store(d.mixer.filter_poles, Ordering::Relaxed);
+    d.mixer.pfl_level = snap.pfl_level.min(100);
+    d.audio.pfl_level.store(d.mixer.pfl_level, Ordering::Relaxed);
+    d.audio.player.set_volume(if d.mixer.pfl_level > 0 { 1.0 } else { d.mixer.volume });
+}
+
+/// Put a snapshot's transport onto the deck now that its grid is settled:
+/// speed in the mode's own terms, then the saved position. Paused throughout.
+pub(crate) fn apply_restore_transport(d: &mut Deck, t: RestoreTransport) {
+    match d.mode {
+        DeckMode::Beat => {
+            if d.tempo.bpm_established && t.bpm > 0.0 {
+                d.tempo.bpm = t.bpm.clamp(40.0, 240.0);
+            }
+            d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+        }
+        DeckMode::Playback => {
+            d.tempo.playback_speed = t.playback_speed.clamp(0.1, 4.0);
+            d.audio.player.set_speed(d.tempo.playback_speed);
+        }
+    }
+    let position = t.position_secs.clamp(0.0, d.total_duration);
+    d.audio.seek_handle.seek_direct(position);
+}
+
 /// The beat-jump sizes, largest first: the forward and backward actions and the
 /// distance in beats. Playback mode reads the same table as fixed time, half a
 /// second per beat. Shared by the jump keys, the detached cursor, and ghosts.

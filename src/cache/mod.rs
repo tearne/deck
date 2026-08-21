@@ -224,6 +224,34 @@ mod tests {
 
     fn bpm_of(e: &CacheEntry) -> f32 { e.grid.expect("confirmed grid").bpm }
 
+    fn snapshot(path: &str, position_secs: f64) -> DeckSnapshot {
+        DeckSnapshot { path: path.into(), position_secs, playlist_path: None, playlist_index: 0, bpm: 128.0, playback_speed: 1.0, volume: 0.8, pitch_semitones: -1, filter_offset: 3, filter_poles: 2, pfl_level: 0 }
+    }
+
+    #[test]
+    fn deck_snapshots_round_trip_and_position_writes_are_paced() {
+        let mut state = SessionState::from_file(PathBuf::from("/nonexistent/session.json"), SessionFile::default());
+        state.record_deck(1, Some(snapshot("/music/a.flac", 10.0)), true);
+        assert!(state.dirty_at.is_some(), "a new deck writes at once");
+        state.dirty_at = None;
+        state.record_deck(1, Some(snapshot("/music/a.flac", 12.0)), true);
+        assert!(state.dirty_at.is_none(), "playing: small movement within the interval is not written");
+        state.record_deck(1, Some(snapshot("/music/a.flac", 40.0)), true);
+        assert!(state.dirty_at.is_some(), "playing: a seek-sized jump is written");
+        state.dirty_at = None;
+        state.record_deck(1, Some(snapshot("/music/a.flac", 40.5)), false);
+        assert!(state.dirty_at.is_some(), "paused: any movement is written");
+        state.record_selected_deck(1);
+
+        let file = state.to_file();
+        let text = serde_json::to_string(&file).unwrap();
+        let back: SessionFile = serde_json::from_str(&text).unwrap();
+        let restored = SessionState::from_file(PathBuf::from("/nonexistent/session.json"), back);
+        assert_eq!(restored.deck_snapshots()[1], Some(snapshot("/music/a.flac", 40.5)));
+        assert_eq!(restored.deck_snapshots()[0], None);
+        assert_eq!(restored.saved_selected_deck(), 1);
+    }
+
     #[test]
     fn legacy_flat_record_reads_as_confirmed_and_null_grid_round_trips() {
         let legacy = r#"{"A": {"bpm": 128.0, "offset_ms": 310, "name": "a", "offset_established": true, "gain_db": 2}}"#;
@@ -319,6 +347,14 @@ struct SessionFile {
     /// Browser panel width as a percentage of the browser area.
     #[serde(default = "default_panel_pct")]
     browser_panel_pct: u16,
+    /// The decks as they last were, one entry per slot; restored on request.
+    #[serde(default)]
+    decks: Vec<Option<DeckSnapshot>>,
+    #[serde(default)]
+    selected_deck: usize,
+    /// Ghost playheads (jump-key landing labels) shown.
+    #[serde(default)]
+    ghosts_on: bool,
 }
 
 impl Default for SessionFile {
@@ -329,9 +365,47 @@ impl Default for SessionFile {
             audio_latency_ms: 0,
             art_bright_idx: default_art_bright_idx(),
             browser_panel_pct: default_panel_pct(),
+            decks: Vec::new(),
+            selected_deck: 0,
+            ghosts_on: false,
         }
     }
 }
+
+/// One deck as it was: enough to put the same track back at the same place
+/// with the same settings. Mode is not here — it is per-track memory in the
+/// track database and comes back with the load.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub(crate) struct DeckSnapshot {
+    pub(crate) path: String,
+    pub(crate) position_secs: f64,
+    #[serde(default)]
+    pub(crate) playlist_path: Option<String>,
+    #[serde(default)]
+    pub(crate) playlist_index: usize,
+    pub(crate) bpm: f32,
+    pub(crate) playback_speed: f32,
+    pub(crate) volume: f32,
+    pub(crate) pitch_semitones: i8,
+    pub(crate) filter_offset: i32,
+    pub(crate) filter_poles: u8,
+    pub(crate) pfl_level: u8,
+}
+
+impl DeckSnapshot {
+    fn same_apart_from_position(&self, other: &DeckSnapshot) -> bool {
+        let mut a = self.clone();
+        a.position_secs = other.position_secs;
+        a == *other
+    }
+}
+
+/// How often a playing deck's position is written to the snapshot. A restore
+/// lands within this of where the set was; finer would churn the file forever.
+const POSITION_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+/// A position change larger than playback could produce between two writes
+/// is a seek, recorded at once.
+const SEEK_THRESHOLD_SECS: f64 = 5.0;
 
 pub(crate) struct SessionState {
     path: PathBuf,
@@ -340,6 +414,10 @@ pub(crate) struct SessionState {
     audio_latency_ms: i64,
     art_bright_idx: u8,
     browser_panel_pct: u16,
+    decks: [Option<DeckSnapshot>; 3],
+    selected_deck: usize,
+    ghosts_on: bool,
+    position_written_at: [Option<std::time::Instant>; 3],
     dirty_at: Option<std::time::Instant>,
 }
 
@@ -363,7 +441,62 @@ impl SessionState {
             audio_latency_ms: file.audio_latency_ms,
             art_bright_idx: file.art_bright_idx,
             browser_panel_pct: file.browser_panel_pct.clamp(15, 70),
+            decks: std::array::from_fn(|i| file.decks.get(i).cloned().flatten()),
+            selected_deck: file.selected_deck.min(2),
+            ghosts_on: file.ghosts_on,
+            position_written_at: [None; 3],
             dirty_at: None,
+        }
+    }
+
+    pub(crate) fn deck_snapshots(&self) -> &[Option<DeckSnapshot>; 3] {
+        &self.decks
+    }
+
+    pub(crate) fn has_deck_snapshot(&self) -> bool {
+        self.decks.iter().any(Option::is_some)
+    }
+
+    pub(crate) fn saved_selected_deck(&self) -> usize {
+        self.selected_deck
+    }
+
+    /// Offer the slot's current state. Anything but position is written at
+    /// once; position is written on pause and seek, and otherwise every
+    /// `POSITION_WRITE_INTERVAL` while playing.
+    pub(crate) fn record_deck(&mut self, slot: usize, current: Option<DeckSnapshot>, playing: bool) {
+        let now = std::time::Instant::now();
+        let changed = match (&self.decks[slot], &current) {
+            (None, None) => false,
+            (Some(stored), Some(now_snap)) if stored.same_apart_from_position(now_snap) => {
+                let moved = (stored.position_secs - now_snap.position_secs).abs();
+                if moved == 0.0 { return; }
+                let interval_due = self.position_written_at[slot]
+                    .map_or(true, |t| now.duration_since(t) >= POSITION_WRITE_INTERVAL);
+                !playing || moved > SEEK_THRESHOLD_SECS || interval_due
+            }
+            _ => true,
+        };
+        if changed {
+            self.decks[slot] = current;
+            self.position_written_at[slot] = Some(now);
+            self.mark_dirty();
+        }
+    }
+
+    pub(crate) fn ghosts_on(&self) -> bool {
+        self.ghosts_on
+    }
+
+    pub(crate) fn set_ghosts_on(&mut self, on: bool) {
+        self.ghosts_on = on;
+        self.mark_dirty();
+    }
+
+    pub(crate) fn record_selected_deck(&mut self, slot: usize) {
+        if self.selected_deck != slot {
+            self.selected_deck = slot;
+            self.mark_dirty();
         }
     }
 
@@ -430,8 +563,8 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn save(&self) {
-        let file = SessionFile {
+    fn to_file(&self) -> SessionFile {
+        SessionFile {
             last_browser_path: self.last_browser_path
                 .as_ref()
                 .and_then(|p| p.to_str().map(str::to_string)),
@@ -441,7 +574,14 @@ impl SessionState {
             audio_latency_ms: self.audio_latency_ms,
             art_bright_idx: self.art_bright_idx,
             browser_panel_pct: self.browser_panel_pct,
-        };
+            decks: self.decks.to_vec(),
+            selected_deck: self.selected_deck,
+            ghosts_on: self.ghosts_on,
+        }
+    }
+
+    pub(crate) fn save(&self) {
+        let file = self.to_file();
         write_json_atomic(&self.path, &file);
     }
 }

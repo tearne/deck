@@ -60,6 +60,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `select_next_deck` | `alt+j`, `alt+down` | Cycle to next deck (wraps; works in the browser too) |
 | `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
+| `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
 | `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
 | `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |
 | `playlist_next` | `space+n` | Selected deck: skip to next playlist track |

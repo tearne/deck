@@ -46,7 +46,7 @@ mod xdg;
 
 use audio::{decode_audio, scrub_audio, play_click_tone, FilterSource, PitchSource, PreviewOutput, TrackingSource, WaveformData, SeekHandle, FADE_SAMPLES};
 use browser::{BrowserMode, BrowserResult, BrowserState, EntryKind, handle_browser_key, render_browser};
-use cache::{SessionState, TrackDatabase};
+use cache::{DeckSnapshot, SessionState, TrackDatabase};
 use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
@@ -224,6 +224,79 @@ struct PendingLoad {
     /// When the load came from a playlist, the playlist state to attach to the
     /// deck once it finishes building.
     attach_playlist: Option<ActivePlaylist>,
+    /// When the load is a session restore, the state to put back once built.
+    restore: Option<DeckSnapshot>,
+}
+
+/// Offer every slot's current state to the session file. A slot mid-load keeps
+/// its last snapshot rather than reading as empty for a few frames.
+fn record_session_decks(
+    decks: &[Option<Deck>; 3],
+    pending_loads: &[Option<PendingLoad>; 3],
+    selected_deck: usize,
+    session: &mut SessionState,
+) {
+    for slot in 0..3 {
+        if pending_loads[slot].is_some() { continue; }
+        let (snapshot, playing) = match decks[slot] {
+            Some(ref d) => (Some(deck::snapshot_of_deck(d)), !d.audio.player.is_paused()),
+            None => (None, false),
+        };
+        session.record_deck(slot, snapshot, playing);
+    }
+    session.record_selected_deck(selected_deck);
+}
+
+/// At quit, write positions regardless of the playing cadence so the snapshot
+/// is where the set actually stopped. Decks are already stopped; the seek
+/// handle still reports the last position.
+fn record_session_decks_at_quit(
+    decks: &[Option<Deck>; 3],
+    pending_loads: &[Option<PendingLoad>; 3],
+    selected_deck: usize,
+    session: &mut SessionState,
+) {
+    for slot in 0..3 {
+        if pending_loads[slot].is_some() { continue; }
+        session.record_deck(slot, decks[slot].as_ref().map(deck::snapshot_of_deck), false);
+    }
+    session.record_selected_deck(selected_deck);
+}
+
+/// Start a load per saved slot, carrying the snapshot to apply once built. A
+/// missing file is reported and its slot left empty; the others proceed.
+fn restore_session_decks(
+    saved: &[Option<DeckSnapshot>; 3],
+    pending_loads: &mut [Option<PendingLoad>; 3],
+    workspace: Option<&Path>,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    for slot in 0..3 {
+        let Some(snap) = saved[slot].as_ref() else { continue };
+        let path = PathBuf::from(&snap.path);
+        if !path.is_file() {
+            events.push(Event::new(Source::Deck(slot), Severity::Warning, format!("Not restored — file missing: {}", path.display())));
+            continue;
+        }
+        let mut load = start_load(&path);
+        load.attach_playlist = snap.playlist_path.as_deref().and_then(|p| restored_playlist(Path::new(p), snap.playlist_index, workspace));
+        load.restore = Some(snap.clone());
+        pending_loads[slot] = Some(load);
+    }
+    events
+}
+
+/// Re-attach a saved playlist at its saved index, if the file still reads.
+fn restored_playlist(rpl_path: &Path, index: usize, workspace: Option<&Path>) -> Option<ActivePlaylist> {
+    let (mut playlist, _migrated) = playlist::read_playlist(rpl_path).ok()?;
+    let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
+    Some(ActivePlaylist {
+        playlist,
+        path: rpl_path.to_path_buf(),
+        index,
+        unplayable: resolved.unplayable,
+        advance_requested: false,
+    })
 }
 
 fn start_load(path: &Path) -> PendingLoad {
@@ -243,7 +316,7 @@ fn start_load(path: &Path) -> PendingLoad {
             let _ = tx.send(decode_audio(&path_str, decoded_for_thread, total_for_thread).map_err(|e| e.to_string()));
         });
     }
-    PendingLoad { filename, path: path.to_path_buf(), rx, decoded, total, attach_playlist: None }
+    PendingLoad { filename, path: path.to_path_buf(), rx, decoded, total, attach_playlist: None, restore: None }
 }
 
 /// A browser selection awaiting load onto a deck — a standalone track or a playlist.
@@ -1218,19 +1291,24 @@ fn tui_loop(
         };
         stream.emit(Event::new(Source::App, Severity::Warning, text));
     }
-    let had_config_notice = config_notice.is_some();
     if let Some(msg) = config_notice {
         stream.emit(Event::new(Source::App, Severity::Success, msg));
     }
     let mut decks: [Option<Deck>; 3] = [None, None, None];
     let mut pending_loads: [Option<PendingLoad>; 3] = [initial_load, None, None];
-    if pending_loads[0].is_none() && !had_config_notice {
+    // Bar precedence sequences this behind any startup event without further help.
+    if pending_loads[0].is_none() {
         // Name the key actually bound to the browser — bindings are configurable,
         // so a hardcoded key name goes stale.
-        let hint = match bound_key_name(&keymap, Action::OpenBrowser) {
+        let mut hint = match bound_key_name(&keymap, Action::OpenBrowser) {
             Some(key) => format!("No track loaded — {key} opens the file browser"),
             None => "No track loaded".to_string(),
         };
+        if session.has_deck_snapshot() {
+            if let Some(key) = bound_key_name(&keymap, Action::SessionRestore) {
+                hint.push_str(&format!(", {key} restores last session"));
+            }
+        }
         stream.show_hint(hint, Duration::from_secs(60));
     }
     const DET_MIN: u16 = 3;
@@ -1253,8 +1331,8 @@ fn tui_loop(
     }
     let mut detached: Option<DetachedView> = None;
     let mut help_open = false;
-    // Ghost playheads off by default — an experiment, shown on request.
-    let mut ghosts_on = false;
+    // Ghost playheads: an experiment, shown on request and remembered between runs.
+    let mut ghosts_on = session.ghosts_on();
     let mut history_open = false;
     // Lines scrolled back from the newest message while the history is open.
     let mut history_scroll: usize = 0;
@@ -1297,6 +1375,9 @@ fn tui_loop(
     let mut space_repeat_suppressed = false;
     let mut space_saw_event_this_frame = false;
     let mut pending_quit: Option<Instant> = None;
+    // The restore offer stands from startup until anything is loaded; while it
+    // stands the saved decks are left untouched so `Alt+r` has something to restore.
+    let mut restore_offered = session.has_deck_snapshot();
     let mut bpm_ramp_started: Option<Instant> = None;
     let mut bpm_ramp_last: Option<Instant> = None;
 
@@ -1360,6 +1441,11 @@ fn tui_loop(
                     let pending = pending_loads[slot].take().unwrap();
                     let mut new_deck = build_deck(&pending.path, pending.filename, mono, stereo, sample_rate, channels, mixer, &track_data, Arc::clone(&pfl_active_deck), slot);
                     new_deck.playlist = pending.attach_playlist;
+                    if let Some(snap) = pending.restore {
+                        deck::apply_mixer_snapshot(&mut new_deck, &snap);
+                        if new_deck.mixer.pfl_level > 0 { pfl_active_deck.store(slot, Ordering::Relaxed); }
+                        new_deck.restore_transport = Some(deck::RestoreTransport { position_secs: snap.position_secs, bpm: snap.bpm, playback_speed: snap.playback_speed });
+                    }
                     shared_renderer.set_deck(slot, Arc::clone(&new_deck.audio.waveform), new_deck.audio.seek_handle.channels, new_deck.audio.sample_rate);
                     stream.record(Event::new(Source::Deck(slot), Severity::Info, format!("loaded {}", new_deck.track_name)));
                     decks[slot] = Some(new_deck);
@@ -1382,6 +1468,13 @@ fn tui_loop(
             service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, &mut stream);
         }
         let service_dur = service_start.elapsed();
+
+        if restore_offered && (decks.iter().any(Option::is_some) || pending_loads.iter().any(Option::is_some)) {
+            restore_offered = false;
+        }
+        if !restore_offered {
+            record_session_decks(&decks, &pending_loads, selected_deck, session);
+        }
 
         // Auto-advance: a playlist deck signalled end-of-track. Load its next
         // resolvable entry (lazily resolved and healed just before it plays).
@@ -2124,6 +2217,7 @@ fn tui_loop(
                         }
                     }
                     stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
+                    if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                     track_data.save();
                     session.save();
                     return Ok(());
@@ -2695,6 +2789,7 @@ fn tui_loop(
                             }
                             session.set_latency(audio_latency_ms);
                             stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
+                            if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                             track_data.save();
                             session.save();
                             return Ok(());
@@ -2857,9 +2952,21 @@ fn tui_loop(
                         }
                         session.set_latency(audio_latency_ms);
                         stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
+                        if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                         track_data.save();
                         session.save();
                         return Ok(());
+                    }
+                    Some(Action::SessionRestore) => {
+                        if restore_offered {
+                            let ws = session.workspace().map(|p| p.to_path_buf());
+                            for event in restore_session_decks(session.deck_snapshots(), &mut pending_loads, ws.as_deref()) {
+                                stream.emit(event);
+                            }
+                            selected_deck = session.saved_selected_deck();
+                            restore_offered = false;
+                            stream.dismiss_hint();
+                        }
                     }
                     Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; }
                     Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; }
@@ -2874,6 +2981,8 @@ fn tui_loop(
                     Some(Action::OpenBrowser) => {
                         // Opening never interrupts anything and re-aims nothing: loads
                         // land on the selected deck, cycled with the same chords as ever.
+                        // The startup hint has done its job once the browser opens.
+                        stream.dismiss_hint();
                         let workspace = session.workspace().map(|p| p.to_path_buf());
                         let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
                         bs.mode = last_browser_mode;
@@ -3050,7 +3159,7 @@ fn tui_loop(
                         }
                     }
                     Some(Action::Help)            => { help_open = !help_open; history_open = false; }
-                    Some(Action::GhostsToggle)    => { ghosts_on = !ghosts_on; }
+                    Some(Action::GhostsToggle)    => { ghosts_on = !ghosts_on; session.set_ghosts_on(ghosts_on); }
                     Some(Action::MessageHistory)  => {
                         history_open = !history_open;
                         if history_open { help_open = false; history_scroll = 0; }
@@ -3333,6 +3442,14 @@ fn service_deck_frame(
             }
             d.tempo.analysis_settled   = true;
             if !is_fresh { d.tempo.bpm_established = true; }
+            if let Some(t) = d.restore_transport.take() {
+                deck::apply_restore_transport(d, t);
+                let (num, den) = match d.mode {
+                    DeckMode::Beat => (d.tempo.bpm, d.tempo.base_bpm),
+                    DeckMode::Playback => (d.tempo.playback_speed, 1.0),
+                };
+                shared_renderer.store_speed_ratio(slot, num, den);
+            }
         }
     }
 

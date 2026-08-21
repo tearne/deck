@@ -246,9 +246,19 @@ impl EventStream {
         (Instant::now() < *until).then(|| (text.as_str(), *until))
     }
 
-    /// Take the current message (or hint) off screen; messages stay in the log.
+    /// Take what the bar shows off screen — the message if one is showing,
+    /// else the hint. Precedence means a hint behind a message is revealed,
+    /// not lost. Messages stay in the log.
     pub(crate) fn dismiss(&mut self) {
-        self.showing_until = None;
+        if self.showing().is_some() {
+            self.showing_until = None;
+        } else {
+            self.hint = None;
+        }
+    }
+
+    /// Take the hint off screen, whatever else the bar shows.
+    pub(crate) fn dismiss_hint(&mut self) {
         self.hint = None;
     }
 
