@@ -81,6 +81,7 @@ Application
 │ └ Key Reporting
 ├ Track Database
 ├ Session State
+│ └ Session Restore
 ├ Messages
 │ ├ History View
 │ └ Event Log
@@ -238,11 +239,14 @@ Rendered at half-column braille resolution: each character encodes two adjacent 
 
 In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In Playback mode, bar markers and the warning flash are suppressed.
 
+With ghost playheads on (`ghosts_toggle`, remembered between runs), each beat-jump key's landing is labelled with that key, in violet on the middle row — see [Beat Jump](#beat-jump).
+
 **See also**
 
 - [Spectral Colour](#spectral-colour) — the colour encoding both views share
 - [Needle Drop](#needle-drop) — seeking via the overview
 - [Beat Grid](#beat-grid) — the BPM and offset that position the bar markers
+- [Beat Jump](#beat-jump) — the ghost playheads' source and rules
 
 
 # Spectrum Analyser
@@ -440,6 +444,12 @@ Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bar
 
 Backward past the start clamps to position 0. Forward past the end is a no-op.
 
+**Ghost playheads** (`ghosts_toggle`) mark where each jump key would land, on both waveforms: the overview collects the large jumps and the detail view the small ones. The 1-beat jump is never marked. A mark appears only if the key would actually act — a visible mark means the key works. Beat mode only; the detached grid-refinement cursor is unmarked.
+
+**Detail**
+
+- Ghosts are placed as a column offset from the playhead, not through the grid's sample-to-column mapping — they are relative to the playhead, and independent rounding made them wobble at wide zoom.
+
 **See also**
 
 - [Click-free Seek](#click-free-seek) — fade/search/flush mechanism that prevents audible clicks during jumps
@@ -531,7 +541,7 @@ The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a 
 
 **BPM** is established by one of:
 
-- **Cache lookup** — on load, the audio is hashed (Blake3 over decoded mono samples) and looked up in cache. If found, BPM and offset are applied immediately. If not, a 120 BPM placeholder is used.
+- **Cache lookup** — on load, the audio is hashed and its record looked up in the Track Database. A recorded grid is applied immediately; no record, or a record with no grid, leaves the 120 BPM placeholder in place and the tempo unestablished — the same state as a track never seen before.
 - **Tap** (`bpm_tap`) — press in time with the beat. After 8 taps, `base_bpm` and `offset_ms` are set via linear regression. Outlier taps (residual > half a beat period) are excluded.
 - **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps; pure metadata — the audible speed never changes.
 - **Refinement** — the anchor-and-tune workflow of [Grid Refinement](#grid-refinement), the precision route.
@@ -902,7 +912,7 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Space chords fire **one-time actions** — set cue, open browser, play/pause, the resets — never anything expecting the modifier to be *held*, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second chord layer, deliberately sparse, home to newer features — deck cycling today, clip vocabulary to come — and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
+Space chords fire **one-time actions** — set cue, open browser, play/pause, the resets — never anything expecting the modifier to be *held*, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second chord layer, deliberately sparse, home to newer features — deck cycling and session restore today, clip vocabulary to come — and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
 
 Esc steps up one level per press — dismiss the overlay, leave the panel, close the browser — one physical tap at a time. Repeats and releases are ignored, so holding it doesn't race through the levels.
 
@@ -934,7 +944,7 @@ The kitty keyboard protocol; support is detected at startup. Where it is absent,
 
 [Up](#application)
 
-Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the detected BPM, phase offset, grid anchor, cue point, gain trim, and last-used mode (plus whether the offset was deliberately placed, and the filename as a human-readable hint).
+Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the **beat grid** — BPM and phase offset together, present only once the tempo has been established, absent for a track that was played but never tapped — plus grid anchor, cue point, gain trim, last-used mode, and the filename as a human-readable hint.
 
 Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user data, not a regenerable cache. When a workspace is set, the database also mirrors to a copy in the workspace root (`track-data.json`, same filename), so it travels with the music.
 
@@ -942,6 +952,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 
 - A JSON file: an `_about` header that explains itself to a stranger, then the `tracks` map of `{identity: entry}`, deterministically sorted. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
 - The two copies reconcile whenever a workspace becomes active — at start-up if one is already configured, and when the operator sets or changes it: the workspace copy wins on shared identities, local-only entries are pushed out, and both are written at once. Every later save writes both, so the analysis follows the library between machines.
+- A record's grid is `null` until a tempo is recorded; legacy flat `bpm`/`offset_ms` fields read as a grid and rewrite in the nested shape at the next save.
 - A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced as an error event carrying the cause (see [Fault Capture](#fault-capture)).
 
 **See also**
@@ -953,8 +964,9 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 # Session State
 
 [Up](#application)
+[Down](#session-restore)
 
-Global player state remembered between runs: last-visited browser directory, search workspace, browser panel width, audio latency, and cover-art brightness.
+Global player state remembered between runs: last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, whether ghost playheads are shown — and the decks as they were, for [Session Restore](#session-restore).
 
 Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 
@@ -965,6 +977,18 @@ Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the pan
 **See also**
 
 - [Track Database](#track-database) — the other persisted store, in the data dir
+
+
+# Session Restore
+
+[Up](#session-state)
+
+Protection against accidental exit: each deck's track, position, attached playlist, speed, and mixer settings (level, pitch, filter, PFL), plus which deck is selected, are kept current in Session State while the player runs. On a startup with nothing loaded, the startup hint offers `Alt+r`, which puts every saved deck back **paused** at its position; a missing file is reported and its deck left empty. The offer withdraws once anything is loaded, and restore is never automatic.
+
+**Detail**
+
+- Position is written on pause, seek, load, and quit, and every 10 s while playing; everything else on change. A restore lands within 10 s of where a playing deck was.
+- Mode is not in the snapshot — it is per-track memory in the [Track Database](#track-database) and returns with the load.
 
 
 # Messages
@@ -987,7 +1011,7 @@ Three kinds of message pass through them:
 
 - **Events** are things that happened — loads, moves, warnings, identity alerts. Every event enters the history; those needing attention also show on the bar, named ("Deck 2: …"), and leaving the bar loses nothing.
 
-- **Hints** are transient guidance, on the bar — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere.
+- **Hints** are transient guidance, on the bar — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere. The startup hint also leaves when the browser opens or a session restores.
 
 **Detail**
 
