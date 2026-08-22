@@ -259,7 +259,7 @@ impl Deck {
             pitch_semitones: 0,
             nudge: 0,
             nudge_mode: NudgeMode::Jump,
-            mode: DeckMode::Beat,
+            mode: DeckMode::Playback,
             metronome_mode: false,
             last_metro_beat: None,
             cue_sample: None,
@@ -493,6 +493,67 @@ pub(crate) fn compute_spectrum(mono: &[f32], pos: usize, sample_rate: u32, filte
 /// While playing: swallow jumps that would hit either end-stop (preserves beat alignment).
 /// Forward guard keeps at least one jump-size from the end.
 /// While paused: clamp to boundaries so the user can navigate to the start or end deliberately.
+/// Whether the deck has a beat grid — the same fact the track database records
+/// as a present `grid`. Beat mode is only ever entered with one.
+pub(crate) fn has_grid(d: &Deck) -> bool {
+    d.tempo.bpm_established
+}
+
+/// Switch to Playback, carrying the audible speed across as a percentage.
+/// Returns the (numerator, denominator) speed ratio for the renderer.
+pub(crate) fn enter_playback_mode(d: &mut Deck) -> (f32, f32) {
+    d.mode = DeckMode::Playback;
+    d.tempo.playback_speed = d.tempo.bpm / d.tempo.base_bpm;
+    d.audio.player.set_speed(d.tempo.playback_speed);
+    d.tap.tap_times.clear();
+    d.tap.last_tap_wall = None;
+    d.metronome_mode = false;
+    d.last_metro_beat = None;
+    (d.tempo.playback_speed, 1.0)
+}
+
+/// Switch to Beat, carrying the audible speed across as a BPM. The caller
+/// guarantees a grid exists. Returns the speed ratio for the renderer.
+pub(crate) fn enter_beat_mode(d: &mut Deck) -> (f32, f32) {
+    debug_assert!(has_grid(d), "Beat mode entered without a grid");
+    d.mode = DeckMode::Beat;
+    d.tempo.bpm = (d.tempo.base_bpm * d.tempo.playback_speed).clamp(40.0, 240.0);
+    d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+    rederive_grid_phase(d);
+    (d.tempo.bpm, d.tempo.base_bpm)
+}
+
+/// Lock a tapped tempo in, audible speed preserved in whichever terms the mode
+/// uses. Tap sets the tempo; a pinned anchor keeps owning the phase. Returns
+/// the renderer's speed ratio.
+pub(crate) fn apply_tap_lock(d: &mut Deck, tapped_bpm: f32, tapped_offset_ms: i64) -> (f32, f32) {
+    let speed_ratio = match d.mode {
+        DeckMode::Beat => d.tempo.bpm / d.tempo.base_bpm,
+        DeckMode::Playback => d.tempo.playback_speed,
+    };
+    d.tempo.base_bpm  = tapped_bpm;
+    d.tempo.bpm       = (d.tempo.base_bpm * speed_ratio).clamp(40.0, 240.0);
+    d.tempo.offset_ms = tapped_offset_ms;
+    if d.anchor_sample.is_some() { rederive_grid_phase(d); }
+    if let Some(ratio) = grid_established(d) { return ratio; }
+    match d.mode {
+        DeckMode::Beat => {
+            d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
+            (d.tempo.bpm, d.tempo.base_bpm)
+        }
+        DeckMode::Playback => (d.tempo.playback_speed, 1.0),
+    }
+}
+
+/// A grid has just come into existence on this deck: mark it, and — since
+/// setting a tempo is the request to use beats — take a Playback deck into
+/// Beat. Returns the renderer's speed ratio when the mode changed.
+pub(crate) fn grid_established(d: &mut Deck) -> Option<(f32, f32)> {
+    let first = !d.tempo.bpm_established;
+    d.tempo.bpm_established = true;
+    (first && d.mode == DeckMode::Playback).then(|| enter_beat_mode(d))
+}
+
 /// Position and speed from a session snapshot, applied once the grid is known.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RestoreTransport {
@@ -573,8 +634,11 @@ pub(crate) fn jump_beats(action: Action) -> Option<i32> {
     })
 }
 
-/// Seconds per beat in Playback mode, where jumps are fixed-time.
-pub(crate) const PLAYBACK_JUMP_BEAT_SECS: f64 = 0.5;
+/// Seconds per beat for Playback-mode jumps, which are plain time offsets:
+/// the track's own beat when a grid is known, else half a second (120 BPM).
+pub(crate) fn playback_jump_beat_secs(d: &Deck) -> f64 {
+    if has_grid(d) { 60.0 / d.tempo.base_bpm as f64 } else { 0.5 }
+}
 
 /// Where a jump of `jump` seconds from `current` lands, or None where the key
 /// refuses. Backward clamps to the start (refused while playing if it would

@@ -696,19 +696,19 @@ fn tempo_spans(
         )];
     }
     // Beat flash requires Beat mode and an established BPM.
-    let beat_active = !playback && beat_on && deck.tempo.bpm_established;
+    let beat_active = !playback && beat_on;
     let beat_style = if beat_active {
         Style::default().fg(Color::Yellow).bg(Color::Rgb(60, 50, 0))
     } else {
         dim
     };
     // Percentage display: Playback mode always; Beat mode when no BPM established.
-    let show_percentage = playback || !deck.tempo.bpm_established;
+    let show_percentage = playback;
 
     let left_spans: Vec<Span<'static>> = {
         let mut spans = Vec::new();
         if show_percentage {
-            let pct = if playback || !deck.tempo.bpm_established {
+            let pct = if playback {
                 (deck.tempo.playback_speed - 1.0) * 100.0
             } else {
                 (deck.tempo.bpm / deck.tempo.base_bpm - 1.0) * 100.0
@@ -733,7 +733,7 @@ fn tempo_spans(
                 spans.push(Span::styled(pitch_str, Style::default().fg(pitch_color)));
                 spans.push(Span::styled(")", dim));
             }
-            if !playback && deck.tempo.bpm_established {
+            if !playback {
                 if deck.metronome_mode {
                     spans.push(Span::styled("\u{266A}", Style::default().fg(Color::Red)));
                 }
@@ -811,7 +811,9 @@ fn spectrum_filter_spans(deck: &Deck, overview_width: usize, analysing: bool) ->
     use crate::deck::SPECTRUM_CHARS;
     let dim = Style::default().fg(Color::DarkGray);
     let mut spans: Vec<Span<'static>> = Vec::new();
-    if !analysing {
+    // The interval describes the bar markers; no markers (Playback, or still
+    // analysing) means nothing to describe.
+    if !analysing && deck.mode == DeckMode::Beat {
         let (_, _, bars_per_tick) = bar_tick_cols(deck.tempo.base_bpm as f64, deck.tempo.offset_ms, deck.total_duration, overview_width);
         spans.push(Span::styled(format!("{bars_per_tick}br"), dim));
     }
@@ -872,7 +874,7 @@ pub(crate) fn readout_corner_line(
         }.to_string(), Style::default().fg(Color::Rgb(110, 110, 130))),
     };
     let mut spans = vec![Span::styled(mode_tag, tag_style), sep.clone()];
-    if deck.mode == DeckMode::Beat && deck.tempo.bpm_established {
+    if deck.mode == DeckMode::Beat {
         spans.push(Span::styled(format!("{:+}ms", deck.tempo.offset_ms), Style::default().fg(Color::DarkGray)));
         spans.push(sep.clone());
     }

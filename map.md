@@ -237,7 +237,7 @@ Its corners carry the deck's text on a navy backing: top-left the deck number, t
 
 Rendered at half-column braille resolution: each character encodes two adjacent audio columns, doubling horizontal detail within the terminal width.
 
-In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In Playback mode, bar markers and the warning flash are suppressed.
+In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In Playback mode, bar markers, the `Nbr` readout, and the warning flash are suppressed.
 
 With ghost playheads on (`ghosts_toggle`, remembered between runs), each beat-jump key's landing is labelled with that key, in violet on the middle row — see [Beat Jump](#beat-jump).
 
@@ -404,11 +404,11 @@ Play, pause, seek, and position control. Reaching the end of the track pauses th
 
 [Up](#transport)
 
-Each deck runs in its own mode, cycled with the mode key on the selected deck — an empty deck has none. A track reopens in the mode it last used, remembered per identity alongside cue and gain.
+Each deck runs in its own mode, cycled with the mode key on the selected deck — an empty deck has none. A track reopens in the mode it last used, remembered per identity alongside cue and gain; without a grid it opens in Playback whatever the record says.
 
 - **Playback** — no BPM required: speed as a percentage of nominal (`playback_speed`, 1.0 = nominal), jumps at fixed time intervals, grid machinery hidden and analysis suppressed.
 
-- **Beat** — speed as a BPM ratio (`bpm / base_bpm`), beat grid and tick marks visible, jumps move by exact beat/bar multiples, preserving grid phase.
+- **Beat** — speed as a BPM ratio (`bpm / base_bpm`), beat grid and tick marks visible, jumps move by exact beat/bar multiples, preserving grid phase. **Beat mode needs a grid**: the mode key refuses it without one. Setting a grid for the first time enters Beat mode.
 
 Switching preserves audio speed — no audible change on the cycle. Each deck's readout leads with its mode tag (`BEAT│` / `PLAY│`).
 
@@ -440,7 +440,7 @@ Warp needs the terminal to report key releases; where it can't, the mode toggle 
 Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction.
 
 - **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds: exactly N beat periods away, grid phase preserved
-- **Playback mode** — remapped to fixed time intervals: N × 0.5s (the beat period at 120 BPM)
+- **Playback mode** — N beats at the track's tempo when it has a grid, else N × 0.5 s (120 BPM)
 
 Backward past the start clamps to position 0. Forward past the end is a no-op.
 
@@ -541,14 +541,23 @@ The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a 
 
 **BPM** is established by one of:
 
-- **Cache lookup** — on load, the audio is hashed and its record looked up in the Track Database. A recorded grid is applied immediately; no record, or a record with no grid, leaves the 120 BPM placeholder in place and the tempo unestablished — the same state as a track never seen before.
-- **Tap** (`bpm_tap`) — press in time with the beat. After 8 taps, `base_bpm` and `offset_ms` are set via linear regression. Outlier taps (residual > half a beat period) are excluded.
-- **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` nudge the native BPM in 0.01 steps; pure metadata — the audible speed never changes.
+- **Recorded** — the Track Database's grid for the track, applied at load. Without one the 120 BPM placeholder stands and the tempo is unestablished.
+
+- **Tap** (`bpm_tap`) — press in time with the beat; eight taps set BPM and offset.
+
+- **Manual adjust** — `base_bpm_increase`/`base_bpm_decrease` step the native BPM; pure metadata, the audible speed never changes.
+
 - **Refinement** — the anchor-and-tune workflow of [Grid Refinement](#grid-refinement), the precision route.
 
-The **phase offset** positions the grid relative to a datum: a manually pinned anchor, else the cue, else the track start. With an anchor pinned, the offset is recomputed from it (1 ms precision) whenever the tempo changes — tap results change tempo only, phase stays the anchor's. Manual `D`/`C` steps move anchor and offset together.
+Tap and manual adjust work in either mode — a tempo can be set while a track plays in Playback, untouched.
 
-Cache is keyed by audio hash, making it invariant of filename, tags, and container format.
+The **phase offset** positions the grid relative to a datum: a pinned anchor, else the cue, else the track start. With an anchor, the offset is recomputed from it whenever the tempo changes — tap changes tempo only, phase stays the anchor's. `D`/`C` move anchor and offset together.
+
+**Detail**
+
+- Tap: linear regression over the taps; outliers (residual > half a beat period) excluded. Manual steps: 0.01 BPM. Anchor-derived offset at 1 ms precision.
+
+- Offset is held in `[0, beat period)` and wraps, both on `D`/`C` steps and at load; the period is `60000 / base_bpm` ms rounded to 10 ms. The anchor doesn't wrap — it's an absolute position.
 
 **See also**
 

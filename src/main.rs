@@ -940,6 +940,20 @@ fn dot_step_secs(zoom_secs: f32, cols: usize, speed: f64) -> f64 {
     col_samp_secs / 2.0
 }
 
+/// Why the mode key stayed put, naming the ways a tempo gets set.
+fn beat_mode_needs_bpm_hint(keymap: &HashMap<KeyBinding, Action>) -> String {
+    let tap = bound_key_name(keymap, Action::BpmTap);
+    let set = bound_key_name(keymap, Action::BaseBpmIncrease)
+        .zip(bound_key_name(keymap, Action::BaseBpmDecrease))
+        .map(|(up, down)| format!("{up}/{down}"));
+    match (tap, set) {
+        (Some(tap), Some(set)) => format!("Beat mode needs a BPM — tap one with {tap} or set it with {set}"),
+        (Some(tap), None) => format!("Beat mode needs a BPM — tap one with {tap}"),
+        (None, Some(set)) => format!("Beat mode needs a BPM — set it with {set}"),
+        (None, None) => "Beat mode needs a BPM".to_string(),
+    }
+}
+
 /// The display name of a key bound to `action`, chords as `Alt+X`. Prefers a
 /// chord when both layers bind the action.
 fn bound_key_name(keymap: &HashMap<KeyBinding, Action>, action: Action) -> Option<String> {
@@ -1542,7 +1556,7 @@ fn tui_loop(
             let analysing      = if detached.as_ref().is_some_and(|v| v.deck == slot) {
                 spinner_active
             } else {
-                d.mode == DeckMode::Playback || spinner_active || !d.tempo.bpm_established
+                d.mode == DeckMode::Playback || spinner_active
             };
             let beat_period    = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
             let flash_window   = beat_period.mul_f64(0.15);
@@ -1774,7 +1788,7 @@ fn tui_loop(
             // grid inspection.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
                 let (base_bpm, offset_ms, mut analysing, cue_sample) = deck.map(|d| {
-                    let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled || !d.tempo.bpm_established;
+                    let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled;
                     (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
                 }).unwrap_or((0.0, 0, true, None));
                 if detached.as_ref().is_some_and(|v| v.deck == slot) {
@@ -2722,7 +2736,7 @@ fn tui_loop(
                 // Base BPM ramp — fires on Press and Repeat with time-based step size.
                 // The ramp resets only when no base-BPM key has been seen for >500 ms,
                 // so a quick release-and-repress continues at the current tier.
-                if decks[selected_deck].as_ref().is_some_and(|d| d.mode == DeckMode::Beat)
+                if decks[selected_deck].is_some()
                     && !space_held && !alt
                     && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                     && matches!(keymap.get(&KeyBinding::Key(key.code)),
@@ -2743,8 +2757,11 @@ fn tui_loop(
                         let ratio = d.tempo.bpm / d.tempo.base_bpm;
                         d.tempo.base_bpm = (d.tempo.base_bpm + sign * step).clamp(40.0, 240.0);
                         d.tempo.bpm = (d.tempo.base_bpm * ratio).clamp(40.0, 240.0);
-                        d.tempo.bpm_established = true;
-                        shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
+                        let (num, den) = deck::grid_established(d).unwrap_or_else(|| match d.mode {
+                            DeckMode::Beat => (d.tempo.bpm, d.tempo.base_bpm),
+                            DeckMode::Playback => (d.tempo.playback_speed, 1.0),
+                        });
+                        shared_renderer.store_speed_ratio(selected_deck, num, den);
                         rederive_grid_phase(d);
                         if let Some(ref hash) = d.tempo.analysis_hash {
                             track_data.set(hash.clone(), cache_entry_for_deck(d));
@@ -2842,7 +2859,7 @@ fn tui_loop(
                                         Some(Action::NudgeBackward)   => Some(-char_samps),
                                         Some(&a) => deck::jump_beats(a).map(|n| match d.mode {
                                             DeckMode::Beat => n as f64 * (60.0 / d.tempo.base_bpm as f64) * sr,
-                                            DeckMode::Playback => n as f64 * deck::PLAYBACK_JUMP_BEAT_SECS * sr,
+                                            DeckMode::Playback => n as f64 * deck::playback_jump_beat_secs(d) * sr,
                                         }),
                                         None => None,
                                     };
@@ -3182,25 +3199,15 @@ fn tui_loop(
                         // Cycles the selected deck only; an empty deck has no mode.
                         // Audio speed is preserved across the switch.
                         if let Some(ref mut d) = decks[selected_deck] {
-                            match d.mode {
-                                DeckMode::Beat => {
-                                    d.mode = DeckMode::Playback;
-                                    d.tempo.playback_speed = d.tempo.bpm / d.tempo.base_bpm;
-                                    d.audio.player.set_speed(d.tempo.playback_speed);
-                                    shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
-                                    d.tap.tap_times.clear();
-                                    d.tap.last_tap_wall = None;
-                                    d.metronome_mode = false;
-                                    d.last_metro_beat = None;
-                                }
+                            let (num, den) = match d.mode {
+                                DeckMode::Beat => deck::enter_playback_mode(d),
+                                DeckMode::Playback if deck::has_grid(d) => deck::enter_beat_mode(d),
                                 DeckMode::Playback => {
-                                    d.mode = DeckMode::Beat;
-                                    d.tempo.bpm = (d.tempo.base_bpm * d.tempo.playback_speed).clamp(40.0, 240.0);
-                                    d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
-                                    shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
-                                    rederive_grid_phase(d);
+                                    stream.show_hint(beat_mode_needs_bpm_hint(&keymap), Duration::from_secs(5));
+                                    continue 'tui;
                                 }
-                            }
+                            };
+                            shared_renderer.store_speed_ratio(selected_deck, num, den);
                             if let Some(ref hash) = d.tempo.analysis_hash {
                                 track_data.set(hash.clone(), cache_entry_for_deck(d));
                             }
@@ -3261,13 +3268,12 @@ fn tui_loop(
                     Some(Action::HeightIncrease) => { if detail_height < max_det_h { detail_height += 1; } }
                     Some(Action::BpmIncrease) => {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            if d.mode == DeckMode::Playback || !d.tempo.bpm_established {
+                            if d.mode == DeckMode::Playback {
                                 d.tempo.playback_speed = (d.tempo.playback_speed + 0.001).clamp(0.1, 4.0);
                                 d.audio.player.set_speed(d.tempo.playback_speed);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
                             } else {
                                 d.tempo.bpm = (d.tempo.bpm + 0.1).min(240.0);
-                                d.tempo.bpm_established = true;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                                 rederive_grid_phase(d);
@@ -3276,13 +3282,12 @@ fn tui_loop(
                     }
                     Some(Action::BpmDecrease) => {
                         if let Some(ref mut d) = decks[selected_deck] {
-                            if d.mode == DeckMode::Playback || !d.tempo.bpm_established {
+                            if d.mode == DeckMode::Playback {
                                 d.tempo.playback_speed = (d.tempo.playback_speed - 0.001).clamp(0.1, 4.0);
                                 d.audio.player.set_speed(d.tempo.playback_speed);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.playback_speed, 1.0);
                             } else {
                                 d.tempo.bpm = (d.tempo.bpm - 0.1).max(40.0);
-                                d.tempo.bpm_established = true;
                                 d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
                                 shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
                                 rederive_grid_phase(d);
@@ -3296,7 +3301,7 @@ fn tui_loop(
                         let beats = deck::jump_beats(action).unwrap_or(0);
                         if let Some(ref d) = decks[selected_deck] {
                             if d.mode == DeckMode::Playback {
-                                do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, beats as f64 * deck::PLAYBACK_JUMP_BEAT_SECS);
+                                do_time_jump(&d.audio.seek_handle, &d.audio.player, d.total_duration, beats as f64 * deck::playback_jump_beat_secs(d));
                             } else {
                                 deck::do_jump(&d.audio.seek_handle, &d.audio.player, d.tempo.base_bpm, d.total_duration, beats);
                             }
@@ -3317,7 +3322,7 @@ fn tui_loop(
                     Some(Action::BpmTap) => {
                         {
                             if let Some(ref mut d) = decks[selected_deck] {
-                                if d.mode == DeckMode::Beat && !d.audio.player.is_paused() {
+                                if !d.audio.player.is_paused() {
                                     let now = Instant::now();
                                     if let Some(last) = d.tap.last_tap_wall {
                                         if now.duration_since(last).as_secs_f64() > 2.0 { d.tap.tap_times.clear(); }
@@ -3328,14 +3333,8 @@ fn tui_loop(
                                     if d.tap.tap_times.len() >= 8 {
                                         let (tapped_bpm, tapped_offset_raw) = compute_tap_bpm_offset(&d.tap.tap_times);
                                         let tapped_offset = (tapped_offset_raw as f64 / 10.0).round() as i64 * 10;
-                                        let speed_ratio = d.tempo.bpm / d.tempo.base_bpm;
-                                        d.tempo.base_bpm = tapped_bpm;
-                                        d.tempo.bpm = (d.tempo.base_bpm * speed_ratio).clamp(40.0, 240.0);
-                                        d.tempo.offset_ms = tapped_offset;
-                                        if d.anchor_sample.is_some() { rederive_grid_phase(d); }
-                                        d.tempo.bpm_established = true;
-                                        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
-                                        shared_renderer.store_speed_ratio(selected_deck, d.tempo.bpm, d.tempo.base_bpm);
+                                        let (num, den) = deck::apply_tap_lock(d, tapped_bpm, tapped_offset);
+                                        shared_renderer.store_speed_ratio(selected_deck, num, den);
                                     }
                                 }
                             }
@@ -3426,7 +3425,12 @@ fn service_deck_frame(
                 d.anchor_sample = track_data.get(hash.as_str()).and_then(|e| e.anchor_sample);
                 d.mixer.gain_db = track_data.get(hash.as_str()).map_or(0, |e| e.gain_db);
                 d.audio.gain_linear.store(10f32.powf(d.mixer.gain_db as f32 / 20.0).to_bits(), Ordering::Relaxed);
-                d.mode = track_data.get(hash.as_str()).and_then(|e| e.mode).unwrap_or(DeckMode::Beat);
+                // The remembered mode holds only with a grid to back it; a gridless
+                // record that says Beat heals to Playback at its next save.
+                d.mode = match track_data.get(hash.as_str()) {
+                    Some(e) if e.grid.is_some() => e.mode.unwrap_or(DeckMode::Beat),
+                    _ => DeckMode::Playback,
+                };
                 if d.anchor_sample.is_some() {
                     // The anchor is the phase source; the stored offset is derived data.
                     rederive_grid_phase(d);
@@ -3558,17 +3562,8 @@ fn service_deck_frame(
     if d.tap.was_tap_active && !tap_active_now && d.tap.tap_times.len() >= 8 {
         let (tapped_bpm, tapped_offset_raw) = compute_tap_bpm_offset(&d.tap.tap_times);
         let tapped_offset  = (tapped_offset_raw as f64 / 10.0).round() as i64 * 10;
-        let speed_ratio    = d.tempo.bpm / d.tempo.base_bpm;
-        d.tempo.base_bpm   = tapped_bpm;
-        d.tempo.bpm        = (d.tempo.base_bpm * speed_ratio).clamp(40.0, 240.0);
-        d.tempo.offset_ms  = tapped_offset;
-        d.tempo.bpm_established = true;
-        if d.anchor_sample.is_some() {
-            // Tap sets the tempo; the anchor keeps owning the phase.
-            rederive_grid_phase(d);
-        }
-        d.audio.player.set_speed(d.tempo.bpm / d.tempo.base_bpm);
-        shared_renderer.store_speed_ratio(slot, d.tempo.bpm, d.tempo.base_bpm);
+        let (num, den) = deck::apply_tap_lock(d, tapped_bpm, tapped_offset);
+        shared_renderer.store_speed_ratio(slot, num, den);
         if let Some(ref hash) = d.tempo.analysis_hash {
             track_data.set(hash.clone(), cache_entry_for_deck(d));
         }
