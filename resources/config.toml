@@ -20,6 +20,10 @@ fps_decrease      = "Y"
 # Deck select — Zellij-style cycling on the fresh Alt layer
 select_next_deck = ["alt+j", "alt+down"]
 select_prev_deck = ["alt+k", "alt+up"]
+# Direct selection
+select_deck_1 = "alt+1"
+select_deck_2 = "alt+2"
+select_deck_3 = "alt+3"
 # Reload the decks as they were when deck last ran (offered while all decks are empty)
 session_restore  = "alt+r"
 # Browser panel resize (browser open only); divider left widens the panel

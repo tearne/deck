@@ -22,7 +22,7 @@ The spatial layout below matches the in-app help overlay (`?`). Keys up to the m
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%
 ──────────────────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit         │ [Bare]
-/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\ metro   Alt+j/k deck   Alt+r restore   ╰ [Space]
+/ art  Sp+= swap1↔2  Sp+- swap2↔3  Sp+\ metro  Alt+j/k/1/2/3 deck  Alt+r restore  ╰ [Space]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
@@ -63,6 +63,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `select_next_deck` | `alt+j`, `alt+down` | Cycle to next deck (wraps; works in the browser too) |
 | `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
+| `select_deck_1` / `_2` / `_3` | `alt+1` / `alt+2` / `alt+3` | Select that deck directly (works in the browser too) |
 | `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
 | `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
 | `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |

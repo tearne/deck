@@ -2340,6 +2340,9 @@ session.save();
                     match keymap.get(&KeyBinding::AltChord(key.code)) {
                         Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; continue; }
                         Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; continue; }
+                        Some(Action::SelectDeck1) => { selected_deck = 0; continue; }
+                        Some(Action::SelectDeck2) => { selected_deck = 1; continue; }
+                        Some(Action::SelectDeck3) => { selected_deck = 2; continue; }
                         Some(Action::PanelWiden)  => { session.step_panel_pct(5);  continue; }
                         Some(Action::PanelNarrow) => { session.step_panel_pct(-5); continue; }
                         _ => {}
@@ -3129,6 +3132,9 @@ session.save();
                     }
                     Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; }
                     Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; }
+                    Some(Action::SelectDeck1) => { selected_deck = 0; }
+                    Some(Action::SelectDeck2) => { selected_deck = 1; }
+                    Some(Action::SelectDeck3) => { selected_deck = 2; }
                     Some(Action::PlaylistNext) => {
                         let ws = session.workspace().map(|p| p.to_path_buf());
                         play_playlist_step(selected_deck, true, &mut decks, &mut pending_loads, ws.as_deref());

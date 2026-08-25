@@ -941,7 +941,7 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck cycling, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
+Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck selection, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
 
 Esc steps up one level per press: dismiss a prompt, back out a browser mode, hand the keyboard to the decks, close the view to art. Repeats and releases are ignored, so holding it doesn't race through the levels.
 

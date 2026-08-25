@@ -1701,7 +1701,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("╭ [Shift]", sh),
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
-    let row15_text = "/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\\ metro   Alt+j/k deck   Alt+r restore";
+    let row15_text = "/ art  Sp+= swap1↔2  Sp+- swap2↔3  Sp+\\ metro  Alt+j/k/1/2/3 deck  Alt+r restore";
     let row15 = Line::from(vec![
         Span::styled(format!("{row15_text:<w$}", w = (TEXT_W - 9) as usize), ba),
         Span::styled("╰ [Space]", sp),

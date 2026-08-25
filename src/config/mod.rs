@@ -10,6 +10,7 @@ pub(crate) enum Action {
     ArtCycle, ArtView,
     // Selected-deck controls
     SelectNextDeck, SelectPrevDeck,
+    SelectDeck1, SelectDeck2, SelectDeck3,
     PlaylistNext, PlaylistPrev,
     PlayPause, OpenBrowser,
     PitchUp, PitchDown, PitchReset,
@@ -70,6 +71,9 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     // Selected-deck controls
     ("select_next_deck",    Action::SelectNextDeck),
     ("select_prev_deck",    Action::SelectPrevDeck),
+    ("select_deck_1",       Action::SelectDeck1),
+    ("select_deck_2",       Action::SelectDeck2),
+    ("select_deck_3",       Action::SelectDeck3),
     ("playlist_next",       Action::PlaylistNext),
     ("playlist_prev",       Action::PlaylistPrev),
     ("play_pause",          Action::PlayPause),
