@@ -384,7 +384,7 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "j/k move · Enter load · # listen · alt+j/k deck · ` jump · / search · @ ws · T tags · Esc back",
+            legend: "h/j/k/l move · Enter load · # listen · alt+j/k deck · ` jump · / search · @ ws · T tags · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
@@ -673,7 +673,21 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         KeyCode::Up | KeyCode::Char('k') => { state.nav_up(); Ok(None) }
         KeyCode::Down | KeyCode::Char('j') => { state.nav_down(); Ok(None) }
         KeyCode::Enter => open_highlighted(state),
-        KeyCode::Backspace | KeyCode::Left => { go_up(state)?; Ok(None) }
+        KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => { go_up(state)?; Ok(None) }
+        // `l` descends into a directory but never loads — vim-style h/l
+        // navigation; loading stays on Enter. Playlists are consumed by the
+        // panel machine before this, so `l` here only ever sees dirs and files.
+        KeyCode::Char('l') => {
+            if state.search_results.is_none() {
+                if let Some(entry) = state.entries.get(state.cursor) {
+                    if entry.kind == EntryKind::Dir {
+                        let target = entry.path.clone();
+                        state.navigate_to(target)?;
+                    }
+                }
+            }
+            Ok(None)
+        }
         KeyCode::Char('/') => { state.mode = BrowserMode::Search; Ok(None) }
         KeyCode::Char('@') => Ok(set_workspace(state)),
         KeyCode::Char('\'') => Ok(clear_workspace(state)),

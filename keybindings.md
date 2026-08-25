@@ -180,6 +180,8 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 | Key | Action |
 |-----|--------|
 | `Up` / `Down` / `j` / `k` | Navigate entries |
+| `h` | Go up a directory (command mode) |
+| `l` | Enter highlighted directory (command mode; never loads) |
 | `Enter` | Load highlighted track to the selected deck, or open highlighted playlist |
 | `Backspace` / `Left` | Go up a directory |
 | `@` | Set current directory as workspace |

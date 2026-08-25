@@ -727,7 +727,7 @@ The last-visited directory is remembered between sessions, so the browser reopen
 
 Unfocused, the browser is a passive follower — each load highlights the landed track, its tags shown in the context panel.
 
-The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `/` enters search; the last-used primary mode is restored on reopen (Tab is the Bottom Pane's focus flip, never a mode toggle). `Esc` backs out one level — clearing an active search filter in place, then search back to command, then the keyboard back to the decks — the browser stays showing. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
+The browser is modal, like a modal text editor. **Command mode** navigates vim-style (`h`/`j`/`k`/`l` or arrows — `h` up a directory, `l` into one, never loading) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `/` enters search; the last-used primary mode is restored on reopen (Tab is the Bottom Pane's focus flip, never a mode toggle). `Esc` backs out one level — clearing an active search filter in place, then search back to command, then the keyboard back to the decks — the browser stays showing. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
 **See also**
 
