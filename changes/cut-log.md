@@ -17,3 +17,7 @@ Cut "on the navy backing the old title row used" to "on a navy backing". The map
 ## 2026-08-11 — message-stream, Approach ("One message stream") *(retrospective)*
 
 The paragraph justifying the single stream restated the single-slot-overwrite argument that the inventory table above it already made visible. When a table carries the evidence, the prose only needs the verdict.
+
+## 2026-08-25 — map, Keymap node
+
+Cut "home to newer features ... today, clip vocabulary to come" from the Alt-layer sentence, and "open browser" from the Space examples (the view actions cover it). The map is a spec, not a history: which layer is newer, and what may arrive later, carries no decision about what exists. Same pattern as 2026-08-12: **history references in describes-what-exists documents**.

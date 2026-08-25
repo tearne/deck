@@ -1,6 +1,7 @@
 # Application
 
 [Down](#deck)
+[Down](#bottom-pane)
 [Down](#browser)
 [Down](#playlists)
 [Down](#mixer)
@@ -60,6 +61,7 @@ Application
 │   ├ Level & Gain
 │   ├ Pitch Shift
 │   └ Metronome
+├ Bottom Pane
 ├ Browser
 │ ├ Search
 │ ├ Preview
@@ -86,7 +88,7 @@ Application
 │ ├ History View
 │ └ Event Log
 ├ Fault Capture
-├ Album Art (TODO)
+├ Album Art
 └ Audio Latency
 ```
 
@@ -693,6 +695,22 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 - [Keymap](#keymap) — the key bound to `metronome_toggle`
 
 
+# Bottom Pane
+
+[Up](#application)
+
+The space beneath the decks shows exactly one of four views — album art (the ground state), browser, help, messages — picked by their view actions — `open_browser`, `help`, `message_history`, `art_view` — bound to Space chords that mean the same thing from anywhere. Which view is showing is one choice; whether the keyboard talks to the view or the decks is a separate one. `Tab` flips focus; only the browser and messages can take it — help and art accept no input. Whichever side is unfocused is dimmed, so exactly one side of the screen reads as driven.
+
+Esc steps up: focus back to the decks, the view closed to art, quit. The showing view persists across sessions.
+
+**See also**
+
+- [Browser](#browser) — the view that drives loading; focused it captures the keyboard
+- [Album Art](#album-art) — the ground state view
+- [History View](#history-view) — the messages view
+- [Session State](#session-state) — where the showing view persists
+- [Keymap](#keymap) — the action table and Tab
+
 # Browser
 
 [Up](#application)
@@ -703,11 +721,13 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 [Down](#jump-to-loaded)
 [Down](#context-panel)
 
-A file navigator for loading tracks. It opens over the player at any time (`open_browser`) and never interrupts playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
+A file navigator for loading tracks. The working view of the [Bottom Pane](#bottom-pane) — `open_browser` summons and focuses it from anywhere, never interrupting playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
 
-The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track onto the **selected deck** — `Alt+j`/`Alt+k` cycle selection inside the browser as everywhere, and the deck chip and gutter accent turn bright red when a load would land on a playing deck.
+The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track onto the **selected deck** and hands the keyboard to it; the browser stays showing. `Alt+j`/`Alt+k` cycle selection inside the browser as everywhere, and the deck chip and gutter accent turn bright red when a load would land on a playing deck.
 
-The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `Tab` toggles command and search — the two primary modes, of which the last used is restored on reopen. `Esc` backs out one level — clearing an active search filter in place (mode unchanged, so exiting from search still restores it on reopen), then exiting the browser. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
+Unfocused, the browser is a passive follower — each load highlights the landed track, its tags shown in the context panel.
+
+The browser is modal, like a modal text editor. **Command mode** navigates (`j`/`k` or arrows) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `/` enters search; the last-used primary mode is restored on reopen (Tab is the Bottom Pane's focus flip, never a mode toggle). `Esc` backs out one level — clearing an active search filter in place, then search back to command, then the keyboard back to the decks — the browser stays showing. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
 
 **See also**
 
@@ -735,7 +755,7 @@ The workspace persists between sessions and is silently dropped if it no longer 
 
 [Up](#browser)
 
-A quick listen to the highlighted track without loading it. `#` plays it from 20% of the way in (or 30 s if the duration isn't known) through the main output, independent of the decks, so it doesn't disturb what's loaded. `#` again restarts; any other key stops it and then does its normal job; closing the browser stops it too.
+A quick listen to the highlighted track without loading it. `#` plays it from 20% of the way in (or 30 s if the duration isn't known) through the main output, independent of the decks, so it doesn't disturb what's loaded. `#` again restarts; any other key stops it and then does its normal job — Tab included, so the keyboard never leaves the browser with a preview still sounding.
 
 **See also**
 
@@ -771,9 +791,9 @@ Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the curs
 
 [Up](#browser)
 
-The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's metadata (in the tag editor's own form, with the proposed rename when one applies), or a playlist's entries. It follows the highlight passively until the operator focuses it.
+The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's metadata (in the tag editor's own form, with the proposed rename when one applies), or a playlist's entries. It follows the highlight passively until the operator focuses it. While the browser view shows, the rename offer lives here too — an amber banner over the panel naming the file, keeping the deck corners clean.
 
-Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. Focus is shown by light: whichever list is being driven is bright, the other dimmed — the panel fades while it merely follows the highlight, the browser fades while the panel is the target.
+Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. Focus is shown by light: whichever list is being driven is bright, the other dimmed — the panel fades while it merely follows the highlight, the browser fades while the panel is the target — all while the browser side holds the keyboard; unfocused, the whole region fades as one.
 
 **See also**
 
@@ -809,7 +829,7 @@ Deck implements the format; it doesn't define it. The `.rpl` spec — byte range
 
 A set attached to a deck. Loading an `.rpl` plays the first entry that resolves and attaches the rest, so the deck works through the running order without further browsing. A `≡ x/y` badge before the track name gives the position in the set.
 
-At end of track the deck loads the next entry that resolves, skipping any it can't play; `alt+n` / `alt+p` step the selected deck the same way. Each arrives **loaded but paused**, like any other load — the running order queues the next track up, it never starts it. The entry on the deck is tracked by identity rather than by index, so an edit committed in the browser doesn't lose the deck's place.
+At end of track the deck loads the next entry that resolves, skipping any it can't play; `playlist_next` / `playlist_prev` step the selected deck the same way (unbound by default at present). Each arrives **loaded but paused**, like any other load — the running order queues the next track up, it never starts it. The entry on the deck is tracked by identity rather than by index, so an edit committed in the browser doesn't lose the deck's place.
 
 A set carrying entries the deck can't play says so on load and turns the badge amber, and it stays amber until they are fixed. That is the whole of the deck's answer — which entries, and why, is the browser's.
 
@@ -921,11 +941,11 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Space chords fire **one-time actions** — set cue, open browser, play/pause, the resets — never anything expecting the modifier to be *held*, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second chord layer, deliberately sparse, home to newer features — deck cycling and session restore today, clip vocabulary to come — and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
+Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck cycling, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
 
-Esc steps up one level per press — dismiss the overlay, leave the panel, close the browser — one physical tap at a time. Repeats and releases are ignored, so holding it doesn't race through the levels.
+Esc steps up one level per press: dismiss a prompt, back out a browser mode, hand the keyboard to the decks, close the view to art. Repeats and releases are ignored, so holding it doesn't race through the levels.
 
-Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: browser command-mode and search keys, tag editor input, and confirmation prompts.
+Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: Tab (the focus flip), browser command-mode and search keys, tag editor input, and confirmation prompts.
 
 **See also**
 
@@ -975,7 +995,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 [Up](#application)
 [Down](#session-restore)
 
-Global player state remembered between runs: last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, whether ghost playheads are shown — and the decks as they were, for [Session Restore](#session-restore).
+Global player state remembered between runs for [Session Restore](#session-restore): last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, the showing bottom view, whether ghost playheads are shown, and the decks as they were.
 
 Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 
@@ -1020,7 +1040,7 @@ Three kinds of message pass through them:
 
 - **Events** are things that happened — loads, moves, warnings, identity alerts. Every event enters the history; those needing attention also show on the bar, named ("Deck 2: …"), and leaving the bar loses nothing.
 
-- **Hints** are transient guidance, on the bar — "No track loaded — Alt+F opens the file browser". Displayed, recorded nowhere. The startup hint also leaves when the browser opens or a session restores.
+- **Hints** are transient guidance on the bar, like the startup nudge toward opening the browser while nothing is loaded. Displayed, recorded nowhere. The startup hint leaves when the browser opens or a session restores.
 
 **Detail**
 
@@ -1032,7 +1052,7 @@ Three kinds of message pass through them:
 
 [Up](#messages)
 
-The look-back over every event, this session and previous ones. `N` opens it over the album-art space (mutually exclusive with the browser, like help); each line is clock time plus the event, severity-coloured, long lines wrapping under a hanging indent. `k`/`j` scroll older/newer — the header counts what lies beyond each edge — and Esc or `N` closes it.
+The look-back over every event, this session and previous ones — the messages view of the [Bottom Pane](#bottom-pane), arriving focused via `message_history`. Each line is clock time plus the event, severity-coloured, long lines wrapping under a hanging indent. `k`/`j` scroll older/newer while it holds the keyboard — the header counts what lies beyond each edge — Tab or Esc hand the keyboard back, and Esc again closes it to art.
 
 Sessions read as one continuous scroll: on startup the log file's retained history seeds the view, and every session opens with a "deck v… started" line and closes with "deck quit", so the boundaries are visible. Seeded history never appears on the global bar.
 
@@ -1043,7 +1063,7 @@ Sessions read as one continuous scroll: on startup the log file's retained histo
 
 **See also**
 
-- [Keymap](#keymap) — `message_history` is configurable; `N` is the default
+- [Keymap](#keymap) — actions and their default keys
 
 
 # Event Log
@@ -1089,7 +1109,19 @@ All three live in `~/.local/state/deck/`. Report folders are named `YYYY-MM-DD_H
 
 [Up](#application)
 
-*TODO — cover art display.*
+The [Bottom Pane](#bottom-pane)'s ground state: three cover-art panels, one per deck, drawn from each loaded track's embedded tag art (front cover preferred). It takes no input and never holds focus — the decks keep the keyboard while it shows, and the help and messages views draw over it rather than replacing it.
+
+Brightness has three levels — bright, dim, off — cycled by `art_cycle` from anywhere, or by repeat presses of `art_view` once the view is showing. The level persists between sessions.
+
+**Detail**
+
+- Rendered as half-block cells; re-rasterised only when panel size or brightness changes.
+- Levels: full, 35%, off.
+
+**See also**
+
+- [Bottom Pane](#bottom-pane) — the view model it grounds
+- [Keymap](#keymap) — actions and their default keys
 
 
 # Audio Latency
