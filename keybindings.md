@@ -8,7 +8,7 @@ Action-to-key reference for deck. Map nodes reference actions by their config na
 The spatial layout below matches the in-app help overlay (`?`). Keys up to the middle columns are selected-deck controls; the rightmost three columns (7/8/9, U/I/O, J/K/L, M/,/.) are the per-deck mixer, one key per deck.
 
 ```
-  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope
+  ╭ Ghost   ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope
   1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF
   ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
     ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope

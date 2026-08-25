@@ -137,7 +137,8 @@ The rows left over below Overview C. Shows exactly one bottom view; the choice p
 
 When multiple elements occupy the same screen column, priority (highest wins):
 
-1. **Playhead** — always rendered; distinct playhead colour
-2. **Cue mark** — green `│`, full detail height
-3. **Tick mark** — rendered in gaps where waveform dots are absent; does not override waveform dots
-4. **Waveform** — braille dot pattern from the wide buffer
+1. **Playhead** — always rendered; white `┃`, full detail height
+2. **Cue mark** — magenta `┃`, full detail height
+3. **Ghost label** — jump key char, near-white on a violet chip at the mid row (chip extends one row up on even heights, hiding covered dots)
+4. **Tick mark** — rendered in gaps where waveform dots are absent; does not override waveform dots
+5. **Waveform** — braille dot pattern from the wide buffer

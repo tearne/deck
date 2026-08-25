@@ -241,7 +241,7 @@ Rendered at half-column braille resolution: each character encodes two adjacent 
 
 In beat mode, bar markers overlay the track as thin vertical lines at every N bars. The interval defaults to 4 bars and doubles until no two adjacent markers are closer than 4 characters, adapting to both BPM and screen width. The current interval shows as `Nbr` in the readout. When remaining playback time drops below a configurable threshold (default 30 s), the bar markers flash — alternating between a muted reddish tone and near-invisible on each beat, active only during playback. In Playback mode, bar markers, the `Nbr` readout, and the warning flash are suppressed.
 
-With ghost playheads on (`ghosts_toggle`, remembered between runs), each beat-jump key's landing is labelled with that key, in violet on the middle row — see [Beat Jump](#beat-jump).
+With ghost playheads on (`ghosts_toggle`, remembered between runs), each beat-jump key's landing is labelled with that key on a violet chip at the middle row — see [Beat Jump](#beat-jump).
 
 **See also**
 
@@ -444,13 +444,13 @@ Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bar
 - **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds: exactly N beat periods away, grid phase preserved
 - **Playback mode** — N beats at the track's tempo when it has a grid, else N × 0.5 s (120 BPM)
 
-Backward past the start clamps to position 0. Forward past the end is a no-op.
+Paused, a jump past an edge clamps to it; playing, an edge-crossing jump is refused — forward even when a further jump wouldn't fit after it.
 
-**Ghost playheads** (`ghosts_toggle`) mark where each jump key would land, on both waveforms: the overview collects the large jumps and the detail view the small ones. The 1-beat jump is never marked. A mark appears only if the key would actually act — a visible mark means the key works. Beat mode only; the detached grid-refinement cursor is unmarked.
+**Ghost playheads** (`ghosts_toggle`) mark where each jump key would land, on both waveforms: the overview collects the large jumps and the detail view the small ones. The 1-beat jump is never marked. A mark appears only where the jump lands cleanly — clamped or refused landings draw nothing, and the track edge is its own marker. Beat mode only; the detached grid-refinement cursor is unmarked.
 
 **Detail**
 
-- Ghosts are placed as a column offset from the playhead, not through the grid's sample-to-column mapping — they are relative to the playhead, and independent rounding made them wobble at wide zoom.
+- Ghosts are placed through the shared mapping's playhead-anchored mode — the delta from the playhead rounded once — because rounding the two endpoints independently wobbles at wide zoom.
 
 **See also**
 

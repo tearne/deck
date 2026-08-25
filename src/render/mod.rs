@@ -21,7 +21,13 @@ pub(crate) const GRID_BLUE: ratatui::style::Color = ratatui::style::Color::Rgb(4
 pub(crate) const GRID_CURSOR: ratatui::style::Color = ratatui::style::Color::Rgb(60, 150, 255);
 /// Ghost playheads — the jump keys' landing labels — in a violet apart from the
 /// magenta cue and the grey grid furniture.
-pub(crate) const GHOST_VIOLET: ratatui::style::Color = ratatui::style::Color::Rgb(160, 90, 255);
+// Violet: the one hue gap in the waveform palette (cyan→teal→gold→amber),
+// clear of the cue magenta, grid blues, and warning ambers. The cue is told
+// apart by form — solid full-height block vs a single lettered chip.
+pub(crate) const GHOST_VIOLET: ratatui::style::Color = ratatui::style::Color::Rgb(235, 220, 255);
+/// The chip behind the ghost's key char — lifts it off the waveform without
+/// touching neighbouring cells.
+pub(crate) const GHOST_CHIP_BG: ratatui::style::Color = ratatui::style::Color::Rgb(55, 25, 95);
 
 pub(crate) const ZOOM_LEVELS: &[f32] = &[1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 pub(crate) const DEFAULT_ZOOM_IDX: usize = 2; // 4 seconds
@@ -994,44 +1000,50 @@ fn overview_lines(
         .map(|(r, row)| {
             let mut spans: Vec<Span<'static>> = Vec::new();
             let mut run = String::new();
-            let mut run_color = Color::Reset;
+            let mut run_style = (Color::Reset, None::<Color>);
+            let style_of = |(fg, bg): (Color, Option<Color>)| {
+                let st = Style::default().fg(fg);
+                if let Some(bg) = bg { st.bg(bg) } else { st }
+            };
             for (c, byte) in row.into_iter().enumerate() {
                 let (color, ch) = if c == playhead_col && cue_col == Some(c) {
                     if r == 0 || r + 1 == overview_height {
-                        (Color::Rgb(255, 0, 255), '\u{28FF}')
+                        ((Color::Rgb(255, 0, 255), None), '┃')
                     } else {
-                        (Color::Rgb(255, 255, 255), '\u{28FF}')
+                        ((Color::Rgb(255, 255, 255), None), '┃')
                     }
                 } else if c == playhead_col {
-                    (Color::Rgb(255, 255, 255), '\u{28FF}')
+                    ((Color::Rgb(255, 255, 255), None), '┃')
                 } else if cue_col == Some(c) {
-                    (Color::Rgb(255, 0, 255), '\u{28FF}')
+                    ((Color::Rgb(255, 0, 255), None), '┃')
                 } else if let (true, Some(k)) = (r == ghost_row, ghost_at(c)) {
-                    (GHOST_VIOLET, k)
+                    ((GHOST_VIOLET, Some(GHOST_CHIP_BG)), k)
+                } else if ghost_at(c).is_some() && overview_height % 2 == 0 && r + 1 == ghost_row {
+                    ((lut.color(ov_bass[c]), Some(GHOST_CHIP_BG)), '\u{2800}')
                 } else if is_bar_col[c] {
                     if warn_beat_on {
-                        (Color::Rgb(120, 60, 60), '│')
+                        ((Color::Rgb(120, 60, 60), None), '│')
                     } else if warning_active {
-                        (Color::Rgb(40, 20, 20), '│')
+                        ((Color::Rgb(40, 20, 20), None), '│')
                     } else {
-                        (Color::DarkGray, '│')
+                        ((Color::DarkGray, None), '│')
                     }
                 } else {
-                    (lut.color(ov_bass[c]), char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
+                    ((lut.color(ov_bass[c]), None), char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
                 };
-                if color != run_color {
+                if color != run_style {
                     if !run.is_empty() {
                         spans.push(Span::styled(
                             std::mem::take(&mut run),
-                            Style::default().fg(run_color),
+                            style_of(run_style),
                         ));
                     }
-                    run_color = color;
+                    run_style = color;
                 }
                 run.push(ch);
             }
             if !run.is_empty() {
-                spans.push(Span::styled(run, Style::default().fg(run_color)));
+                spans.push(Span::styled(run, style_of(run_style)));
             }
             Line::from(spans)
         })
@@ -1503,36 +1515,45 @@ pub(crate) fn render_detail_waveform(
             };
             let mut spans: Vec<Span<'static>> = Vec::new();
             let mut run = String::new();
-            let mut run_color = Color::Reset;
+            let mut run_style = (Color::Reset, None::<Color>);
+            let style_of = |(fg, bg): (Color, Option<Color>)| {
+                let st = Style::default().fg(fg);
+                if let Some(bg) = bg { st.bg(bg) } else { st }
+            };
             for (c, &byte) in row.iter().enumerate() {
                 let buf_col  = viewport_start.unwrap_or(0) + c;
                 let bass     = buf.bass_ratio.get(buf_col).copied().unwrap_or(0.5);
                 let spectral = lut.color(bass);
                 let (color, ch) = if c == centre_col && cue_screen_col == Some(c) {
                     if is_edge_row {
-                        (Color::Rgb(255, 0, 255), '\u{28FF}')
+                        ((Color::Rgb(255, 0, 255), None), '┃')
                     } else {
-                        (Color::Rgb(255, 255, 255), '\u{28FF}')
+                        ((Color::Rgb(255, 255, 255), None), '┃')
                     }
                 } else if c == centre_col {
-                    (Color::Rgb(255, 255, 255), '\u{28FF}')
+                    ((Color::Rgb(255, 255, 255), None), '┃')
                 } else if cue_screen_col == Some(c) {
-                    (Color::Rgb(255, 0, 255), '\u{28FF}')
+                    ((Color::Rgb(255, 0, 255), None), '┃')
                 } else if let (true, Some(k)) = (r == ghost_row, ghost_at(c)) {
-                    (GHOST_VIOLET, k)
+                    ((GHOST_VIOLET, Some(GHOST_CHIP_BG)), k)
+                } else if ghost_at(c).is_some() && waveform_rows % 2 == 0 && r + 1 == ghost_row {
+                    // Even heights put the char row just below centre; the chip
+                    // extends one row up so the chip itself is centred. It hides
+                    // the waveform dots it covers — a clean block, like the char cell.
+                    ((spectral, Some(GHOST_CHIP_BG)), '\u{2800}')
                 } else {
-                    (spectral, char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
+                    ((spectral, None), char::from_u32(0x2800 | byte as u32).unwrap_or(' '))
                 };
-                if color != run_color {
+                if color != run_style {
                     if !run.is_empty() {
-                        spans.push(Span::styled(std::mem::take(&mut run), Style::default().fg(run_color)));
+                        spans.push(Span::styled(std::mem::take(&mut run), style_of(run_style)));
                     }
-                    run_color = color;
+                    run_style = color;
                 }
                 run.push(ch);
             }
             if !run.is_empty() {
-                spans.push(Span::styled(run, Style::default().fg(run_color)));
+                spans.push(Span::styled(run, style_of(run_style)));
             }
             Line::from(spans)
         })
@@ -1687,7 +1708,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     ]);
 
     let lines: Vec<Line<'static>> = vec![
-        Line::styled("╭         ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope", sh),
+        Line::styled("╭ Ghost   ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope", sh),
         Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF", ba),
         Line::styled("╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=", sp),
         Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope", sh),
