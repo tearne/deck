@@ -682,6 +682,10 @@ pub(crate) fn ghost_landings(
         let jump = beats as f64 * 60.0 / deck.tempo.base_bpm as f64;
         for (action, signed) in [(fwd, jump), (back, -jump)] {
             let Some(key) = bare_key_char(keymap, action) else { continue };
+            // A clamped landing draws no ghost — the track edge is its own
+            // marker, and clamped sizes would pile onto the same columns. The
+            // executed jump still clamps; only the marker is withheld.
+            if current + signed < 0.0 || current + signed > deck.total_duration { continue; }
             if let Some(t) = jump_landing(current, signed, playing, deck.total_duration) {
                 out.push(GhostLanding { sample: crate::scales::Secs(t).to_samples(sr).0 as usize, key });
             }
