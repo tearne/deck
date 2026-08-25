@@ -11,8 +11,8 @@ latency_increase  = "]"
 mode_cycle        = "`"
 grid_mode         = "g"
 art_cycle         = "/"
-help              = "?"
-message_history   = "N"
+help              = ["?", "space+h"]
+message_history   = "space+n"
 nudge_mode_toggle = "¬"
 fps_increase      = "^"
 fps_decrease      = "Y"
@@ -25,13 +25,15 @@ session_restore  = "alt+r"
 # Browser panel resize (browser open only); divider left widens the panel
 panel_widen  = ["alt+h", "alt+left"]
 panel_narrow = ["alt+l", "alt+right"]
-# Skip the selected deck's playlist to the next / previous track
-playlist_next = "space+n"
-playlist_prev = "space+p"
+# Skip the selected deck's playlist to the next / previous track — unbound by
+# default; bind here if wanted (the view chords took space+n / space+p's row).
+#playlist_next = ""
+#playlist_prev = ""
 
 # Transport / browse (selected deck)
 play_pause   = "space+g"
 open_browser = "space+f"
+art_view     = "space+v"
 
 # Pitch (selected deck)
 pitch_up    = "a"
@@ -40,7 +42,7 @@ pitch_reset = ["space+a", "space+z"]
 
 # BPM (selected deck)
 bpm_tap          = "b"
-metronome_toggle = "space+v"
+metronome_toggle = 'space+\'
 
 bpm_increase     = "v"
 bpm_decrease     = "f"

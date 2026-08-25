@@ -1220,8 +1220,8 @@ fn handle_tag_editor_key(
         _ => {
             let editor = tag_editor.as_mut().unwrap();
             match key.code {
-                KeyCode::Tab | KeyCode::Down => { editor.active_field = (editor.active_field + 1) % (TAG_FIELD_LABELS.len() + 1); }
-                KeyCode::BackTab | KeyCode::Up => { editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len()) % (TAG_FIELD_LABELS.len() + 1); }
+                KeyCode::Down => { editor.active_field = (editor.active_field + 1) % (TAG_FIELD_LABELS.len() + 1); }
+                KeyCode::Up => { editor.active_field = (editor.active_field + TAG_FIELD_LABELS.len()) % (TAG_FIELD_LABELS.len() + 1); }
                 _ if editor.active_field == TAG_FIELD_LABELS.len() => {
                     // The rename toggle stop: Space (or left/right) flips it.
                     if matches!(key.code, KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right) {
@@ -1311,7 +1311,8 @@ fn tui_loop(
     let mut decks: [Option<Deck>; 3] = [None, None, None];
     let mut pending_loads: [Option<PendingLoad>; 3] = [initial_load, None, None];
     // Bar precedence sequences this behind any startup event without further help.
-    if pending_loads[0].is_none() {
+    // A restored browser view makes "opens the file browser" redundant — skip it.
+    if pending_loads[0].is_none() && session.get_bottom_view() != 1 {
         // Name the key actually bound to the browser — bindings are configurable,
         // so a hardcoded key name goes stale.
         let mut hint = match bound_key_name(&keymap, Action::OpenBrowser) {
@@ -1344,10 +1345,19 @@ fn tui_loop(
         cursor: f64,
     }
     let mut detached: Option<DetachedView> = None;
-    let mut help_open = false;
+    // The bottom space shows exactly one view; the browser and messages views
+    // can also hold keyboard focus (`view_focused`), art and help never do.
+    #[derive(Clone, Copy, PartialEq)]
+    enum BottomView { Art, Browser, Help, Messages }
+    let mut bottom_view = match session.get_bottom_view() {
+        1 => BottomView::Browser,
+        2 => BottomView::Help,
+        3 => BottomView::Messages,
+        _ => BottomView::Art,
+    };
+    let mut view_focused = false;
     // Ghost playheads: an experiment, shown on request and remembered between runs.
     let mut ghosts_on = session.ghosts_on();
-    let mut history_open = false;
     // Lines scrolled back from the newest message while the history is open.
     let mut history_scroll: usize = 0;
     let log_path_display = log_path.display().to_string();
@@ -1377,6 +1387,19 @@ fn tui_loop(
     // reopening restores Command or Search as last used.
     let mut last_browser_mode = BrowserMode::Command;
     let mut preview_output: Option<PreviewOutput> = None;
+    // A saved browser view reopens the browser (unfocused) where it left off;
+    // if the directory can't be opened, fall back to the art ground state.
+    if bottom_view == BottomView::Browser {
+        let workspace = session.workspace().map(|p| p.to_path_buf());
+        match BrowserState::new(browser_dir.clone(), workspace) {
+            Ok(mut bs) => {
+                bs.location_label = Some("Working directory".to_string());
+                browser_state = Some(bs);
+                preview_output = Some(PreviewOutput::new(mixer));
+            }
+            Err(_) => bottom_view = BottomView::Art,
+        }
+    }
     let mut max_det_h: usize = usize::MAX;
     let pfl_active_deck = Arc::new(AtomicUsize::new(usize::MAX));
     let mut selected_deck: usize = 0;
@@ -1465,6 +1488,18 @@ fn tui_loop(
                     decks[slot] = Some(new_deck);
                     if let Some(ref mut d) = decks[slot] {
                         d.display.palette = if slot == 0 { PALETTE_SCHEMES[0].1 } else { PALETTE_SCHEMES[0].2 };
+                    }
+                    // Passive follow: the unfocused browser tracks what lands on
+                    // the decks — the loaded track is highlighted, and the context
+                    // panel shows its tags. A driven browser is never yanked.
+                    if !view_focused {
+                        if let Some(bs) = browser_state.as_mut() {
+                            if let Some(d) = decks[slot].as_ref() {
+                                if let Some(dir) = d.path.parent() {
+                                    let _ = bs.go_to(dir.to_path_buf(), Some(&d.path), format!("Deck {} directory", slot + 1));
+                                }
+                            }
+                        }
                     }
                 }
                 Ok(Err(e)) => {
@@ -1763,7 +1798,7 @@ fn tui_loop(
             {
                 let detail_area   = [area_detail_a, area_detail_b, area_detail_c][selected_deck];
                 let overview_area = [area_overview_a, area_overview_b, area_overview_c][selected_deck];
-                let loading_hot = browser_state.is_some()
+                let loading_hot = browser_state.is_some() && view_focused
                     && [&d0, &d1, &d2][selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
                 // Hot state: a solid bright-red column, unmissable against the thin
                 // yellow line of the normal state.
@@ -1847,11 +1882,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_a);
                     }
                     render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck)
+                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 0).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
@@ -1911,11 +1946,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_b);
                     }
                     render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck)
+                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 1).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
@@ -1975,11 +2010,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_c);
                     }
                     render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck)
+                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 2).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
@@ -2100,18 +2135,46 @@ fn tui_loop(
                 } else {
                     // Exactly one side reads as driven: the browser dims while the
                     // panel is the active target, the panel dims while it only
-                    // previews — same hue-preserving fade both ways.
-                    if panel.dim_browser() {
+                    // previews — same hue-preserving fade both ways. Only while
+                    // the browser holds the keyboard: unfocused, the single
+                    // whole-region fade below carries the signal alone, so the
+                    // panel is never dimmed twice into illegibility.
+                    if view_focused && panel.dim_browser() {
                         render::dim_area(frame, cols[0]);
                     }
                     let playing_of = |p: &PlaylistPanel| decks.iter().flatten()
                         .find_map(|d| d.playlist.as_ref().filter(|a| a.path == p.path).map(|a| a.index));
                     render::render_panel(frame, cols[1], &panel, &playing_of);
-                    if !panel.dim_browser() {
+                    if view_focused && !panel.dim_browser() {
                         render::dim_area(frame, cols[1]);
                     }
                 }
+                // Unfocused browser: the whole region fades — the decks hold the
+                // keyboard, and exactly one side of the screen reads as driven.
+                if !view_focused {
+                    render::dim_area(frame, cols[0]);
+                    render::dim_area(frame, cols[1]);
+                }
+                // The rename offer's browser-side home: an amber banner over the
+                // panel (the deck corners stay clean while this view shows).
+                if tag_editor.is_none() {
+                    for d in [&d0, &d1, &d2].into_iter().flatten() {
+                        if d.rename_offer_active() {
+                            let name = d.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            let elapsed = d.rename_offer_started.unwrap().elapsed().as_secs();
+                            let (text, fg) = if elapsed < 10 {
+                                (format!("⚠ rename {name}? [y]  ({}s)", 10 - elapsed), Color::Rgb(230, 170, 60))
+                            } else {
+                                (format!("⚠ rename {name}? [y]"), Color::Rgb(150, 110, 40))
+                            };
+                            render::overlay_top_left(frame, cols[1], Line::from(Span::styled(text, Style::default().fg(fg))), Style::default().bg(Color::Rgb(20, 24, 34)));
+                            break;
+                        }
+                    }
+                }
             } else if c[10].height >= 3 && art_bright_idx < 2 {
+                // The art ground: under the help and messages views too — their
+                // boxes clear their own backing, and the art keeps them company.
                 let brightness = [1.0f32, 0.35, 0.0][art_bright_idx as usize];
                 // 1-row top margin separates art from deck 2 above.
                 let vert = Layout::default()
@@ -2143,19 +2206,23 @@ fn tui_loop(
                 }
             }
 
-            // Unified help overlay — drawn on top of art; skipped when browser is open
-            if help_open && browser_state.is_none() {
+            // Help view — drawn over the art ground like the old overlay.
+            if bottom_view == BottomView::Help {
                 render_keyboard_help(frame, c[10]);
             }
 
-            // Event history overlay — same space and rules as help. Adopt the
-            // renderer's clamped scroll so overscroll doesn't accumulate.
-            if history_open && browser_state.is_none() {
+            // Messages view — same space as help. Adopt the renderer's clamped
+            // scroll so overscroll doesn't accumulate. Dimmed while the decks
+            // hold the keyboard, bright while it is being scrolled.
+            if bottom_view == BottomView::Messages {
                 history_scroll = render_message_history(frame, c[10], stream.entries(), history_scroll, utc_offset_secs, &log_path_display);
+                if !view_focused {
+                    render::dim_area(frame, c[10]);
+                }
             }
 
-            // Tag editor via the rename offer (browser closed): same panel
-            // presentation, in the same right-hand geometry the browser uses.
+            // Tag editor via the rename offer (browser view not showing): same
+            // panel presentation, in the right-hand geometry the browser uses.
             if browser_state.is_none() {
                 if let Some(ref editor) = tag_editor {
                     let panel_pct = session.get_panel_pct();
@@ -2179,7 +2246,7 @@ fn tui_loop(
         while event::poll(Duration::ZERO)? {
             match event::read()? {
             TermEvent::Mouse(mouse_event) => {
-                if browser_state.is_some() { continue; }
+                if view_focused { continue; }
                 if tag_editor.is_some() { continue; }
                 if mouse_event.kind == MouseEventKind::Down(MouseButton::Left) {
                     let col = mouse_event.column as usize;
@@ -2233,7 +2300,9 @@ fn tui_loop(
                     stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                     if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                     track_data.save();
-                    session.save();
+                    let view_code = match bottom_view { BottomView::Art => 0u8, BottomView::Browser => 1, BottomView::Help => 2, BottomView::Messages => 3 };
+session.set_bottom_view(view_code);
+session.save();
                     return Ok(());
                 }
                 // Tag editor — a standalone modal; intercepts all keys while open.
@@ -2263,8 +2332,7 @@ fn tui_loop(
                             if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
                                 stream.emit(m);
                             }
-                            browser_state = None;
-                            preview_output = None;
+                            view_focused = false;
                         } else {
                             // Any other key cancels — no wedge, and it matches the prompt.
                             browser_load_confirm = None;
@@ -2283,9 +2351,77 @@ fn tui_loop(
                         _ => {}
                     }
                 }
+                // Tab flips the keyboard between the decks and the showing view —
+                // its only meaning. Help and art take no input, so it is inert there.
+                if key.code == KeyCode::Tab && key.kind == KeyEventKind::Press {
+                    if matches!(bottom_view, BottomView::Browser | BottomView::Messages) {
+                        view_focused = !view_focused;
+                        if !view_focused {
+                            if let Some(ref po) = preview_output { po.stop(); }
+                        }
+                    }
+                    continue;
+                }
+                // While the browser drives in command mode, the Space layer stays
+                // live for the view chords — same chords, same meaning as at the
+                // decks. In search (or any text prompt) Space is a typed character,
+                // so the chord layer is off there.
+                let browser_chords_live = view_focused
+                    && browser_state.as_ref().map_or(false, |bs| bs.mode == BrowserMode::Command && bs.name_prompt.is_none());
+                if browser_chords_live {
+                    // The bare help key (`?` by default) works in command mode
+                    // too — bare letters there are commands, and this one isn't
+                    // taken. Search mode keeps it as a typed character.
+                    if key.kind == KeyEventKind::Press
+                        && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::Help)
+                    {
+                        if let Some(bs) = browser_state.take() {
+                            *browser_dir = bs.cwd.clone();
+                            session.set_last_browser_path(browser_dir);
+                            preview_output = None;
+                        }
+                        bottom_view = BottomView::Help;
+                        view_focused = false;
+                        continue;
+                    }
+                    if key.code == KeyCode::Char(' ') {
+                        space_saw_event_this_frame = true;
+                        match key.kind {
+                            KeyEventKind::Press | KeyEventKind::Repeat => {
+                                if !space_repeat_suppressed { space_held = true; }
+                            }
+                            KeyEventKind::Release => {
+                                space_held = false;
+                                space_repeat_suppressed = false;
+                            }
+                        }
+                        continue;
+                    }
+                    if space_held && key.kind == KeyEventKind::Press {
+                        if let Some(&a) = keymap.get(&KeyBinding::SpaceChord(key.code)) {
+                            if matches!(a, Action::OpenBrowser | Action::Help | Action::MessageHistory | Action::ArtView) {
+                                space_held = false;
+                                space_repeat_suppressed = true;
+                                if a != Action::OpenBrowser {
+                                    if let Some(bs) = browser_state.take() {
+                                        *browser_dir = bs.cwd.clone();
+                                        session.set_last_browser_path(browser_dir);
+                                        preview_output = None;
+                                    }
+                                    match a {
+                                        Action::Help => { bottom_view = BottomView::Help; view_focused = false; }
+                                        Action::MessageHistory => { bottom_view = BottomView::Messages; view_focused = true; history_scroll = 0; }
+                                        _ => { bottom_view = BottomView::Art; view_focused = false; }
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
                 // Context panel state machine over the browser. Preview passes keys through
                 // (with playlist transitions on `l`/`e`/Enter); Browse and Edit intercept.
-                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                if view_focused && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                     let cmd_mode = browser_state.as_ref().map_or(false, |bs| bs.mode == BrowserMode::Command && bs.name_prompt.is_none());
                     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                     let workspace = session.workspace().map(|p| p.to_path_buf());
@@ -2398,7 +2534,6 @@ fn tui_loop(
                                     transition = Some(Panel::Preview(Preview::Empty));
                                     consumed = true;
                                 }
-                                (_, KeyCode::Tab) => { *focus = if *focus == EditFocus::Browser { EditFocus::Playlist } else { EditFocus::Browser }; consumed = true; }
                                 (EditFocus::Playlist, KeyCode::Char('h')) => { *focus = EditFocus::Browser; consumed = true; }
                                 (EditFocus::Browser, KeyCode::Char('l')) => { *focus = EditFocus::Playlist; consumed = true; }
                                 // Insert the highlighted browser entry (track, or another playlist's
@@ -2438,8 +2573,8 @@ fn tui_loop(
                     }
                     if consumed { continue; }
                 }
-                // Browser — intercepts all key events when open.
-                if let Some(bs) = browser_state.as_mut() {
+                // Browser — intercepts all key events while it holds the keyboard.
+                if let Some(bs) = browser_state.as_mut().filter(|_| view_focused) {
                     // # previews the highlighted audio file — only in Command mode,
                     // where letters aren't filter input.
                     if key.kind == KeyEventKind::Press
@@ -2468,10 +2603,11 @@ fn tui_loop(
                     let mut create_playlist_request: Option<(String, PathBuf)> = None;
                     match handle_browser_key(bs, key)? {
                         Some(BrowserResult::ReturnToPlayer) => {
+                            // Esc at the top of the browser's own ladder: the
+                            // keyboard goes back to the decks; the view stays.
                             *browser_dir = bs.cwd.clone();
                             session.set_last_browser_path(browser_dir);
-                            browser_state = None;
-                            preview_output = None;
+                            view_focused = false;
                         }
                         Some(BrowserResult::Selected(path)) => {
                             browser_selection_outcome = Some((BrowserLoad::Track(path), selected_deck, bs.cwd.clone()));
@@ -2575,8 +2711,9 @@ fn tui_loop(
                             if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
                                 stream.emit(m);
                             }
-                            browser_state = None;
-                            preview_output = None;
+                            // The keyboard follows the load: the deck it landed on is
+                            // the selected one, driven immediately. Browser stays.
+                            view_focused = false;
                         }
                     }
                     if let Some((name, dir)) = create_playlist_request {
@@ -2770,16 +2907,11 @@ fn tui_loop(
                 }
                 // All other actions fire on Press only.
                 if key.kind == KeyEventKind::Press {
-                    // Esc closes the help overlay.
-                    if help_open && key.code == KeyCode::Esc {
-                        help_open = false;
-                        continue 'tui;
-                    }
-                    // Event history intercepts its scroll and close keys; the
-                    // rest fall through to normal handling.
-                    if history_open {
+                    // Focused messages view: scroll keys drive it, Esc hands the
+                    // keyboard back to the decks; the rest fall through.
+                    if bottom_view == BottomView::Messages && view_focused {
                         match key.code {
-                            KeyCode::Esc => { history_open = false; continue 'tui; }
+                            KeyCode::Esc => { view_focused = false; continue 'tui; }
                             KeyCode::Char('k') | KeyCode::Up => {
                                 // The renderer clamps to the wrapped line count on draw.
                                 history_scroll += 1;
@@ -2808,7 +2940,9 @@ fn tui_loop(
                             stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                             if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                             track_data.save();
-                            session.save();
+                            let view_code = match bottom_view { BottomView::Art => 0u8, BottomView::Browser => 1, BottomView::Help => 2, BottomView::Messages => 3 };
+session.set_bottom_view(view_code);
+session.save();
                             return Ok(());
                         }
                         continue 'tui;
@@ -2954,6 +3088,18 @@ fn tui_loop(
                     };
                     match action {
                     Some(Action::Quit) => {
+                        // Esc's ladder: with a non-art view showing, close it back
+                        // to art first; only from the ground state does Esc quit.
+                        if bottom_view != BottomView::Art {
+                            if let Some(bs) = browser_state.take() {
+                            *browser_dir = bs.cwd.clone();
+                            session.set_last_browser_path(browser_dir);
+                            preview_output = None;
+                        }
+                        bottom_view = BottomView::Art;
+                            view_focused = false;
+                            continue 'tui;
+                        }
                         let any_playing = decks.iter().flatten().any(|d| !d.audio.player.is_paused());
                         if any_playing && pending_quit.is_none() {
                             pending_quit = Some(Instant::now() + Duration::from_secs(5));
@@ -2971,7 +3117,9 @@ fn tui_loop(
                         stream.record(Event::new(Source::App, Severity::Info, "deck quit"));
                         if !restore_offered { record_session_decks_at_quit(&decks, &pending_loads, selected_deck, session); }
                         track_data.save();
-                        session.save();
+                        let view_code = match bottom_view { BottomView::Art => 0u8, BottomView::Browser => 1, BottomView::Help => 2, BottomView::Messages => 3 };
+session.set_bottom_view(view_code);
+session.save();
                         return Ok(());
                     }
                     Some(Action::SessionRestore) => {
@@ -3000,14 +3148,21 @@ fn tui_loop(
                         // land on the selected deck, cycled with the same chords as ever.
                         // The startup hint has done its job once the browser opens.
                         stream.dismiss_hint();
-                        let workspace = session.workspace().map(|p| p.to_path_buf());
-                        let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
-                        bs.mode = last_browser_mode;
-                        // Opens at the working directory (cycle position 0); show its label.
-                        bs.location_label = Some("Working directory".to_string());
-                        browser_state = Some(bs);
-                        preview_output = Some(PreviewOutput::new(mixer));
-                        location_cycle = 0;
+                        if bottom_view == BottomView::Browser {
+                            // Already showing — the chord just hands it the keyboard.
+                            view_focused = true;
+                        } else {
+                            let workspace = session.workspace().map(|p| p.to_path_buf());
+                            let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
+                            bs.mode = last_browser_mode;
+                            // Opens at the working directory (cycle position 0); show its label.
+                            bs.location_label = Some("Working directory".to_string());
+                            browser_state = Some(bs);
+                            preview_output = Some(PreviewOutput::new(mixer));
+                            location_cycle = 0;
+                            bottom_view = BottomView::Browser;
+                            view_focused = true;
+                        }
                     }
                     Some(Action::PlayPause) => {
                         if let Some(ref d) = decks[selected_deck] {
@@ -3175,11 +3330,30 @@ fn tui_loop(
                             }
                         }
                     }
-                    Some(Action::Help)            => { help_open = !help_open; history_open = false; }
+                    Some(Action::Help)            => {
+                        if let Some(bs) = browser_state.take() {
+                            *browser_dir = bs.cwd.clone();
+                            session.set_last_browser_path(browser_dir);
+                            preview_output = None;
+                        }
+                        bottom_view = if bottom_view == BottomView::Help { BottomView::Art } else { BottomView::Help };
+                        view_focused = false;
+                    }
                     Some(Action::GhostsToggle)    => { ghosts_on = !ghosts_on; session.set_ghosts_on(ghosts_on); }
                     Some(Action::MessageHistory)  => {
-                        history_open = !history_open;
-                        if history_open { help_open = false; history_scroll = 0; }
+                        if bottom_view == BottomView::Messages {
+                            bottom_view = BottomView::Art;
+                            view_focused = false;
+                        } else {
+                            if let Some(bs) = browser_state.take() {
+                            *browser_dir = bs.cwd.clone();
+                            session.set_last_browser_path(browser_dir);
+                            preview_output = None;
+                        }
+                        bottom_view = BottomView::Messages;
+                            view_focused = true;
+                            history_scroll = 0;
+                        }
                     }
                     Some(Action::PanelWiden) | Some(Action::PanelNarrow) => {} // browser-only
                     Some(Action::GridMode) => {
@@ -3255,6 +3429,20 @@ fn tui_loop(
                     Some(Action::ArtCycle) => {
                         art_bright_idx = [2u8, 0, 1][art_bright_idx as usize]; // dim→bright→off→dim
                         session.set_art_bright_idx(art_bright_idx);
+                    }
+                    Some(Action::ArtView) => {
+                        if bottom_view == BottomView::Art {
+                            art_bright_idx = [2u8, 0, 1][art_bright_idx as usize];
+                            session.set_art_bright_idx(art_bright_idx);
+                        } else {
+                            if let Some(bs) = browser_state.take() {
+                            *browser_dir = bs.cwd.clone();
+                            session.set_last_browser_path(browser_dir);
+                            preview_output = None;
+                        }
+                        bottom_view = BottomView::Art;
+                            view_focused = false;
+                        }
                     }
                     Some(Action::OffsetIncrease) => {
                         if let Some(ref mut d) = decks[selected_deck] { if d.mode == DeckMode::Beat { apply_offset_step(d, 5); } }

@@ -5,29 +5,31 @@ Action-to-key reference for deck. Map nodes reference actions by their config na
 
 ## Keyboard Layout
 
-The spatial layout below matches the in-app help overlay (`?`). Left block = selected-deck controls; right block = per-deck mixer.
+The spatial layout below matches the in-app help overlay (`?`). Keys up to the middle columns are selected-deck controls; the rightmost three columns (7/8/9, U/I/O, J/K/L, M/,/.) are the per-deck mixer, one key per deck.
 
 ```
-  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope
-  1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF
-  ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
-    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
-    Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
-    ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
-      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain
-      A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid    ┆   J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%
-        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain
-        Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
-        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
-───────────────────────────────────────────────────────────────────── ╭ [Shift]
-` mode    ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck                  ╰ [Space]
+  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope
+  1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF
+  ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
+    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope
+    Q -1bt    W -1b     E -4b     R -8b     T -16b    Y         U  I  O LPF
+    ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
+      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ╭         ╭  ╭  ╭ +Gain
+      A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid    H         J  K  L +Lvl
+      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ╰ Help    ╰  ╰  ╰ 100%
+        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain
+        Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     N         M  ,  . -Lvl
+        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%
+──────────────────────────────────────────────────────────────────────────────── ╭ [Shift]
+` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit         │ [Bare]
+/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\ metro   Alt+j/k deck   Alt+r restore   ╰ [Space]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
 
-Not shown in the overlay: `?` help toggle.
+Not shown in the overlay: `?` (alias for `space+h` help).
+
+`Tab` is fixed (not configurable): it flips the keyboard between the decks and the showing bottom view (browser or messages; help and art take no input).
 
 
 ## Config Actions
@@ -39,8 +41,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | Action | Default | Description |
 |--------|---------|-------------|
 | `quit` | `esc` | Quit (confirmation only while a deck is playing) |
-| `help` | `?` | Toggle keyboard help overlay |
-| `message_history` | `N` | Toggle message history overlay (k/j scroll, Esc close) |
+| `help` | `?`, `space+h` | Show/hide the help view |
+| `message_history` | `space+n` | Show/hide the messages view (takes focus; k/j scroll, Esc unfocus) |
 | `mode_cycle` | `` ` `` | Cycle the selected deck's mode (Playback/Beat); `vinyl_mode_toggle` still parses as an alias |
 | `nudge_mode_toggle` | `¬` | Toggle nudge jump/warp |
 | `zoom_in` | `-` | Zoom in |
@@ -52,6 +54,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `fps_increase` | `^` | Increase FPS cap |
 | `fps_decrease` | `Y` | Decrease FPS cap |
 | `art_cycle` | `/` | Cycle album art brightness |
+| `art_view` | `space+v` | Show the art view; further presses cycle its brightness |
 | `grid_mode` | `g` | Open a Grid session on the selected deck (see Grid mode keys) |
 
 ### Deck Selection & Swap
@@ -63,8 +66,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
 | `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
 | `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |
-| `playlist_next` | `space+n` | Selected deck: skip to next playlist track |
-| `playlist_prev` | `space+p` | Selected deck: skip to previous playlist track |
+| `playlist_next` | *(unbound)* | Selected deck: skip to next playlist track |
+| `playlist_prev` | *(unbound)* | Selected deck: skip to previous playlist track |
 | `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 |
 | `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 |
 
@@ -87,7 +90,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `speed_reset` | `space+c` | Reset playback speed to nominal |
 | `offset_increase` | `D` | Phase offset +10 ms |
 | `offset_decrease` | `C` | Phase offset −10 ms |
-| `metronome_toggle` | `space+v` | Toggle metronome |
+| `metronome_toggle` | `space+\` | Toggle metronome |
 
 ### Nudge
 
@@ -183,15 +186,15 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 | `'` | Clear workspace |
 | `#` | Preview highlighted track |
 | `n` | New playlist (prompts for a name) |
-| `Esc` | Close browser / clear search term |
-| `q` | Close browser (when not searching) |
+| `Esc` | Back out one level: clear search term → command mode → keyboard to the decks |
+| `Tab` | Keyboard to the decks (browser stays showing) |
 | Printable chars | Search (when workspace is set) |
 
 ### Playlist editor (right pane; opens on hovering a `.rpl`)
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `l` / `e` | Focus the playlist pane; `h` / `Esc` back to the browser |
+| `l` / `e` | Focus the playlist pane; `h` / `Esc` back to the browser |
 | `Enter` / `a` | (browser focus) append highlighted track |
 | `j` / `k` | (playlist focus) move cursor |
 | `K` / `J` | (playlist focus) reorder entry up / down |
@@ -201,8 +204,8 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Down` | Next field (the rename toggle is the last stop) |
-| `Shift+Tab` / `Up` | Previous field |
+| `Down` | Next field (the rename toggle is the last stop) |
+| `Up` | Previous field |
 | `Space` (on the toggle) | Flip the `[x] Rename File` section header (default on) |
 | `Left` / `Right` | Move cursor |
 | `Home` / `End` | Cursor to start / end |

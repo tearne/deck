@@ -355,6 +355,9 @@ struct SessionFile {
     /// Ghost playheads (jump-key landing labels) shown.
     #[serde(default)]
     ghosts_on: bool,
+    /// Bottom view showing: 0 art, 1 browser, 2 help, 3 messages.
+    #[serde(default)]
+    bottom_view: u8,
 }
 
 impl Default for SessionFile {
@@ -368,6 +371,7 @@ impl Default for SessionFile {
             decks: Vec::new(),
             selected_deck: 0,
             ghosts_on: false,
+            bottom_view: 0,
         }
     }
 }
@@ -417,6 +421,7 @@ pub(crate) struct SessionState {
     decks: [Option<DeckSnapshot>; 3],
     selected_deck: usize,
     ghosts_on: bool,
+    bottom_view: u8,
     position_written_at: [Option<std::time::Instant>; 3],
     dirty_at: Option<std::time::Instant>,
 }
@@ -444,6 +449,7 @@ impl SessionState {
             decks: std::array::from_fn(|i| file.decks.get(i).cloned().flatten()),
             selected_deck: file.selected_deck.min(2),
             ghosts_on: file.ghosts_on,
+            bottom_view: file.bottom_view.min(3),
             position_written_at: [None; 3],
             dirty_at: None,
         }
@@ -537,6 +543,15 @@ impl SessionState {
     }
 
 
+    pub(crate) fn get_bottom_view(&self) -> u8 {
+        self.bottom_view
+    }
+
+    pub(crate) fn set_bottom_view(&mut self, view: u8) {
+        self.bottom_view = view;
+        self.mark_dirty();
+    }
+
     pub(crate) fn get_art_bright_idx(&self) -> u8 {
         self.art_bright_idx
     }
@@ -577,6 +592,7 @@ impl SessionState {
             decks: self.decks.to_vec(),
             selected_deck: self.selected_deck,
             ghosts_on: self.ghosts_on,
+            bottom_view: self.bottom_view,
         }
     }
 

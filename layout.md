@@ -25,7 +25,7 @@ Sections in render order, top to bottom. Heights in rows; variable sections comp
 | Notification bar C | 1 | |
 | Info bar C | 1 | |
 | Overview C | `overview_height` | |
-| Spacer | remaining | Browser / cover art / keyboard help |
+| Spacer | remaining | Bottom view: album art (ground), browser, help, or messages |
 
 
 ## Detail Info Bar
@@ -52,7 +52,7 @@ One row per deck. Priority order (highest wins):
 
 1. **BPM pending** — `BPM detected: 120.00  [y] accept  [n] reject  (Xs)`. Yellow; countdown turns red in the last 5 s. Expires after 15 s.
 2. **Active notification** — transient message in style colour (see Colour Schemes). Expires after 5 s.
-3. **Rename offer** — track name left-aligned; `rename? [y]` right-aligned. First 10 s: red with per-second countdown. After 10 s: dim. Offer lingers until dismissed or a track loads.
+3. **Rename offer** — track name left-aligned; `rename? [y]` right-aligned. First 10 s: red with per-second countdown. After 10 s: dim. Offer lingers until dismissed or a track loads. While the browser view is showing, the offer renders as an amber banner over the context panel instead and the deck stays clean.
 4. **Default** — track name (left) + cache indicators (right, 16 chars fixed).
 
 ### Cache Indicators
@@ -98,7 +98,7 @@ One row per deck. Two groups separated by a variable-width spacer; right group s
 
 ### Empty Deck
 
-- Notification bar: `no track — Space+D to open the file browser` (dim)
+- Notification bar: `no track — Space+F to open the file browser` (dim)
 - Info bar: `⏸  ---  +0ms` (dim)
 
 
@@ -125,11 +125,12 @@ Per-deck notification bar uses foreground colours only (no background): Error=re
 
 ## Spacer Panel
 
-The rows left over below Overview C. Content priority (browser/help draw on top of art):
+The rows left over below Overview C. Shows exactly one bottom view; the choice persists across sessions.
 
-1. **Browser** — fills the spacer. If the spacer has fewer than 8 rows, the browser expands to fill the full screen instead.
-2. **Cover art** — three panels (one per deck), 1-row top margin, 1-column gaps between panels. Rendered when `art_bright_idx < 2`. Brightness levels: full (index 0), dim 35% (index 1), off (index 2). `/` cycles the index.
-3. **Keyboard help overlay** — drawn on top of cover art when both would be active. Non-modal (does not capture input; `Esc` closes it).
+1. **Album art** (ground state) — three panels (one per deck), 1-row top margin, 1-column gaps between panels. Rendered when `art_bright_idx < 2`. Brightness levels: full (index 0), dim 35% (index 1), off (index 2). `/` and repeat presses of `space+v` cycle the index.
+2. **Browser** — fills the spacer. If the spacer has fewer than 8 rows, the browser expands to fill the full screen instead. Dimmed whole while the decks hold the keyboard.
+3. **Keyboard help** — drawn over the art ground. Takes no input.
+4. **Messages** — the event history. Dimmed while the decks hold the keyboard; focused, `k`/`j` scroll it.
 
 
 ## Column Coincidence (Detail Waveform)

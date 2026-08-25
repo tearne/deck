@@ -587,7 +587,7 @@ impl SharedDetailRenderer {
 
 /// Play state, badge, and track name for the overview's top-left overlay; a
 /// lingering rename offer marks the title it concerns with an amber ⚠.
-pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool) -> Line<'static> {
+pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool, offer_on_deck: bool) -> Line<'static> {
     let mut spans = tempo_spans(deck, frame_count, beat_on, analysing);
     spans.push(Span::raw(" "));
     let (badge, _) = playlist_badge(deck);
@@ -596,7 +596,7 @@ pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool
         deck.track_name.clone(),
         Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85)),
     ));
-    if deck.rename_offer_active() && deck.rename_offer_started.unwrap().elapsed().as_secs() >= 10 {
+    if offer_on_deck && deck.rename_offer_active() && deck.rename_offer_started.unwrap().elapsed().as_secs() >= 10 {
         spans.push(Span::styled(" ⚠", Style::default().fg(Color::Rgb(230, 170, 60))));
     }
     Line::from(spans)
@@ -605,8 +605,8 @@ pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool
 /// A countdown prompt that momentarily displaces the meters corner: the BPM
 /// confirmation, or the rename offer's active phase. The meters return when
 /// the prompt resolves.
-pub(crate) fn countdown_prompt_line(deck: &Deck) -> Option<Line<'static>> {
-    if deck.rename_offer_active() {
+pub(crate) fn countdown_prompt_line(deck: &Deck, offer_on_deck: bool) -> Option<Line<'static>> {
+    if offer_on_deck && deck.rename_offer_active() {
         let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
         if elapsed < 10 {
             let secs_left = 10 - elapsed;
@@ -1666,7 +1666,7 @@ pub(crate) fn render_shared_tick_row(
 }
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-    const TEXT_W: u16 = 79;
+    const TEXT_W: u16 = 89;
     const TEXT_H: u16 = 15;
     const H_PAD:  u16 = 2;
     const V_PAD:  u16 = 1;
@@ -1704,7 +1704,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     let row7 = Line::from(vec![
         Span::styled("    ╭         ╭         ╭ +Tick   ", sh),
         Span::styled("╭", wh),
-        Span::styled(" -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain", sh),
+        Span::styled(" -BsBPM  ╭ CueJp   ╭         ╭  ╭  ╭ +Gain", sh),
     ]);
     // Row 8: Bare — F key name stays white; +Ndge / -BPM use muted sage
     let row8 = Line::from(vec![
@@ -1714,13 +1714,13 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("F", wh),
         Span::styled(" ", ba),
         Span::styled("-BPM", gr),
-        Span::styled("    G Grid    ┆   J  K  L +Lvl", ba),
+        Span::styled("    G Grid    H         J  K  L +Lvl", ba),
     ]);
     // Row 9: Space (chord) — F's ╰ bracket stays white
     let row9 = Line::from(vec![
         Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
         Span::styled("╰", wh),
-        Span::styled(" Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%", sp),
+        Span::styled(" Brows   ╰ Play    ╰ Help    ╰  ╰  ╰ 100%", sp),
     ]);
     // Row 11: Bare — -Ndge / +BPM use muted sage
     let row11 = Line::from(vec![
@@ -1728,38 +1728,36 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("-Ndge", gr),
         Span::styled("   V ", ba),
         Span::styled("+BPM", gr),
-        Span::styled("    B Tap     ┆   M  ,  . -Lvl", ba),
+        Span::styled("    B Tap     N         M  ,  . -Lvl", ba),
     ]);
     // Row 13: separator — modifier legend as vertical ╭│╰ box flush-right
     let row13 = Line::from(vec![
-        Span::styled("───────────────────────────────────────────────────────────────────── ", ba),
+        Span::styled("─".repeat((TEXT_W - 10) as usize) + " ", ba),
         Span::styled("╭ [Shift]", sh),
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
+    let row15_text = "/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\\ metro   Alt+j/k deck   Alt+r restore";
     let row15 = Line::from(vec![
-        Span::styled("/ art   Sp+= swap1↔2   Sp+- swap2↔3   Alt+j/k deck   Alt+r restore    ", ba),
+        Span::styled(format!("{row15_text:<w$}", w = (TEXT_W - 9) as usize), ba),
         Span::styled("╰ [Space]", sp),
     ]);
 
     let lines: Vec<Line<'static>> = vec![
-        Line::styled("╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope", sh),
-        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF", ba),
-        Line::styled("╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=", sp),
-        Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope", sh),
-        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF", ba),
-        Line::styled("  ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=", sp),
+        Line::styled("╭         ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope", sh),
+        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF", ba),
+        Line::styled("╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=", sp),
+        Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope", sh),
+        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    Y         U  I  O LPF", ba),
+        Line::styled("  ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=", sp),
         row7,
         row8,
         row9,
-        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain", sh),
+        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain", sh),
         row11,
-        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰         ┆   ╰  ╰  ╰ 0%", sp),
+        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%", sp),
         row13,
-        Line::from(vec![
-            Span::styled("` mode   ¬ nudge  -/= zoom  {/} height  [/] latency ", ba),
-            Span::styled("N msgs", sh),
-            Span::styled("  Esc quit  │ [Bare] ", ba),
-        ]),
+        Line::from(Span::styled(
+            format!("{:<w$}│ [Bare] ", "` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit", w = (TEXT_W - 9) as usize), ba)),
         row15,
     ];
     frame.render_widget(
@@ -2238,7 +2236,7 @@ pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) 
     // backgrounds: pastel palettes lose perceived hue much faster than
     // saturated ones, and the fg carries the colour identity.
     const TARGET: (f32, f32, f32) = (45.0, 45.0, 55.0);
-    const KEEP_FG: f32 = 0.55;
+    const KEEP_FG: f32 = 0.65;
     const KEEP_BG: f32 = 0.35;
     fn to_rgb(c: Color) -> Option<(u8, u8, u8)> {
         Some(match c {

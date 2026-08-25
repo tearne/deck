@@ -384,14 +384,14 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "j/k move · Enter load · [ ] deck · ` jump · / search · @ ws · T tags · Esc back",
+            legend: "j/k move · Enter load · # listen · alt+j/k deck · ` jump · / search · @ ws · T tags · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
             highlight_fg: Color::Rgb(210, 235, 255),
             highlight_bg: Color::Rgb(20, 50, 70),
             label: "SEARCH",
-            legend: "type to filter · ↑/↓ move · Enter load · [ ] deck · Tab command · Esc clear/exit",
+            legend: "type to filter · ↑/↓ move · Enter load · alt+j/k deck · Esc clear/command",
         },
         BrowserMode::Move => ModeTheme {
             accent: Color::Rgb(150, 190, 250),
@@ -674,7 +674,7 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         KeyCode::Down | KeyCode::Char('j') => { state.nav_down(); Ok(None) }
         KeyCode::Enter => open_highlighted(state),
         KeyCode::Backspace | KeyCode::Left => { go_up(state)?; Ok(None) }
-        KeyCode::Tab | KeyCode::Char('/') => { state.mode = BrowserMode::Search; Ok(None) }
+        KeyCode::Char('/') => { state.mode = BrowserMode::Search; Ok(None) }
         KeyCode::Char('@') => Ok(set_workspace(state)),
         KeyCode::Char('\'') => Ok(clear_workspace(state)),
         // `e` opens the tag editor for an audio file. On a playlist, `e` is consumed by
@@ -706,9 +706,10 @@ fn search_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io::
         KeyCode::Up => { state.nav_up(); Ok(None) }
         KeyCode::Down => { state.nav_down(); Ok(None) }
         KeyCode::Enter => open_highlighted(state),
-        KeyCode::Tab => { state.mode = BrowserMode::Command; Ok(None) }
         KeyCode::Esc if state.has_filter() => { state.clear_filter(); Ok(None) }
-        KeyCode::Esc => Ok(Some(BrowserResult::ReturnToPlayer)),
+        // One level up: search backs out to command mode (Tab is the global
+        // focus flip now, so it no longer toggles the browser's modes).
+        KeyCode::Esc => { state.mode = BrowserMode::Command; Ok(None) }
         KeyCode::Backspace => {
             state.search_term.pop();
             state.update_search();
