@@ -40,6 +40,7 @@ mod frame_stats;
 mod library;
 mod messages;
 mod playlist;
+mod scales;
 mod render;
 mod tags;
 mod xdg;
@@ -932,12 +933,14 @@ fn confirms_destructive(key: KeyCode) -> bool {
     key == KeyCode::Char('y')
 }
 
-/// One display-dot of audio at the current zoom — the paused-nudge step, so a
-/// press always moves exactly one visible unit regardless of zoom level.
-fn dot_step_secs(zoom_secs: f32, cols: usize, speed: f64) -> f64 {
-    if cols == 0 { return 0.010 }
-    let col_samp_secs = ((zoom_secs as f64) * speed / cols as f64).max(0.0005);
-    col_samp_secs / 2.0
+/// One display column of audio at the current zoom — the paused-nudge and
+/// grid-cursor step, so a press always moves exactly one character cell. The
+/// buffer's own truncated column width, so steps land exactly on the grid
+/// everything renders against.
+fn column_step_secs(zoom_secs: f32, cols: usize, speed: f64, sample_rate: f64) -> f64 {
+    if cols == 0 || sample_rate <= 0.0 { return 0.010 }
+    let spc = scales::DetailMap::col_width(zoom_secs as f64, sample_rate, speed, cols);
+    (spc as f64 / sample_rate).max(0.0005)
 }
 
 /// Why the mode key stayed put, naming the ways a tempo gets set.
@@ -1514,7 +1517,7 @@ fn tui_loop(
         // Service all three decks: BPM results, position, metronome, tap timeout, spectrum.
         let service_start = Instant::now();
         for slot in 0..3 {
-            service_deck_frame(slot, &mut decks, col_secs, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, &mut stream);
+            service_deck_frame(slot, &mut decks, zoom_secs, dc, elapsed, elapsed_uncapped, mixer, &shared_renderer, track_data, audio_latency_ms, &mut stream);
         }
         let service_dur = service_start.elapsed();
 
@@ -1564,18 +1567,18 @@ fn tui_loop(
             // extract at constant parity — no wobble across scrub steps.
             let grid_snap = |pos: f64, halves: f64| {
                 let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
-                let col_samp = if dc > 0 {
-                    (((zoom_secs as f64) * d.audio.sample_rate as f64 * speed) as usize / dc).max(1) as f64
-                } else { 1.0 };
-                let unit = col_samp / halves;
-                (pos / unit).round() * unit
+                if dc > 0 {
+                    let spc = scales::DetailMap::col_width(zoom_secs as f64, d.audio.sample_rate as f64, speed, dc);
+                    scales::DetailMap::snap(scales::Samples(pos), spc, halves).0
+                } else { pos }
             };
             let view_samp = match detached.as_ref().filter(|v| v.deck == slot) {
                 // Detached: character grid — its glyph markers are character-sized.
                 Some(v) => grid_snap(v.cursor, 1.0),
-                // Paused: dot grid — the braille cell's native finest resolution;
-                // one nudge press is one dot, so every press visibly steps.
-                None if d.audio.player.is_paused() => grid_snap(display_samp, 2.0),
+                // Paused: the character grid too. Whole-column marks (cue, grid
+                // anchor) can't render to dot precision, so a dot-resolution
+                // rest position reads as wobble; a nudge press moves one column.
+                None if d.audio.player.is_paused() => grid_snap(display_samp, 1.0),
                 None => display_samp,
             };
             let view_pos_samp = view_samp as usize;
@@ -1595,9 +1598,7 @@ fn tui_loop(
             };
             let beat_period    = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
             let flash_window   = beat_period.mul_f64(0.15);
-            let smooth_pos_ns  = (display_samp / d.audio.sample_rate as f64 * 1_000_000_000.0) as i128
-                - d.tempo.offset_ms as i128 * 1_000_000;
-            let phase          = smooth_pos_ns.rem_euclid(beat_period.as_nanos() as i128);
+            let phase          = scales::beat_phase_ns(scales::Samples(display_samp), d.audio.sample_rate as f64, d.tempo.offset_ms, beat_period.as_nanos() as i128);
             let beat_on        = phase < flash_window.as_nanos() as i128;
             let audio_pos_samp = d.audio.seek_handle.position.load(Ordering::Relaxed)
                 / d.audio.seek_handle.channels as usize;
@@ -1605,7 +1606,7 @@ fn tui_loop(
             let remaining_secs = d.total_duration - pos_dur.as_secs_f64();
             let warning_active = !d.audio.player.is_paused()
                 && remaining_secs < display_cfg.warning_threshold_secs as f64;
-            let beat_index     = smooth_pos_ns.div_euclid(beat_period.as_nanos() as i128);
+            let beat_index     = scales::beat_index(scales::Samples(display_samp), d.audio.sample_rate as f64, d.tempo.offset_ms, beat_period.as_nanos() as i128);
             let warn_beat_on   = warning_active && (beat_index % 2 == 0);
             Some(DeckRenderState { display_samp, view_pos_samp, analysing, spinner_active, beat_on, warning_active, warn_beat_on })
         });
@@ -1822,15 +1823,14 @@ fn tui_loop(
             // visible. A detached view shows the grid in any mode — it exists for
             // grid inspection.
             for (slot, deck) in [(0usize, d0.as_ref()), (1, d1.as_ref()), (2, d2.as_ref())] {
-                let (base_bpm, offset_ms, mut analysing, cue_sample) = deck.map(|d| {
+                let (base_bpm, offset_ms, mut analysing) = deck.map(|d| {
                     let analysing = d.mode == DeckMode::Playback || !d.tempo.analysis_settled;
-                    (d.tempo.base_bpm, d.tempo.offset_ms, analysing, d.cue_sample)
-                }).unwrap_or((0.0, 0, true, None));
+                    (d.tempo.base_bpm, d.tempo.offset_ms, analysing)
+                }).unwrap_or((0.0, 0, true));
                 if detached.as_ref().is_some_and(|v| v.deck == slot) {
                     analysing = deck.is_some_and(|d| !d.tempo.analysis_settled);
                 }
                 shared_renderer.store_tempo(slot, base_bpm, offset_ms, analysing);
-                shared_renderer.store_cue(slot, cue_sample);
             }
 
             // Detail info bar
@@ -1856,8 +1856,7 @@ fn tui_loop(
 
             // Extract tick viewport slices for both shared tick rows.
             let tick_w = area_tick_ab.width as usize;
-            let tick_centre = ((tick_w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
-                .clamp(0, tick_w.saturating_sub(1));
+            let tick_centre = scales::playhead_centre_col(tick_w, display_cfg.playhead_position);
             let pos_a = render[0].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
             let pos_b = render[1].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
             let pos_c = render[2].as_ref().map(|rs| rs.view_pos_samp).unwrap_or(0);
@@ -1906,22 +1905,20 @@ fn tui_loop(
                         if dur.0 > 0.0 {
                             let blue = Style::default().fg(GRID_BLUE);
                             let anchor = d0.as_ref().and_then(|d| d.anchor_sample);
+                            let ov_map = scales::OverviewMap::new(area_overview_a.width as usize, dur.0, dur.1 as f64);
                             if let Some(anchor) = anchor {
-                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
-                                let col = (frac * area_overview_a.width as f64) as u16;
-                                overlay_marker_column(frame, area_overview_a, col.min(area_overview_a.width.saturating_sub(1)), blue);
+                                let col = ov_map.col(scales::Samples(anchor as f64)) as u16;
+                                overlay_marker_column(frame, area_overview_a, col, blue);
                             }
-                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
-                            let ccol = (cfrac * area_overview_a.width as f64) as u16;
-                            overlay_marker_column(frame, area_overview_a, ccol.min(area_overview_a.width.saturating_sub(1)),
+                            let ccol = ov_map.col(scales::Samples(v.cursor)) as u16;
+                            overlay_marker_column(frame, area_overview_a, ccol,
                                 Style::default().fg(GRID_CURSOR));
                             // The anchor marked in the detail view too — against the same
                             // whole-column view position the waveform renders at, so the
                             // marker can't wiggle relative to the wave while scrolling.
                             if let (Some(rs), Some(anchor)) = (render[0].as_ref(), anchor) {
                                 let w = area_detail_a.width as usize;
-                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
-                                    .clamp(0, w.saturating_sub(1));
+                                let centre = scales::playhead_centre_col(w, display_cfg.playhead_position);
                                 if let Some(col) = sample_screen_col(&buf_a, rs.view_pos_samp, centre, anchor) {
                                     if col >= 0 && (col as usize) < w {
                                         overlay_marker_column(frame, area_detail_a, col as u16, blue);
@@ -1970,22 +1967,20 @@ fn tui_loop(
                         if dur.0 > 0.0 {
                             let blue = Style::default().fg(GRID_BLUE);
                             let anchor = d1.as_ref().and_then(|d| d.anchor_sample);
+                            let ov_map = scales::OverviewMap::new(area_overview_b.width as usize, dur.0, dur.1 as f64);
                             if let Some(anchor) = anchor {
-                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
-                                let col = (frac * area_overview_b.width as f64) as u16;
-                                overlay_marker_column(frame, area_overview_b, col.min(area_overview_b.width.saturating_sub(1)), blue);
+                                let col = ov_map.col(scales::Samples(anchor as f64)) as u16;
+                                overlay_marker_column(frame, area_overview_b, col, blue);
                             }
-                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
-                            let ccol = (cfrac * area_overview_b.width as f64) as u16;
-                            overlay_marker_column(frame, area_overview_b, ccol.min(area_overview_b.width.saturating_sub(1)),
+                            let ccol = ov_map.col(scales::Samples(v.cursor)) as u16;
+                            overlay_marker_column(frame, area_overview_b, ccol,
                                 Style::default().fg(GRID_CURSOR));
                             // The anchor marked in the detail view too — against the same
                             // whole-column view position the waveform renders at, so the
                             // marker can't wiggle relative to the wave while scrolling.
                             if let (Some(rs), Some(anchor)) = (render[1].as_ref(), anchor) {
                                 let w = area_detail_b.width as usize;
-                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
-                                    .clamp(0, w.saturating_sub(1));
+                                let centre = scales::playhead_centre_col(w, display_cfg.playhead_position);
                                 if let Some(col) = sample_screen_col(&buf_b, rs.view_pos_samp, centre, anchor) {
                                     if col >= 0 && (col as usize) < w {
                                         overlay_marker_column(frame, area_detail_b, col as u16, blue);
@@ -2034,22 +2029,20 @@ fn tui_loop(
                         if dur.0 > 0.0 {
                             let blue = Style::default().fg(GRID_BLUE);
                             let anchor = d2.as_ref().and_then(|d| d.anchor_sample);
+                            let ov_map = scales::OverviewMap::new(area_overview_c.width as usize, dur.0, dur.1 as f64);
                             if let Some(anchor) = anchor {
-                                let frac = anchor as f64 / dur.1 as f64 / dur.0;
-                                let col = (frac * area_overview_c.width as f64) as u16;
-                                overlay_marker_column(frame, area_overview_c, col.min(area_overview_c.width.saturating_sub(1)), blue);
+                                let col = ov_map.col(scales::Samples(anchor as f64)) as u16;
+                                overlay_marker_column(frame, area_overview_c, col, blue);
                             }
-                            let cfrac = v.cursor / dur.1 as f64 / dur.0;
-                            let ccol = (cfrac * area_overview_c.width as f64) as u16;
-                            overlay_marker_column(frame, area_overview_c, ccol.min(area_overview_c.width.saturating_sub(1)),
+                            let ccol = ov_map.col(scales::Samples(v.cursor)) as u16;
+                            overlay_marker_column(frame, area_overview_c, ccol,
                                 Style::default().fg(GRID_CURSOR));
                             // The anchor marked in the detail view too — against the same
                             // whole-column view position the waveform renders at, so the
                             // marker can't wiggle relative to the wave while scrolling.
                             if let (Some(rs), Some(anchor)) = (render[2].as_ref(), anchor) {
                                 let w = area_detail_c.width as usize;
-                                let centre = ((w as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
-                                    .clamp(0, w.saturating_sub(1));
+                                let centre = scales::playhead_centre_col(w, display_cfg.playhead_position);
                                 if let Some(col) = sample_screen_col(&buf_c, rs.view_pos_samp, centre, anchor) {
                                     if col >= 0 && (col as usize) < w {
                                         overlay_marker_column(frame, area_detail_c, col as u16, blue);
@@ -2259,7 +2252,8 @@ fn tui_loop(
                             {
                                 let click_col = col - rect.x as usize;
                                 let target_secs = if d.mode == DeckMode::Playback {
-                                    d.total_duration * click_col as f64 / rect.width as f64
+                                    scales::OverviewMap::new(rect.width as usize, d.total_duration, d.audio.sample_rate as f64)
+                                        .secs_at_col(click_col).0
                                 } else {
                                     d.display.last_bar_cols.iter()
                                         .zip(d.display.last_bar_times.iter())
@@ -2806,7 +2800,7 @@ session.save();
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     if d.audio.player.is_paused() {
                                         let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
-                                        let step = dot_step_secs(zoom_secs, dc, speed);
+                                        let step = column_step_secs(zoom_secs, dc, speed, d.audio.sample_rate as f64);
                                         let target = (current - step).max(0.0);
                                         d.audio.seek_handle.set_position(target);
                                         d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
@@ -2836,7 +2830,7 @@ session.save();
                                     let current = d.audio.seek_handle.current_pos().as_secs_f64();
                                     if d.audio.player.is_paused() {
                                         let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
-                                        let step = dot_step_secs(zoom_secs, dc, speed);
+                                        let step = column_step_secs(zoom_secs, dc, speed, d.audio.sample_rate as f64);
                                         let target = (current + step).min(d.total_duration);
                                         d.audio.seek_handle.set_position(target);
                                         d.display.smooth_display_samp += (target - current) * d.audio.sample_rate as f64;
@@ -2987,7 +2981,7 @@ session.save();
                                     // One character-cell of audio per press: the detached
                                     // view is on the character grid, so a press is always
                                     // exactly one visible step.
-                                    let char_samps = 2.0 * dot_step_secs(zoom_secs, dc, speed) * sr;
+                                    let char_samps = column_step_secs(zoom_secs, dc, speed, sr) * sr;
                                     let step_samps = match keymap.get(&KeyBinding::Key(key.code)) {
                                         Some(Action::NudgeForward)    => Some(char_samps),
                                         Some(Action::NudgeBackward)   => Some(-char_samps),
@@ -3323,9 +3317,7 @@ session.save();
                                 d.metronome_mode = !d.metronome_mode;
                                 d.last_metro_beat = if d.metronome_mode {
                                     let beat_period = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
-                                    let ns = (d.display.smooth_display_samp / d.audio.sample_rate as f64 * 1_000_000_000.0) as i128
-                                        - d.tempo.offset_ms as i128 * 1_000_000;
-                                    Some(ns.div_euclid(beat_period.as_nanos() as i128))
+                                    Some(scales::beat_index(scales::Samples(d.display.smooth_display_samp), d.audio.sample_rate as f64, d.tempo.offset_ms, beat_period.as_nanos() as i128))
                                 } else { None };
                             }
                         }
@@ -3516,7 +3508,7 @@ session.save();
                                         if now.duration_since(last).as_secs_f64() > 2.0 { d.tap.tap_times.clear(); }
                                     }
                                     let display_samp = render[selected_deck].as_ref().map_or(d.display.smooth_display_samp, |rs| rs.display_samp);
-                                    d.tap.tap_times.push(display_samp / d.audio.sample_rate as f64);
+                                    d.tap.tap_times.push(scales::Samples(display_samp).to_secs(d.audio.sample_rate as f64).0);
                                     d.tap.last_tap_wall = Some(now);
                                     if d.tap.tap_times.len() >= 8 {
                                         let (tapped_bpm, tapped_offset_raw) = compute_tap_bpm_offset(&d.tap.tap_times);
@@ -3576,7 +3568,8 @@ session.save();
 fn service_deck_frame(
     slot: usize,
     decks: &mut [Option<Deck>; 3],
-    col_secs: f64,
+    zoom_secs: f32,
+    screen_cols: usize,
     elapsed: f64,
     elapsed_uncapped: f64,
     mixer: &rodio::mixer::Mixer,
@@ -3711,12 +3704,12 @@ fn service_deck_frame(
     let large_drift = drift.abs() > d.audio.sample_rate as f64 * 0.1;
     let paused_snap  = d.audio.player.is_paused() && d.nudge == 0 && drift.abs() > 1.0;
     if large_drift || paused_snap {
-        // Snap to nearest half-column so sub_col is stable after seeks.
+        // Snap to the nearest dot of the buffer's own truncated grid, so
+        // sub_col parity is stable after seeks.
         let speed = if d.mode == DeckMode::Playback { d.tempo.playback_speed as f64 } else { (d.tempo.bpm / d.tempo.base_bpm) as f64 };
-        let col_samp_f64 = col_secs * d.audio.sample_rate as f64 * speed;
-        let half_col = col_samp_f64 / 2.0;
-        d.display.smooth_display_samp = if half_col > 0.0 {
-            (display_pos_samp as f64 / half_col).round() * half_col
+        d.display.smooth_display_samp = if screen_cols > 0 {
+            let spc = scales::DetailMap::col_width(zoom_secs as f64, d.audio.sample_rate as f64, speed, screen_cols);
+            scales::DetailMap::snap(scales::Samples(display_pos_samp as f64), spc, 2.0).0
         } else {
             display_pos_samp as f64
         };
@@ -3730,11 +3723,7 @@ fn service_deck_frame(
 
     // Metronome: fire from buffer write position so the click arrives at the speaker on the beat.
     let beat_period = Duration::from_secs_f64(60.0 / d.tempo.base_bpm as f64);
-    let metro_beat_index = {
-        let ns = (d.display.smooth_display_samp / d.audio.sample_rate as f64 * 1_000_000_000.0) as i128
-            - d.tempo.offset_ms as i128 * 1_000_000;
-        ns.div_euclid(beat_period.as_nanos() as i128)
-    };
+    let metro_beat_index = scales::beat_index(scales::Samples(d.display.smooth_display_samp), d.audio.sample_rate as f64, d.tempo.offset_ms, beat_period.as_nanos() as i128);
     if d.metronome_mode && !d.audio.player.is_paused() {
         if d.last_metro_beat != Some(metro_beat_index) {
             play_click_tone(mixer, d.audio.sample_rate);

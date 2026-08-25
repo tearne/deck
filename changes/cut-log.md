@@ -21,3 +21,7 @@ The paragraph justifying the single stream restated the single-slot-overwrite ar
 ## 2026-08-25 — map, Keymap node
 
 Cut "home to newer features ... today, clip vocabulary to come" from the Alt-layer sentence, and "open browser" from the Space examples (the view actions cover it). The map is a spec, not a history: which layer is newer, and what may arrive later, carries no decision about what exists. Same pattern as 2026-08-12: **history references in describes-what-exists documents**.
+
+## 2026-08-25 — map, Detail Waveform callout
+
+Cut "three rounds of fixes established this" when the one-mapping rule became compiler-enforced. The lesson's provenance is history; the archived measurement-scales change carries it. Same pattern: **history references in describes-what-exists documents**.

@@ -378,7 +378,7 @@ pub(crate) fn rederive_grid_phase(d: &mut Deck) {
         let anchor_ms = anchor as f64 / d.audio.sample_rate as f64 * 1000.0;
         d.tempo.offset_ms = anchor_ms.rem_euclid(beat_period_ms).round() as i64;
     } else if let Some(cue_samp) = d.cue_sample {
-        let cue_ms = cue_samp as f64 / d.audio.sample_rate as f64 * 1000.0;
+        let cue_ms = crate::scales::Samples(cue_samp as f64).to_ms(d.audio.sample_rate as f64).0;
         d.tempo.offset_ms = (cue_ms.rem_euclid(beat_period_ms) / 10.0).round() as i64 * 10;
     }
 }
@@ -683,7 +683,7 @@ pub(crate) fn ghost_landings(
         for (action, signed) in [(fwd, jump), (back, -jump)] {
             let Some(key) = bare_key_char(keymap, action) else { continue };
             if let Some(t) = jump_landing(current, signed, playing, deck.total_duration) {
-                out.push(GhostLanding { sample: (t * sr) as usize, key });
+                out.push(GhostLanding { sample: crate::scales::Secs(t).to_samples(sr).0 as usize, key });
             }
         }
     }

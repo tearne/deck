@@ -372,7 +372,7 @@ The correction is applied to the running value itself, so it accumulates frame t
 
 When the playhead falls between character boundaries, braille bit manipulation shifts the display by half a character width, giving sub-character precision without re-rendering.
 
-Applies only while playing: a paused deck snaps to the dot grid and the detached view to the character grid, so static views render deterministically with nothing left to per-frame rounding.
+Applies only while playing: paused decks and the detached view both snap to the character grid — whole-column marks like the cue can't render to dot precision.
 
 > [!IMPORTANT] Char colour on half-col shift — since braille can move by half a column but colour characters can't, we assume that colour changes are gradual enough to avoid obvious misalignment.
 
@@ -425,7 +425,7 @@ Switching preserves audio speed — no audible change on the cycle. Each deck's 
 Fine position adjustment with two sub-modes (jump and warp):
 
 - **While playing** — jump mode seeks ±10ms per press; warp mode applies a continuous ±10% speed offset while held, returning to normal on release
-- **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump moves one display dot per press — the step follows zoom, finer zoomed in; warp fires continuously at half-column intervals as the position drifts
+- **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump moves one display column per press — the step follows zoom, finer zoomed in; warp fires continuously at half-column intervals as the position drifts
 
 Warp needs the terminal to report key releases; where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
 
@@ -574,7 +574,7 @@ The grid is tuned by looking, not computed: detach the deck's view (`g`) — pla
 
 While detached, jumps and nudge steer the cursor, ticks show in any deck mode as blue `─┴─` glyph markers, and all grid edits are the normal live ones. The anchor persists per track as the grid's phase source; re-entering resumes refinement.
 
-> [!IMPORTANT] Anything drawn against the detail waveform — anchors, markers-to-come — must go through the **one shared sample-to-column mapping** the waveform and ticks themselves render with, never its own arithmetic. Independently-derived positions disagree at column-rounding boundaries and wiggle as the view scrolls; three rounds of fixes established this.
+> [!IMPORTANT] Anything drawn against the detail waveform — anchors, marks — must go through the **one shared sample-to-column mapping** the waveform and ticks themselves render with, never its own arithmetic. Column values can only be produced by that mapping, so the rule holds at compile time; independently-derived positions would disagree at column-rounding boundaries and wiggle as the view scrolls.
 
 **Detail**
 

@@ -104,15 +104,20 @@ pub(crate) struct BrailleBuffer {
     pub(crate) grid:            Vec<Vec<u8>>, // rows × buf_cols braille bytes
     pub(crate) bass_ratio:      Vec<f32>,     // per-column bass ratio in [0,1]: 1=bass, 0=treble
     pub(crate) tick:            Vec<u8>,      // per-column tick byte: 0x47=left sub-col, 0xB8=right, 0=none
-    pub(crate) cue_buf_col:     Option<usize>,// buffer column of cue point, None if unset or out of range
     pub(crate) buf_cols:        usize,        // total buffer width (= 5 × screen_cols)
     pub(crate) anchor_sample:   usize,        // mono-sample index at the buffer centre
     pub(crate) samples_per_col: usize,        // mono samples represented by each buffer column
 }
 
 impl BrailleBuffer {
+    /// The buffer's own sample↔column mapping — the only source of detail
+    /// columns for content rendered against this buffer.
+    pub(crate) fn map(&self) -> crate::scales::DetailMap {
+        crate::scales::DetailMap::new(self.anchor_sample, self.samples_per_col, self.buf_cols)
+    }
+
     pub(crate) fn empty() -> Self {
-        Self { grid: Vec::new(), bass_ratio: Vec::new(), tick: Vec::new(), cue_buf_col: None, buf_cols: 0, anchor_sample: 0, samples_per_col: 1 }
+        Self { grid: Vec::new(), bass_ratio: Vec::new(), tick: Vec::new(), buf_cols: 0, anchor_sample: 0, samples_per_col: 1 }
     }
 }
 
@@ -154,9 +159,6 @@ pub(crate) struct SharedDetailRenderer {
     pub(crate) offset_ms_b:    Arc<AtomicI64>,
     pub(crate) offset_ms_c:    Arc<AtomicI64>,
     /// Cue point in mono samples; -1 when unset.
-    pub(crate) cue_sample_a:   Arc<AtomicI64>,
-    pub(crate) cue_sample_b:   Arc<AtomicI64>,
-    pub(crate) cue_sample_c:   Arc<AtomicI64>,
     /// Gain trim as f32 bits; 1.0 when unset. Peaks in the buffer are pre-scaled
     /// by this value so the detail waveform height tracks gain visually.
     pub(crate) gain_a:         Arc<AtomicU32>,
@@ -202,9 +204,6 @@ impl SharedDetailRenderer {
         let offset_ms_a    = Arc::new(AtomicI64::new(0));
         let offset_ms_b    = Arc::new(AtomicI64::new(0));
         let offset_ms_c    = Arc::new(AtomicI64::new(0));
-        let cue_sample_a   = Arc::new(AtomicI64::new(-1));
-        let cue_sample_b   = Arc::new(AtomicI64::new(-1));
-        let cue_sample_c   = Arc::new(AtomicI64::new(-1));
         let gain_a         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let gain_b         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let gain_c         = Arc::new(AtomicU32::new(1.0f32.to_bits()));
@@ -245,9 +244,6 @@ impl SharedDetailRenderer {
             let off_ms_a_bg  = Arc::clone(&offset_ms_a);
             let off_ms_b_bg  = Arc::clone(&offset_ms_b);
             let off_ms_c_bg  = Arc::clone(&offset_ms_c);
-            let cue_a_bg     = Arc::clone(&cue_sample_a);
-            let cue_b_bg     = Arc::clone(&cue_sample_b);
-            let cue_c_bg     = Arc::clone(&cue_sample_c);
             let gain_a_bg    = Arc::clone(&gain_a);
             let gain_b_bg    = Arc::clone(&gain_b);
             let gain_c_bg    = Arc::clone(&gain_c);
@@ -264,7 +260,6 @@ impl SharedDetailRenderer {
                 let gen_at  = [gen_a_bg, gen_b_bg, gen_c_bg];
                 let bpm_at  = [bpm_a_bg, bpm_b_bg, bpm_c_bg];
                 let off_at  = [off_ms_a_bg, off_ms_b_bg, off_ms_c_bg];
-                let cue_at  = [cue_a_bg, cue_b_bg, cue_c_bg];
                 let gain_at = [gain_a_bg, gain_b_bg, gain_c_bg];
                 let shared  = [shared_a_bg, shared_b_bg, shared_c_bg];
 
@@ -275,16 +270,9 @@ impl SharedDetailRenderer {
                     col_samp: usize,
                     bpm_raw:  u32,
                     off_ms:   i64,
-                    cue_raw:  i64,
                     gain_raw: u32,
                 }
 
-                fn compute_cue_buf_col(cue_raw: i64, anchor: usize, col_samp: usize, buf_cols: usize) -> Option<usize> {
-                    if cue_raw < 0 || col_samp == 0 { return None; }
-                    let delta = cue_raw - anchor as i64;
-                    let col = buf_cols as i64 / 2 + delta.div_euclid(col_samp as i64);
-                    if col >= 0 && (col as usize) < buf_cols { Some(col as usize) } else { None }
-                }
                 fn scale_peaks(peaks: Vec<(f32, f32)>, g: f32) -> Vec<(f32, f32)> {
                     peaks.into_iter().map(|(mn, mx)| (mn * g, mx * g)).collect()
                 }
@@ -327,7 +315,7 @@ impl SharedDetailRenderer {
                         let sr    = sr_at[slot].load(Ordering::Relaxed);
                         let ratio = ratio[slot].load(Ordering::Relaxed) as f64 / 65536.0;
                         // col_samp scaled by speed ratio so column grid is in playback-time space.
-                        let col_samp = ((zoom_secs * sr as f64 * ratio) as usize / cols).max(1);
+                        let col_samp = crate::scales::DetailMap::col_width(zoom_secs, sr as f64, ratio, cols);
                         let ch  = ch_at[slot].load(Ordering::Relaxed).max(1);
                         let pos = pos_at[slot].load(Ordering::Relaxed) / ch;
                         let load_gen = gen_at[slot].load(Ordering::Relaxed);
@@ -335,7 +323,6 @@ impl SharedDetailRenderer {
                             col_samp,
                             bpm_raw:  bpm_at[slot].load(Ordering::Relaxed),
                             off_ms:   off_at[slot].load(Ordering::Relaxed),
-                            cue_raw:  cue_at[slot].load(Ordering::Relaxed),
                             gain_raw: gain_at[slot].load(Ordering::Relaxed),
                         };
 
@@ -362,8 +349,8 @@ impl SharedDetailRenderer {
 
                         let rebuild_start = std::time::Instant::now();
                         let wf: Option<Arc<WaveformData>> = wf[slot].lock().unwrap().clone();
-                        let anchor = (pos / col_samp) * col_samp;
-                        let tick_view_start = anchor as f64 - (buf_cols / 2) as f64 * col_samp as f64;
+                        let anchor = crate::scales::DetailMap::grid_origin_floor(crate::scales::Samples(pos as f64), col_samp).0 as usize;
+                        let map = crate::scales::DetailMap::new(anchor, col_samp, buf_cols);
                         let gain = f32::from_bits(params.gain_raw);
                         let buf = Arc::new(BrailleBuffer {
                             grid: render_braille(
@@ -371,9 +358,8 @@ impl SharedDetailRenderer {
                                 rows, buf_cols,
                             ),
                             bass_ratio:      spectral_for_slot(&wf, anchor, col_samp, buf_cols, sr as u32),
-                            tick:            compute_tick_display(buf_cols, col_samp, tick_view_start,
+                            tick:            compute_tick_display(&map,
                                                  params.bpm_raw == 0, f32::from_bits(params.bpm_raw), sr as u32, params.off_ms),
-                            cue_buf_col:     compute_cue_buf_col(params.cue_raw, anchor, col_samp, buf_cols),
                             buf_cols,
                             anchor_sample:   anchor,
                             samples_per_col: col_samp,
@@ -405,7 +391,6 @@ impl SharedDetailRenderer {
             load_gen_a, load_gen_b, load_gen_c,
             bpm_a, bpm_b, bpm_c,
             offset_ms_a, offset_ms_b, offset_ms_c,
-            cue_sample_a, cue_sample_b, cue_sample_c,
             gain_a, gain_b, gain_c,
             shared_a, shared_b, shared_c,
             _stop_guard: stop_guard,
@@ -445,15 +430,6 @@ impl SharedDetailRenderer {
             0 => self.speed_ratio_a.store(ratio, Ordering::Relaxed),
             1 => self.speed_ratio_b.store(ratio, Ordering::Relaxed),
             _ => self.speed_ratio_c.store(ratio, Ordering::Relaxed),
-        }
-    }
-
-    pub(crate) fn store_cue(&self, slot: usize, cue_sample: Option<usize>) {
-        let raw = cue_sample.map_or(-1, |s| s as i64);
-        match slot {
-            0 => self.cue_sample_a.store(raw, Ordering::Relaxed),
-            1 => self.cue_sample_b.store(raw, Ordering::Relaxed),
-            _ => self.cue_sample_c.store(raw, Ordering::Relaxed),
         }
     }
 
@@ -555,11 +531,6 @@ impl SharedDetailRenderer {
             (1, 2) | (2, 1) => (&self.offset_ms_b, &self.offset_ms_c),
             _ => (&self.offset_ms_a, &self.offset_ms_c),
         };
-        let (cue_x, cue_y) = match (slot_x, slot_y) {
-            (0, 1) | (1, 0) => (&self.cue_sample_a, &self.cue_sample_b),
-            (1, 2) | (2, 1) => (&self.cue_sample_b, &self.cue_sample_c),
-            _ => (&self.cue_sample_a, &self.cue_sample_c),
-        };
         let (gain_x, gain_y) = match (slot_x, slot_y) {
             (0, 1) | (1, 0) => (&self.gain_a, &self.gain_b),
             (1, 2) | (2, 1) => (&self.gain_b, &self.gain_c),
@@ -579,7 +550,6 @@ impl SharedDetailRenderer {
         swap_atomic_usize(gen_x, gen_y);
         swap_atomic_u32(bpm_x, bpm_y);
         swap_atomic_i64(off_x, off_y);
-        swap_atomic_i64(cue_x, cue_y);
         swap_atomic_u32(gain_x, gain_y);
         swap_buffer(buf_x, buf_y);
     }
@@ -925,19 +895,10 @@ pub(crate) fn refresh_overview_for_deck(
 ) {
     use crate::deck::{OverviewCache, OverviewKey};
     let overview_width  = rect.width  as usize;
-    let playhead_frac = if deck.total_duration == 0.0 {
-        0.0
-    } else {
-        (display_samp / deck.audio.sample_rate as f64 / deck.total_duration).clamp(0.0, 1.0)
-    };
-    let playhead_col = ((playhead_frac * overview_width as f64).round() as usize)
-        .min(overview_width.saturating_sub(1));
-    let cue_col: Option<usize> = deck.cue_sample.map(|samp| {
-        let frac = (samp as f64 / deck.audio.sample_rate as f64
-            / deck.total_duration).clamp(0.0, 1.0);
-        ((frac * overview_width as f64).round() as usize)
-            .min(overview_width.saturating_sub(1))
-    });
+    let ov_map = crate::scales::OverviewMap::new(overview_width, deck.total_duration, deck.audio.sample_rate as f64);
+    let playhead_col = ov_map.col(crate::scales::Samples(display_samp));
+    let cue_col: Option<usize> = deck.cue_sample
+        .map(|samp| ov_map.col(crate::scales::Samples(samp as f64)));
     let ghosts = overview_ghost_labels(deck, ghosts, playhead_col, overview_width);
     let key = OverviewKey {
         width: overview_width,
@@ -971,10 +932,10 @@ fn overview_ghost_labels(
     playhead_col: usize,
     overview_width: usize,
 ) -> Vec<(usize, char)> {
+    let ov_map = crate::scales::OverviewMap::new(overview_width, deck.total_duration, deck.audio.sample_rate as f64);
     let mut labels: Vec<(usize, char)> = Vec::new();
     for g in landings {
-        let frac = (g.sample as f64 / deck.audio.sample_rate as f64 / deck.total_duration).clamp(0.0, 1.0);
-        let col = ((frac * overview_width as f64).round() as usize).min(overview_width.saturating_sub(1));
+        let col = ov_map.col(crate::scales::Samples(g.sample as f64));
         if col == playhead_col || labels.iter().any(|&(c, _)| c == col) { continue; }
         labels.push((col, g.key));
     }
@@ -1248,16 +1209,11 @@ pub(crate) fn sample_screen_col(
     sample: usize,
 ) -> Option<i64> {
     if buf.samples_per_col == 0 || buf.buf_cols == 0 { return None; }
-    let half_col   = buf.samples_per_col as f64 / 2.0;
-    let delta      = view_pos as i64 - buf.anchor_sample as i64;
-    let delta_half = (delta as f64 / half_col).round() as i64;
-    let delta_cols = delta_half.div_euclid(2);
-    let sub_col    = delta_half.rem_euclid(2) != 0;
-    let viewport_off = buf.buf_cols as i64 / 2 + delta_cols - centre_col as i64;
-    let view_start = buf.anchor_sample as f64 - (buf.buf_cols / 2) as f64 * buf.samples_per_col as f64;
-    let disp_half  = ((sample as f64 - view_start) / half_col).round() as i64;
-    let screen_half = disp_half - 2 * viewport_off - (sub_col as i64);
-    Some((screen_half + 1).div_euclid(2))
+    Some(buf.map().content_screen_col(
+        crate::scales::Samples(sample as f64),
+        crate::scales::Samples(view_pos as f64),
+        centre_col,
+    ))
 }
 
 pub(crate) fn extract_tick_viewport(
@@ -1269,17 +1225,10 @@ pub(crate) fn extract_tick_viewport(
     if buf.samples_per_col == 0 || buf.tick.is_empty() {
         return vec![0u8; width];
     }
-    let half_col      = buf.samples_per_col as f64 / 2.0;
-    let delta         = display_pos as i64 - buf.anchor_sample as i64;
-    let delta_half    = (delta as f64 / half_col).round() as i64;
-    let delta_cols    = delta_half.div_euclid(2);
-    let sub_col       = delta_half.rem_euclid(2) != 0;
-    let viewport_off  = buf.buf_cols as i64 / 2 + delta_cols - centre_col as i64;
-    let need          = if sub_col { width + 1 } else { width };
-    if viewport_off < 0 || (viewport_off as usize) + need > buf.buf_cols {
+    let Some(vp) = buf.map().viewport(crate::scales::Samples(display_pos as f64), centre_col, width) else {
         return vec![0u8; width];
-    }
-    let start = viewport_off as usize;
+    };
+    let (start, sub_col) = (vp.start, vp.sub_col);
     if !sub_col {
         buf.tick[start..start + width].to_vec()
     } else {
@@ -1296,32 +1245,29 @@ pub(crate) fn extract_tick_viewport(
 }
 
 pub(crate) fn compute_tick_display(
-    detail_width:    usize,
-    samples_per_col: usize,
-    marker_view_start: f64,
-    analysing:       bool,
-    base_bpm:        f32,
-    sample_rate:     u32,
-    offset_ms:       i64,
+    map:         &crate::scales::DetailMap,
+    analysing:   bool,
+    base_bpm:    f32,
+    sample_rate: u32,
+    offset_ms:   i64,
 ) -> Vec<u8> {
-    if analysing || samples_per_col == 0 {
-        return vec![0u8; detail_width];
+    use crate::scales::{Ms, Samples};
+    let width = map.buf_cols();
+    if analysing || map.samples_per_col() == 0 {
+        return vec![0u8; width];
     }
-    let mut row = vec![0u8; detail_width];
-    let samples_per_col    = samples_per_col as f64;
-    let half_samples_per_col = samples_per_col / 2.0;
-    let beat_period_samp   = 60.0 / base_bpm as f64 * sample_rate as f64;
-    let offset_samp        = offset_ms as f64 / 1000.0 * sample_rate as f64;
-    let view_end           = marker_view_start + detail_width as f64 * samples_per_col;
-    let n_start            = ((marker_view_start - offset_samp) / beat_period_samp).floor() as i64 - 1;
-    let mut t_samp         = offset_samp + n_start as f64 * beat_period_samp;
+    let mut row = vec![0u8; width];
+    let beat_period_samp = 60.0 / base_bpm as f64 * sample_rate as f64;
+    let offset_samp      = Ms(offset_ms as f64).to_samples(sample_rate as f64).0;
+    let view_start       = map.buffer_start().0;
+    let view_end         = map.buffer_end().0;
+    // Beat-grid origin: floored to the first beat at or before the buffer's
+    // left edge — a grid origin, not a mark, so floor is the named policy.
+    let n_start = ((view_start - offset_samp) / beat_period_samp).floor() as i64 - 1;
+    let mut t_samp = offset_samp + n_start as f64 * beat_period_samp;
     while t_samp <= view_end {
-        let disp_half = ((t_samp - marker_view_start) / half_samples_per_col).round() as i64;
-        if disp_half >= 0 {
-            let col = (disp_half / 2) as usize;
-            if col < detail_width {
-                row[col] = if disp_half % 2 != 0 { 0xB8 } else { 0x47 };
-            }
+        if let Some((col, right_dot)) = map.dot_in_buffer(Samples(t_samp)) {
+            row[col] = if right_dot { 0xB8 } else { 0x47 };
         }
         t_samp += beat_period_samp;
     }
@@ -1458,11 +1404,14 @@ pub(crate) fn bar_tick_cols(bpm: f64, offset_ms: i64, total_secs: f64, cols: usi
     let mut bars: u32 = 4;
     loop {
         let bar_period = bars as f64 * 4.0 * beat_secs; // bars × 4 beats/bar × secs/beat
+        // Bar-grid origin: ceil to the first bar inside the track — a grid
+        // origin, not a mark, so ceil is the named policy.
         let n_start = (-offset_secs / bar_period).ceil() as i64;
+        let ov_map = crate::scales::OverviewMap::new(cols, total_secs, 1.0);
         let mut result: Vec<(usize, f64)> = Vec::new();
         let mut t = offset_secs + n_start as f64 * bar_period;
         while t <= total_secs {
-            let col = ((t / total_secs) * cols as f64).round() as usize;
+            let col = ov_map.col_of_frac(t / total_secs);
             if col < cols {
                 result.push((col, t.max(0.0)));
             }
@@ -1494,37 +1443,31 @@ pub(crate) fn render_detail_waveform(
     let detail_width      = detail_area.width  as usize;
     let detail_panel_rows = detail_area.height as usize;
     let buf = Arc::clone(buf);
-    let centre_col = ((detail_width as f64 * display_cfg.playhead_position as f64 / 100.0) as usize)
-        .clamp(0, detail_width.saturating_sub(1));
+    let centre_col = crate::scales::playhead_centre_col(detail_width, display_cfg.playhead_position);
 
     let lut = SpectralLut::new(palette, 1.0);
-    let half_col_samp: f64 = buf.samples_per_col as f64 / 2.0;
-    let mut sub_col = false;
-    let viewport_start: Option<usize> = if buf.buf_cols >= detail_width && buf.samples_per_col > 0 {
-        let delta = display_pos_samp as i64 - buf.anchor_sample as i64;
-        let delta_half = (delta as f64 / half_col_samp).round() as i64;
-        sub_col = delta_half % 2 != 0;
-        let delta_cols = delta_half.div_euclid(2);
-        let viewport_offset = buf.buf_cols as i64 / 2 + delta_cols - centre_col as i64;
-        let need = if sub_col { detail_width + 1 } else { detail_width };
-        if viewport_offset >= 0 && (viewport_offset as usize) + need <= buf.buf_cols {
-            let start = viewport_offset as usize;
-            deck.display.last_viewport_start = start;
-            Some(start)
-        } else {
-            None
-        }
+    let map = buf.map();
+    let viewport = if buf.buf_cols >= detail_width && buf.samples_per_col > 0 {
+        map.viewport(crate::scales::Samples(display_pos_samp as f64), centre_col, detail_width)
     } else {
         None
     };
+    let sub_col = viewport.is_some_and(|vp| vp.sub_col);
+    let viewport_start: Option<usize> = viewport.map(|vp| {
+        deck.display.last_viewport_start = vp.start;
+        vp.start
+    });
 
-    // Cue column is pre-computed by the background thread in buffer space, using the
-    // same anchor and samples_per_col as the waveform and ticks. Map to screen here
-    // via viewport_start — identical to how ticks are handled.
-    let cue_screen_col: Option<usize> = viewport_start.and_then(|vs| {
-        buf.cue_buf_col.and_then(|cbc| {
-            if cbc >= vs && cbc < vs + detail_width { Some(cbc - vs) } else { None }
-        })
+    // The cue is a content-anchored mark: its sample maps through the same
+    // DetailMap as the waveform, ticks and playhead — equal samples, equal
+    // columns, by construction.
+    let cue_screen_col: Option<usize> = viewport_start.and(deck.cue_sample).and_then(|cue| {
+        let col = map.content_screen_col(
+            crate::scales::Samples(cue as f64),
+            crate::scales::Samples(display_pos_samp as f64),
+            centre_col,
+        );
+        if col >= 0 && (col as usize) < detail_width { Some(col as usize) } else { None }
     });
 
     let ghost_labels = detail_ghost_labels(&buf, display_pos_samp, centre_col, detail_width, ghosts);
@@ -1598,10 +1541,10 @@ pub(crate) fn render_detail_waveform(
     frame.render_widget(Paragraph::new(detail_lines), detail_area);
 }
 
-/// Ghost labels by detail screen column. A ghost is a fixed distance from the
-/// playhead, which sits at `centre_col`, so it is placed as a whole-column
-/// offset from there — rounding the landing's absolute sample separately from
-/// the playhead's made the two flip against each other and the label wobble.
+/// Ghost labels by detail screen column. A ghost is a playhead-anchored mark —
+/// a fixed sample distance from the playhead — so it maps through the
+/// DetailMap's relative mode: the delta rounded once, in dot units. Mapping the
+/// endpoint absolutely would oscillate at boundary crossings while scrolling.
 /// Off-screen landings and the playhead's own column are dropped, and the
 /// larger jump keeps a shared column.
 fn detail_ghost_labels(
@@ -1612,10 +1555,11 @@ fn detail_ghost_labels(
     landings: &[GhostLanding],
 ) -> Vec<(usize, char)> {
     if buf.samples_per_col == 0 { return Vec::new(); }
+    let map = buf.map();
     let mut labels: Vec<(usize, char)> = Vec::new();
     for g in landings {
-        let offset_cols = ((g.sample as f64 - view_pos as f64) / buf.samples_per_col as f64).round() as i64;
-        let col = centre_col as i64 + offset_cols;
+        let delta = crate::scales::Samples(g.sample as f64 - view_pos as f64);
+        let col = map.playhead_anchored_col(delta, centre_col);
         if col < 0 || col >= width as i64 { continue; }
         let col = col as usize;
         if col == centre_col || labels.iter().any(|&(c, _)| c == col) { continue; }
