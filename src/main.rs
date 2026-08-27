@@ -1415,11 +1415,79 @@ fn tui_loop(
     let mut space_repeat_suppressed = false;
     let mut space_saw_event_this_frame = false;
     let mut pending_quit: Option<Instant> = None;
+    // How many decks exist (1-3); a pending dismissal awaiting its `y`.
+    let mut deck_count: usize = (session.get_deck_count() as usize).clamp(1, 3);
+    let mut pending_dismiss: Option<usize> = None;
     // The restore offer stands from startup until anything is loaded; while it
     // stands the saved decks are left untouched so `Alt+r` has something to restore.
     let mut restore_offered = session.has_deck_snapshot();
     let mut bpm_ramp_started: Option<Instant> = None;
     let mut bpm_ramp_last: Option<Instant> = None;
+
+    // Remove deck `n` outright and reflow the ones above it down — the swap
+    // machinery moves whole deck states, and the per-slot attachments (PFL
+    // routing, in-flight loads, detached view, load-confirm) move with them.
+    macro_rules! dismiss_deck {
+        ($n:expr) => {{
+            let n: usize = $n;
+            if let Some(d) = decks[n].take() {
+                d.audio.player.stop();
+                if let Some(ref hash) = d.tempo.analysis_hash {
+                    track_data.set(hash.clone(), cache_entry_for_deck(&d));
+                }
+            }
+            pending_loads[n] = None;
+            if detached.as_ref().is_some_and(|v| v.deck == n) { detached = None; }
+            for i in n..2 {
+                decks.swap(i, i + 1);
+                pending_loads.swap(i, i + 1);
+                shared_renderer.swap_slots(i, i + 1);
+                if let Some(v) = detached.as_mut() { if v.deck == i + 1 { v.deck = i; } }
+            }
+            let pfl = pfl_active_deck.load(Ordering::Relaxed);
+            if pfl == n { pfl_active_deck.store(usize::MAX, Ordering::Relaxed); }
+            else if pfl > n && pfl < 3 { pfl_active_deck.store(pfl - 1, Ordering::Relaxed); }
+            match browser_load_confirm.as_ref().map(|(_, d)| *d) {
+                Some(d) if d == n => browser_load_confirm = None,
+                Some(d) if d > n => {
+                    if let Some((l, _)) = browser_load_confirm.take() {
+                        browser_load_confirm = Some((l, d - 1));
+                    }
+                }
+                _ => {}
+            }
+            deck_count -= 1;
+            selected_deck = n.min(deck_count - 1);
+            session.set_deck_count(deck_count as u8);
+            stream.emit(Event::new(Source::App, Severity::Info, format!("deck {} destroyed", n + 1)));
+        }};
+    }
+
+    // Alt+digit, same meaning everywhere: select an existing deck, summon the
+    // next one, or dismiss the selected one (empty at once; loaded-paused via
+    // `y`; playing refused; the last deck stays).
+    macro_rules! handle_deck_key {
+        ($n:expr) => {{
+            let n: usize = $n;
+            if n < deck_count {
+                if selected_deck != n {
+                    selected_deck = n;
+                } else if deck_count == 1 {
+                    stream.emit(Event::new(Source::App, Severity::Warning, "The last deck stays"));
+                } else if decks[n].as_ref().is_some_and(|d| !d.audio.player.is_paused()) {
+                    stream.emit(Event::new(Source::Deck(n), Severity::Warning, "Playing — pause before destroying"));
+                } else if decks[n].is_none() && pending_loads[n].is_none() {
+                    dismiss_deck!(n);
+                } else {
+                    pending_dismiss = Some(n);
+                }
+            } else if n == deck_count {
+                deck_count = n + 1;
+                selected_deck = n;
+                session.set_deck_count(deck_count as u8);
+            }
+        }};
+    }
 
     'tui: loop {
         frame_count += 1;
@@ -1713,11 +1781,13 @@ fn tui_loop(
             const OV_MIN:  u16 = 2;
             let det_max = detail_height as u16;
             let ih = inner.height;
-            let fixed = 4_u16; // global + detail-info + shared-tick×2
+            let n_decks = deck_count as u16;
+            let tick_rows = n_decks.saturating_sub(1);
+            let fixed = 2 + tick_rows; // global + detail-info + shared ticks
 
             // Cap detail_height to what the current terminal can actually display,
             // so HeightIncrease never outruns the screen.
-            max_det_h = (ih.saturating_sub(fixed + OV_MIN * 3) / 3) as usize;
+            max_det_h = (ih.saturating_sub(fixed + OV_MIN * n_decks) / n_decks) as usize;
 
             // Compute a unified pool for each waveform type so all three decks always
             // get the same height (no sequential-allocation asymmetry).
@@ -1725,24 +1795,24 @@ fn tui_loop(
             // Phase 2: overviews compress; detail stays at DET_MIN.
             // Phase 3: items fall off bottom (heights stay at minimums).
             let total_variable = ih.saturating_sub(fixed);
-            let det_full = det_max * 3;
-            let ov_full  = OV_MAX * 3;
+            let det_full = det_max * n_decks;
+            let ov_full  = OV_MAX * n_decks;
 
             let (all_det, all_ov) = if total_variable >= det_full + ov_full {
                 (det_full, ov_full)
-            } else if total_variable >= DET_MIN * 3 + ov_full {
+            } else if total_variable >= DET_MIN * n_decks + ov_full {
                 (total_variable - ov_full, ov_full)
-            } else if total_variable >= DET_MIN * 3 + OV_MIN * 3 {
-                (DET_MIN * 3, total_variable - DET_MIN * 3)
+            } else if total_variable >= DET_MIN * n_decks + OV_MIN * n_decks {
+                (DET_MIN * n_decks, total_variable - DET_MIN * n_decks)
             } else {
-                let d = total_variable.min(DET_MIN * 3);
+                let d = total_variable.min(DET_MIN * n_decks);
                 (d, total_variable.saturating_sub(d))
             };
 
             // Clamp to minimums: the pool calculation drives compression through
             // the normal phase range; below minimum, take_h handles falloff.
-            let effective_det_h = (all_det / 3).max(DET_MIN).min(det_max);
-            let effective_ov_h  = (all_ov  / 3).clamp(OV_MIN, OV_MAX);
+            let effective_det_h = (all_det / n_decks).max(DET_MIN).min(det_max);
+            let effective_ov_h  = (all_ov  / n_decks).clamp(OV_MIN, OV_MAX);
 
             // Allocate rows top-to-bottom using take_exact for all waveform rows:
             // each waveform shows at its computed height or disappears entirely.
@@ -1758,17 +1828,21 @@ fn tui_loop(
                 *rem = rem.saturating_sub(n);
                 actual
             };
+            // Absent decks contribute zero-height rows; the freed space falls
+            // through to the bottom pane.
+            let det_for = |i: usize| if i < deck_count { effective_det_h } else { 0 };
+            let ov_for  = |i: usize| if i < deck_count { effective_ov_h } else { 0 };
             let hh = [
                 take(&mut rem, 1),                       // 0:  global bar
                 take(&mut rem, 1),                       // 1:  detail info bar
-                take_consume(&mut rem, effective_det_h),  // 2:  detail A
-                take(&mut rem, 1),                       // 3:  shared tick row A/B
-                take_consume(&mut rem, effective_det_h),  // 4:  detail B
-                take(&mut rem, 1),                       // 5:  shared tick row B/C
-                take_consume(&mut rem, effective_det_h),  // 6:  detail C
-                take_consume(&mut rem, effective_ov_h),   // 7:  overview A
-                take_consume(&mut rem, effective_ov_h),   // 8:  overview B
-                take_consume(&mut rem, effective_ov_h),   // 9:  overview C
+                take_consume(&mut rem, det_for(0)),       // 2:  detail A
+                take(&mut rem, if deck_count >= 2 { 1 } else { 0 }), // 3: shared tick row A/B
+                take_consume(&mut rem, det_for(1)),       // 4:  detail B
+                take(&mut rem, if deck_count >= 3 { 1 } else { 0 }), // 5: shared tick row B/C
+                take_consume(&mut rem, det_for(2)),       // 6:  detail C
+                take_consume(&mut rem, ov_for(0)),        // 7:  overview A
+                take_consume(&mut rem, ov_for(1)),        // 8:  overview B
+                take_consume(&mut rem, ov_for(2)),        // 9:  overview C
                 rem,                                     // 10: spacer (leftover)
             ];
 
@@ -2082,6 +2156,9 @@ fn tui_loop(
                 let (global_line, bar_style) = if let Some(quit_expires) = pending_quit {
                     notification_bar("Track is playing — quit?  [y] quit   [Esc/n] cancel", Some(quit_expires),
                         Color::Rgb(255, 180, 180), Color::Rgb(100, 20, 20), Color::Rgb(200, 120, 120))
+                } else if let Some(n) = pending_dismiss {
+                    let (fg, bg, cd) = severity_colors(Severity::Error);
+                    notification_bar(&format!("Destroy deck {}?  [y] destroy   [Esc/n] cancel", n + 1), None, fg, bg, cd)
                 } else if let Some((_, deck)) = browser_load_confirm {
                     let (fg, bg, cd) = severity_colors(Severity::Error);
                     notification_bar(&format!("Deck {} is playing — load?  [y] load   [Esc/n] cancel", deck + 1), None, fg, bg, cd)
@@ -2334,15 +2411,27 @@ session.save();
                     }
                     continue;
                 }
+                // Dismiss confirmation — y confirms, anything else cancels; ahead
+                // of browser handling so the prompt works whichever side is focused.
+                if pending_dismiss.is_some() && key.kind == KeyEventKind::Press {
+                    let n = pending_dismiss.take().unwrap();
+                    if confirms_destructive(key.code) {
+                        dismiss_deck!(n);
+                    }
+                    continue;
+                }
                 // Deck selection cycles inside the browser too — intercepted ahead of
                 // panel and browser handling so search mode never sees the keys.
-                if browser_state.is_some() && key.kind == KeyEventKind::Press && key.modifiers.contains(KeyModifiers::ALT) {
+                // Only while the browser holds the keyboard: unfocused, the deck
+                // path handles Alt chords in full (including deck dismissal).
+                if browser_state.is_some() && view_focused && key.kind == KeyEventKind::Press && key.modifiers.contains(KeyModifiers::ALT) {
                     match keymap.get(&KeyBinding::AltChord(key.code)) {
-                        Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; continue; }
-                        Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; continue; }
-                        Some(Action::SelectDeck1) => { selected_deck = 0; continue; }
-                        Some(Action::SelectDeck2) => { selected_deck = 1; continue; }
-                        Some(Action::SelectDeck3) => { selected_deck = 2; continue; }
+                        Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % deck_count; continue; }
+                        Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + deck_count - 1) % deck_count; continue; }
+                        // Same meaning as at the decks: select, summon, or dismiss.
+                        Some(Action::SelectDeck1) => { handle_deck_key!(0); continue; }
+                        Some(Action::SelectDeck2) => { handle_deck_key!(1); continue; }
+                        Some(Action::SelectDeck3) => { handle_deck_key!(2); continue; }
                         Some(Action::PanelWiden)  => { session.step_panel_pct(5);  continue; }
                         Some(Action::PanelNarrow) => { session.step_panel_pct(-5); continue; }
                         _ => {}
@@ -3083,6 +3172,19 @@ session.save();
                     } else {
                         keymap.get(&KeyBinding::Key(key.code))
                     };
+                    // Alt+N: select an existing deck, summon the next one, or
+                    // dismiss the selected one (empty at once; loaded-paused via
+                    // `y`; playing refused; the last deck stays).
+                    let deck_key = match action {
+                        Some(Action::SelectDeck1) => Some(0usize),
+                        Some(Action::SelectDeck2) => Some(1),
+                        Some(Action::SelectDeck3) => Some(2),
+                        _ => None,
+                    };
+                    if let Some(n) = deck_key {
+                        handle_deck_key!(n);
+                        continue 'tui;
+                    }
                     match action {
                     Some(Action::Quit) => {
                         // Esc's ladder: with a non-art view showing, close it back
@@ -3125,16 +3227,22 @@ session.save();
                             for event in restore_session_decks(session.deck_snapshots(), &mut pending_loads, ws.as_deref()) {
                                 stream.emit(event);
                             }
-                            selected_deck = session.saved_selected_deck();
+                            let needed = session.deck_snapshots().iter().enumerate()
+                                .filter_map(|(i, snap)| snap.as_ref().map(|_| i + 1))
+                                .max().unwrap_or(1);
+                            if needed > deck_count {
+                                deck_count = needed;
+                                session.set_deck_count(deck_count as u8);
+                            }
+                            selected_deck = session.saved_selected_deck().min(deck_count - 1);
                             restore_offered = false;
                             stream.dismiss_hint();
                         }
                     }
-                    Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % 3; }
-                    Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + 2) % 3; }
-                    Some(Action::SelectDeck1) => { selected_deck = 0; }
-                    Some(Action::SelectDeck2) => { selected_deck = 1; }
-                    Some(Action::SelectDeck3) => { selected_deck = 2; }
+                    // Handled by the deck_key intercept above; unreachable here.
+                    Some(Action::SelectDeck1) | Some(Action::SelectDeck2) | Some(Action::SelectDeck3) => {}
+                    Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % deck_count; }
+                    Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + deck_count - 1) % deck_count; }
                     Some(Action::PlaylistNext) => {
                         let ws = session.workspace().map(|p| p.to_path_buf());
                         play_playlist_step(selected_deck, true, &mut decks, &mut pending_loads, ws.as_deref());
@@ -3290,14 +3398,20 @@ session.save();
                         }
                     }
                     Some(Action::SwapDeck1Deck2) => {
-                        decks.swap(0, 1);
-                        shared_renderer.swap_slots(0, 1);
-                        if selected_deck == 0 { selected_deck = 1; } else if selected_deck == 1 { selected_deck = 0; }
+                        if deck_count >= 2 {
+                            decks.swap(0, 1);
+                            pending_loads.swap(0, 1);
+                            shared_renderer.swap_slots(0, 1);
+                            if selected_deck == 0 { selected_deck = 1; } else if selected_deck == 1 { selected_deck = 0; }
+                        }
                     }
                     Some(Action::SwapDeck2Deck3) => {
-                        decks.swap(1, 2);
-                        shared_renderer.swap_slots(1, 2);
-                        if selected_deck == 1 { selected_deck = 2; } else if selected_deck == 2 { selected_deck = 1; }
+                        if deck_count >= 3 {
+                            decks.swap(1, 2);
+                            pending_loads.swap(1, 2);
+                            shared_renderer.swap_slots(1, 2);
+                            if selected_deck == 1 { selected_deck = 2; } else if selected_deck == 2 { selected_deck = 1; }
+                        }
                     }
                     Some(Action::PitchUp) => {
                         if let Some(ref mut d) = decks[selected_deck] {

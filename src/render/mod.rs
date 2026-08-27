@@ -1632,7 +1632,7 @@ pub(crate) fn render_shared_tick_row(
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
     const TEXT_W: u16 = 89;
-    const TEXT_H: u16 = 15;
+    const TEXT_H: u16 = 16;
     const H_PAD:  u16 = 2;
     const V_PAD:  u16 = 1;
 
@@ -1701,10 +1701,16 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Span::styled("╭ [Shift]", sh),
     ]);
     // Row 15: second footer line — ╰ [Space] flush-right
-    let row15_text = "/ art  Sp+= swap1↔2  Sp+- swap2↔3  Sp+\\ metro  Alt+j/k/1/2/3 deck  Alt+r restore";
+    let row15_text = "/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\\ metro";
     let row15 = Line::from(vec![
         Span::styled(format!("{row15_text:<w$}", w = (TEXT_W - 9) as usize), ba),
         Span::styled("╰ [Space]", sp),
+    ]);
+    // Row 16: the Alt layer — sparse enough for one line of its own.
+    let al = Style::default().fg(Color::Rgb(170, 110, 150));  // Alt layer: muted plum
+    let row16 = Line::from(vec![
+        Span::styled(format!("{:<w$}", "Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   h/l panel   r restore", w = (TEXT_W - 9) as usize), al),
+        Span::styled("  [Alt]  ", al),
     ]);
 
     let lines: Vec<Line<'static>> = vec![
@@ -1724,6 +1730,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         Line::from(Span::styled(
             format!("{:<w$}│ [Bare] ", "` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit", w = (TEXT_W - 9) as usize), ba)),
         row15,
+        row16,
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),

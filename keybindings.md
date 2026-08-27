@@ -22,7 +22,8 @@ The spatial layout below matches the in-app help overlay (`?`). Keys up to the m
         ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%
 ──────────────────────────────────────────────────────────────────────────────── ╭ [Shift]
 ` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit         │ [Bare]
-/ art  Sp+= swap1↔2  Sp+- swap2↔3  Sp+\ metro  Alt+j/k/1/2/3 deck  Alt+r restore  ╰ [Space]
+/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\ metro                             ╰ [Space]
+Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   h/l panel   r restore   [Alt]
 ```
 
 Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
@@ -63,14 +64,14 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `select_next_deck` | `alt+j`, `alt+down` | Cycle to next deck (wraps; works in the browser too) |
 | `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
-| `select_deck_1` / `_2` / `_3` | `alt+1` / `alt+2` / `alt+3` | Select that deck directly (works in the browser too) |
+| `select_deck_<n>` | `alt+<n>` (n = 1–3) | Select that deck; summon it if it's the next one; on the selected deck, destroy it (empty at once, loaded-paused via `y`, playing refused; last deck stays). Works identically in the browser |
 | `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
 | `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
 | `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |
 | `playlist_next` | *(unbound)* | Selected deck: skip to next playlist track |
 | `playlist_prev` | *(unbound)* | Selected deck: skip to previous playlist track |
-| `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 |
-| `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 |
+| `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 (needs both to exist) |
+| `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 (needs both to exist) |
 
 ### Transport
 
@@ -150,17 +151,17 @@ Actions are prefixed `deck1_`, `deck2_`, `deck3_`. Default keys are shown left t
 
 | Action template | Deck 1 | Deck 2 | Deck 3 | Description |
 |-----------------|--------|--------|--------|-------------|
-| `deckN_level_up` | `j` | `k` | `l` | Level +5% |
-| `deckN_level_down` | `m` | `,` | `.` | Level −5% |
-| `deckN_level_max` | `space+j` | `space+k` | `space+l` | Level to 100% |
-| `deckN_level_min` | `space+m` | `space+,` | `space+.` | Level to 0% |
-| `deckN_gain_increase` | `J` | `K` | `L` | Gain +1 dB |
-| `deckN_gain_decrease` | `M` | `<` | `>` | Gain −1 dB |
-| `deckN_filter_increase` | `7` | `8` | `9` | Filter toward HPF |
-| `deckN_filter_decrease` | `u` | `i` | `o` | Filter toward LPF |
-| `deckN_filter_reset` | `space+7`, `space+u` | `space+8`, `space+i` | `space+9`, `space+o` | Filter to flat |
-| `deckN_filter_slope_increase` | `&` | `*` | `(` | Filter slope up |
-| `deckN_filter_slope_decrease` | `U` | `I` | `O` | Filter slope down |
+| `deck<n>_level_up` | `j` | `k` | `l` | Level +5% |
+| `deck<n>_level_down` | `m` | `,` | `.` | Level −5% |
+| `deck<n>_level_max` | `space+j` | `space+k` | `space+l` | Level to 100% |
+| `deck<n>_level_min` | `space+m` | `space+,` | `space+.` | Level to 0% |
+| `deck<n>_gain_increase` | `J` | `K` | `L` | Gain +1 dB |
+| `deck<n>_gain_decrease` | `M` | `<` | `>` | Gain −1 dB |
+| `deck<n>_filter_increase` | `7` | `8` | `9` | Filter toward HPF |
+| `deck<n>_filter_decrease` | `u` | `i` | `o` | Filter toward LPF |
+| `deck<n>_filter_reset` | `space+7`, `space+u` | `space+8`, `space+i` | `space+9`, `space+o` | Filter to flat |
+| `deck<n>_filter_slope_increase` | `&` | `*` | `(` | Filter slope up |
+| `deck<n>_filter_slope_decrease` | `U` | `I` | `O` | Filter slope down |
 
 ## Fixed Keys
 

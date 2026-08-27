@@ -358,7 +358,12 @@ struct SessionFile {
     /// Bottom view showing: 0 art, 1 browser, 2 help, 3 messages.
     #[serde(default)]
     bottom_view: u8,
+    /// How many decks exist (1–3).
+    #[serde(default = "default_deck_count")]
+    deck_count: u8,
 }
+
+fn default_deck_count() -> u8 { 1 }
 
 impl Default for SessionFile {
     fn default() -> Self {
@@ -372,6 +377,7 @@ impl Default for SessionFile {
             selected_deck: 0,
             ghosts_on: false,
             bottom_view: 0,
+            deck_count: 1,
         }
     }
 }
@@ -422,6 +428,7 @@ pub(crate) struct SessionState {
     selected_deck: usize,
     ghosts_on: bool,
     bottom_view: u8,
+    deck_count: u8,
     position_written_at: [Option<std::time::Instant>; 3],
     dirty_at: Option<std::time::Instant>,
 }
@@ -450,6 +457,7 @@ impl SessionState {
             selected_deck: file.selected_deck.min(2),
             ghosts_on: file.ghosts_on,
             bottom_view: file.bottom_view.min(3),
+            deck_count: file.deck_count.clamp(1, 3),
             position_written_at: [None; 3],
             dirty_at: None,
         }
@@ -543,6 +551,15 @@ impl SessionState {
     }
 
 
+    pub(crate) fn get_deck_count(&self) -> u8 {
+        self.deck_count
+    }
+
+    pub(crate) fn set_deck_count(&mut self, count: u8) {
+        self.deck_count = count.clamp(1, 3);
+        self.mark_dirty();
+    }
+
     pub(crate) fn get_bottom_view(&self) -> u8 {
         self.bottom_view
     }
@@ -593,6 +610,7 @@ impl SessionState {
             selected_deck: self.selected_deck,
             ghosts_on: self.ghosts_on,
             bottom_view: self.bottom_view,
+            deck_count: self.deck_count,
         }
     }
 

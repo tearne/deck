@@ -13,7 +13,7 @@
 [Down](#album-art)
 [Down](#audio-latency)
 
-A minimal terminal DJ player. Modern DJ equipment does so much it removes the fun — deck blends the convenience of software with the skill of beat-matching and mixing. Three decks, real-time waveform visualisation, nudge/speed adjustment, unified filter, optional BPM.
+A minimal terminal DJ player. Modern DJ equipment does so much it removes the fun — deck blends the convenience of software with the skill of beat-matching and mixing. One to three decks, summoned as the set needs them, real-time waveform visualisation, nudge/speed adjustment, unified filter, optional BPM.
 
 Deliberately excludes loops, effects, jump points, samples, and track recommendations.
 
@@ -125,7 +125,9 @@ Each deck is independent, one selected at a time. The selected deck receives all
 
 The selected deck is marked by a yellow accent bar in the left gutter, beside both its detail waveform and its overview.
 
-Two decks can be swapped wholesale — their entire state trades places, and selection follows the content so the operator keeps controlling the same track. The others start empty, loaded by selecting them and opening the browser. Audio latency is a single global value shared across all decks.
+Between one and three decks exist, numbered contiguously. `select_deck_<n>` selects deck n, summons it when it's the next one, and on the selected deck destroys it — an empty deck at once, a loaded paused one behind a `y` confirmation, a playing one refused; the last deck always stays. Destroying reflows the decks above down into the gap, everything moving with them. The count persists between runs; a fresh session starts with one deck.
+
+Two decks can be swapped wholesale when both exist — their entire state trades places, and selection follows the content so the operator keeps controlling the same track. A summoned deck starts empty, loaded by selecting it and opening the browser. Audio latency is a single global value shared across all decks.
 
 
 # Track Loading
@@ -633,7 +635,7 @@ Filter slope is switchable per deck between 12 dB/oct (2-pole) and 24 dB/oct (4-
 
 **Detail**
 
-Config actions: `deckN_filter_increase`, `deckN_filter_decrease`, `deckN_filter_reset`, `deckN_filter_slope_increase`, `deckN_filter_slope_decrease`. Crossfades from previous filter state to new state over 256 samples. Biquad history (per-channel) is pre-allocated.
+Config actions: `deck<n>_filter_increase`, `deck<n>_filter_decrease`, `deck<n>_filter_reset`, `deck<n>_filter_slope_increase`, `deck<n>_filter_slope_decrease`. Crossfades from previous filter state to new state over 256 samples. Biquad history (per-channel) is pre-allocated.
 
 **See also**
 
@@ -652,7 +654,7 @@ Two independent volume controls per deck:
 
 **Detail**
 
-Config actions: `deckN_level_up`, `deckN_level_down`, `deckN_gain_increase`, `deckN_gain_decrease`.
+Config actions: `deck<n>_level_up`, `deck<n>_level_down`, `deck<n>_gain_increase`, `deck<n>_gain_decrease`.
 
 The limiter is a soft-knee curve (cubic Hermite) over the zone [1.0 − 0.3, 1.0]: slope 1 at entry, slope 0 at the ceiling. Hard clip above 1.0. Applied per sample after gain scaling.
 
@@ -766,7 +768,7 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 
 [Up](#browser)
 
-`` ` `` in command mode rotates the browser through the directories of the tracks currently loaded on the decks, highlighting each track, and loops back to the directory it opened at — a quick way to return to where a loaded track lives while browsing. A subtle chip at the top names each stop: "Working directory", then "Deck N directory".
+`` ` `` in command mode rotates the browser through the directories of the tracks currently loaded on the decks, highlighting each track, and loops back to the directory it opened at — a quick way to return to where a loaded track lives while browsing. A subtle chip at the top names each stop: "Working directory", then "Deck <n> directory".
 
 
 # Tag Compliance
@@ -941,7 +943,7 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
-Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck selection, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
+Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck selection and count, panel width, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
 
 Esc steps up one level per press: dismiss a prompt, back out a browser mode, hand the keyboard to the decks, close the view to art. Repeats and releases are ignored, so holding it doesn't race through the levels.
 
@@ -995,7 +997,7 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 [Up](#application)
 [Down](#session-restore)
 
-Global player state remembered between runs for [Session Restore](#session-restore): last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, the showing bottom view, whether ghost playheads are shown, and the decks as they were.
+Global player state remembered between runs for [Session Restore](#session-restore): last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, the showing bottom view, the deck count, whether ghost playheads are shown, and the decks as they were.
 
 Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the panic log and error reports (see [Fault Capture](#fault-capture)).
 
