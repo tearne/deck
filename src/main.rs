@@ -1371,9 +1371,6 @@ fn tui_loop(
     // The permanent context panel and the browser path its preview last reflected.
     let mut panel: Panel = Panel::Preview(Preview::Empty);
     let mut panel_source: Option<PathBuf> = None;
-    // Rotation index for the `` ` `` jump through loaded-track locations (0 = the
-    // opening directory); reset when the browser opens.
-    let mut location_cycle: usize = 0;
     // A pending load awaiting confirmation because its target deck is playing.
     let mut browser_load_confirm: Option<(BrowserLoad, usize)> = None;
     // Tag-compliance scan: a per-session cache keyed by path, and the current
@@ -1395,8 +1392,7 @@ fn tui_loop(
     if bottom_view == BottomView::Browser {
         let workspace = session.workspace().map(|p| p.to_path_buf());
         match BrowserState::new(browser_dir.clone(), workspace) {
-            Ok(mut bs) => {
-                bs.location_label = Some("Working directory".to_string());
+            Ok(bs) => {
                 browser_state = Some(bs);
                 preview_output = Some(PreviewOutput::new(mixer));
             }
@@ -1567,7 +1563,7 @@ fn tui_loop(
                         if let Some(bs) = browser_state.as_mut() {
                             if let Some(d) = decks[slot].as_ref() {
                                 if let Some(dir) = d.path.parent() {
-                                    let _ = bs.go_to(dir.to_path_buf(), Some(&d.path), format!("Deck {} directory", slot + 1));
+                                    let _ = bs.go_to(dir.to_path_buf(), Some(&d.path), None);
                                 }
                             }
                         }
@@ -2608,7 +2604,7 @@ session.save();
                                     // it's not lost and is ready to load a track.
                                     let dir = pp.path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
                                     let rpl = pp.path.clone();
-                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), String::new()); }
+                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), None); }
                                     transition = Some(Panel::Browse(pp.clone()));
                                     consumed = true;
                                 }
@@ -2616,7 +2612,7 @@ session.save();
                                     // Abort: discard the buffer, but still land back on the playlist.
                                     let dir = pp.path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
                                     let rpl = pp.path.clone();
-                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), String::new()); }
+                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), None); }
                                     transition = Some(Panel::Preview(Preview::Empty));
                                     consumed = true;
                                 }
@@ -2730,21 +2726,17 @@ session.save();
                             bs.mode = BrowserMode::Command;
                             let _ = bs.refresh();
                         }
-                        Some(BrowserResult::CycleLocation) => {
-                            // Locations: the opening directory (home), then each loaded
-                            // deck's track directory (with the track highlighted).
-                            let mut locations: Vec<(PathBuf, Option<PathBuf>, String)> =
-                                vec![(browser_dir.clone(), None, "Working directory".to_string())];
-                            for slot in 0..3 {
-                                if let Some(ref d) = decks[slot] {
-                                    if let Some(parent) = d.path.parent() {
-                                        locations.push((parent.to_path_buf(), Some(d.path.clone()), format!("Deck {} directory", slot + 1)));
-                                    }
+                        Some(BrowserResult::JumpToSelected) => {
+                            // Single fire: land on the selected deck's track.
+                            // Alt+j/k change which deck that is; an empty deck
+                            // has nowhere to jump, and says so.
+                            if let Some(ref d) = decks[selected_deck] {
+                                if let Some(parent) = d.path.parent() {
+                                    let _ = bs.go_to(parent.to_path_buf(), Some(&d.path.clone()), None);
                                 }
+                            } else {
+                                stream.emit(Event::new(Source::Deck(selected_deck), Severity::Info, "Nothing loaded to jump to"));
                             }
-                            location_cycle = (location_cycle + 1) % locations.len();
-                            let (dir, highlight, label) = &locations[location_cycle];
-                            let _ = bs.go_to(dir.clone(), highlight.as_deref(), label.clone());
                         }
                         Some(BrowserResult::WorkspaceSet(path)) => {
                             session.set_workspace(&path);
@@ -2806,7 +2798,7 @@ session.save();
                         match create_playlist_file(&dir, &name) {
                             // Highlight the new file; the hover preview then opens its editor.
                             Ok(path) => if let Some(bs) = browser_state.as_mut() {
-                                let _ = bs.go_to(dir.clone(), Some(&path), format!("new playlist: {name}"));
+                                let _ = bs.go_to(dir.clone(), Some(&path), Some(format!("new playlist: {name}")));
                             },
                             Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
                         }
@@ -3125,7 +3117,7 @@ session.save();
                                             if let Some(dir) = track_path.parent() {
                                                 let workspace = session.workspace().map(|p| p.to_path_buf());
                                                 if let Ok(mut bs) = BrowserState::new(dir.to_path_buf(), workspace) {
-                                                    let _ = bs.go_to(dir.to_path_buf(), Some(&track_path), "rename offer".to_string());
+                                                    let _ = bs.go_to(dir.to_path_buf(), Some(&track_path), Some("rename offer".to_string()));
                                                     bs.compliance_on = true;
                                                     if bs.compliance_on {
                                                         edit_resume_anchor = bs.entries.iter().position(|e| e.path == track_path)
@@ -3264,10 +3256,8 @@ session.save();
                             let mut bs = BrowserState::new(browser_dir.clone(), workspace)?;
                             bs.mode = last_browser_mode;
                             // Opens at the working directory (cycle position 0); show its label.
-                            bs.location_label = Some("Working directory".to_string());
-                            browser_state = Some(bs);
+                                        browser_state = Some(bs);
                             preview_output = Some(PreviewOutput::new(mixer));
-                            location_cycle = 0;
                             bottom_view = BottomView::Browser;
                             view_focused = true;
                         }

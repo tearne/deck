@@ -768,7 +768,7 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 
 [Up](#browser)
 
-`` ` `` in command mode rotates the browser through the directories of the tracks currently loaded on the decks, highlighting each track, and loops back to the directory it opened at — a quick way to return to where a loaded track lives while browsing. A subtle chip at the top names each stop: "Working directory", then "Deck <n> directory".
+`` ` `` in command mode jumps straight to the **selected deck's** track, highlighting it — `Alt+j`/`Alt+k` (or `Alt+<n>`) re-aim it before the press. One fire, no cycle; an empty deck answers with a notification.
 
 
 # Tag Compliance

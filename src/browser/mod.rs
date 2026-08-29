@@ -258,14 +258,14 @@ impl BrowserState {
 
     /// Jump to `dir`, optionally placing the cursor on `highlight`, and record
     /// `label` naming the stop (shown at the top until the next manual navigation).
-    pub(crate) fn go_to(&mut self, dir: std::path::PathBuf, highlight: Option<&std::path::Path>, label: String) -> io::Result<()> {
+    pub(crate) fn go_to(&mut self, dir: std::path::PathBuf, highlight: Option<&std::path::Path>, label: Option<String>) -> io::Result<()> {
         self.navigate_to(dir)?;
         if let Some(p) = highlight {
             if let Some(i) = self.entries.iter().position(|e| e.path == p) {
                 self.cursor = i;
             }
         }
-        self.location_label = Some(label);
+        self.location_label = label;
         Ok(())
     }
 
@@ -362,8 +362,8 @@ pub(crate) enum BrowserResult {
     WorkspaceSet(std::path::PathBuf),
     WorkspaceCleared,
     ReturnToPlayer,
-    /// `` ` `` — rotate to the next loaded-track location (handled by the player loop).
-    CycleLocation,
+    /// `` ` `` — jump to the selected deck's track (handled by the player loop).
+    JumpToSelected,
 }
 
 /// The colour identity and key legend for a mode — the visual signal of which
@@ -705,7 +705,7 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         // `n` starts a new playlist (name prompt), which opens in the editor.
         KeyCode::Char('n') => { state.name_prompt = Some(String::new()); Ok(None) }
         // Rotate through loaded-track locations.
-        KeyCode::Char('`') => Ok(Some(BrowserResult::CycleLocation)),
+        KeyCode::Char('`') => Ok(Some(BrowserResult::JumpToSelected)),
         // Tag-compliance cleanup mode. Editing a flagged file auto-advances to the
         // next one, so no explicit jump key is needed.
         KeyCode::Char('T') => { state.compliance_on = !state.compliance_on; Ok(None) }

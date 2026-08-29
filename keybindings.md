@@ -189,6 +189,7 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 | `@` | Set current directory as workspace |
 | `'` | Clear workspace |
 | `#` | Preview highlighted track |
+| `` ` `` | Jump to the selected deck's track |
 | `n` | New playlist (prompts for a name) |
 | `Esc` | Back out one level: clear search term → command mode → keyboard to the decks |
 | `Tab` | Keyboard to the decks (browser stays showing) |
