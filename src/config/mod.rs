@@ -11,7 +11,6 @@ pub(crate) enum Action {
     // Selected-deck controls
     SelectNextDeck, SelectPrevDeck,
     SelectDeck1, SelectDeck2, SelectDeck3,
-    PlaylistNext, PlaylistPrev,
     PlayPause, OpenBrowser,
     PitchUp, PitchDown, PitchReset,
     BpmTap, MetronomeToggle, GhostsToggle, SessionRestore,
@@ -74,8 +73,6 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("select_deck_1",       Action::SelectDeck1),
     ("select_deck_2",       Action::SelectDeck2),
     ("select_deck_3",       Action::SelectDeck3),
-    ("playlist_next",       Action::PlaylistNext),
-    ("playlist_prev",       Action::PlaylistPrev),
     ("play_pause",          Action::PlayPause),
     ("open_browser",        Action::OpenBrowser),
     ("pitch_up",            Action::PitchUp),

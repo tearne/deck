@@ -191,20 +191,6 @@ pub(crate) struct Mixer {
     pub(crate) filter_poles: u8,
 }
 
-/// A playlist loaded on a deck: the parsed `.rpl`, the file it came from (for
-/// resilient rewrites), and the index of the entry currently on the deck.
-pub(crate) struct ActivePlaylist {
-    pub(crate) playlist: crate::playlist::Playlist,
-    pub(crate) path: std::path::PathBuf,
-    pub(crate) index: usize,
-    /// How many entries couldn't be played as of the last resolution — the deck's
-    /// answer to "is there a problem in this set?". The browser says which.
-    pub(crate) unplayable: usize,
-    /// One-shot: set at end-of-track when a next entry exists, consumed by the
-    /// main loop to trigger the auto-advance load.
-    pub(crate) advance_requested: bool,
-}
-
 pub(crate) struct Deck {
     pub(crate) filename: String,
     pub(crate) path:     std::path::PathBuf,
@@ -225,9 +211,7 @@ pub(crate) struct Deck {
     pub(crate) rename_accepted: Option<String>,
     pub(crate) cover_art: Option<Vec<u8>>,
     pub(crate) cover_art_cache: Option<(u16, u16, u8, ratatui::widgets::Paragraph<'static>)>, // (cols, rows, bright_idx, rendered art)
-    /// Set when the deck was loaded from a playlist; drives auto-advance and the
     /// position indicator. Dropped when a standalone track is loaded or the deck clears.
-    pub(crate) playlist: Option<ActivePlaylist>,
     /// A session restore's transport state, waiting for the load-time grid result
     /// so speed lands on the right BPM and position outlives the cue seek.
     pub(crate) restore_transport: Option<RestoreTransport>,
@@ -269,7 +253,6 @@ impl Deck {
             rename_accepted: None,
             cover_art: None,
             cover_art_cache: None,
-            playlist: None,
             restore_transport: None,
             audio,
             tempo: TempoState {
@@ -567,8 +550,6 @@ pub(crate) fn snapshot_of_deck(d: &Deck) -> DeckSnapshot {
     DeckSnapshot {
         path: d.path.to_string_lossy().into_owned(),
         position_secs: d.audio.seek_handle.current_pos().as_secs_f64(),
-        playlist_path: d.playlist.as_ref().map(|p| p.path.to_string_lossy().into_owned()),
-        playlist_index: d.playlist.as_ref().map_or(0, |p| p.index),
         bpm: d.tempo.bpm,
         playback_speed: d.tempo.playback_speed,
         volume: d.mixer.volume,

@@ -52,7 +52,7 @@ use config::{load_config, snap_to_fps_level, Action, FPS_LEVELS, KeyBinding};
 use deck::do_time_jump;
 use deck::{
     rederive_grid_phase, apply_offset_step, cache_entry_for_deck, compute_spectrum,
-    compute_tap_bpm_offset, ActivePlaylist, Deck, DeckAudio, DeckMode, NudgeMode,
+    compute_tap_bpm_offset, Deck, DeckAudio, DeckMode, NudgeMode,
     PALETTE_SCHEMES, TagEditorState, TAG_FIELD_LABELS,
 };
 use library::WorkspaceLibrary;
@@ -224,7 +224,6 @@ struct PendingLoad {
     total:    Arc<AtomicUsize>,
     /// When the load came from a playlist, the playlist state to attach to the
     /// deck once it finishes building.
-    attach_playlist: Option<ActivePlaylist>,
     /// When the load is a session restore, the state to put back once built.
     restore: Option<DeckSnapshot>,
 }
@@ -269,7 +268,6 @@ fn record_session_decks_at_quit(
 fn restore_session_decks(
     saved: &[Option<DeckSnapshot>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
-    workspace: Option<&Path>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     for slot in 0..3 {
@@ -280,7 +278,6 @@ fn restore_session_decks(
             continue;
         }
         let mut load = start_load(&path);
-        load.attach_playlist = snap.playlist_path.as_deref().and_then(|p| restored_playlist(Path::new(p), snap.playlist_index, workspace));
         load.restore = Some(snap.clone());
         pending_loads[slot] = Some(load);
     }
@@ -288,18 +285,6 @@ fn restore_session_decks(
 }
 
 /// Re-attach a saved playlist at its saved index, if the file still reads.
-fn restored_playlist(rpl_path: &Path, index: usize, workspace: Option<&Path>) -> Option<ActivePlaylist> {
-    let (mut playlist, _migrated) = playlist::read_playlist(rpl_path).ok()?;
-    let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
-    Some(ActivePlaylist {
-        playlist,
-        path: rpl_path.to_path_buf(),
-        index,
-        unplayable: resolved.unplayable,
-        advance_requested: false,
-    })
-}
-
 fn start_load(path: &Path) -> PendingLoad {
     let path_str = path.to_string_lossy().to_string();
     let filename = path
@@ -317,13 +302,12 @@ fn start_load(path: &Path) -> PendingLoad {
             let _ = tx.send(decode_audio(&path_str, decoded_for_thread, total_for_thread).map_err(|e| e.to_string()));
         });
     }
-    PendingLoad { filename, path: path.to_path_buf(), rx, decoded, total, attach_playlist: None, restore: None }
+    PendingLoad { filename, path: path.to_path_buf(), rx, decoded, total, restore: None }
 }
 
 /// A browser selection awaiting load onto a deck — a standalone track or a playlist.
 enum BrowserLoad {
     Track(std::path::PathBuf),
-    Playlist(std::path::PathBuf),
 }
 
 /// A playlist shown in the context panel: its entries, a cursor, and cached
@@ -384,11 +368,6 @@ impl PlaylistPanel {
         self.status.get(i).copied().unwrap_or(EntryStatus::Unavailable)
     }
 
-    /// How many entries a deck couldn't play — everything auto-advance would skip.
-    /// Needs-confirmation entries count: repairable, but not playable as they stand.
-    fn unplayable(&self) -> usize {
-        self.status.iter().filter(|s| **s != EntryStatus::Found).count()
-    }
 
     fn cursor_up(&mut self) { self.cursor = self.cursor.saturating_sub(1); }
     fn cursor_down(&mut self) {
@@ -428,29 +407,6 @@ impl PlaylistPanel {
         }
         self.cursor = at;
     }
-
-    /// The entry auto-advance would pick next: first `Found` strictly after `current`
-    /// (the playing index), or the first `Found` when nothing plays yet.
-    fn next_up(&self, current: Option<usize>) -> Option<usize> {
-        let start = current.map(|c| c + 1).unwrap_or(0);
-        (start..self.playlist.entries.len()).find(|&i| self.status_at(i) == EntryStatus::Found)
-    }
-}
-
-/// The permanent context panel. `Preview` mirrors the browser highlight (read-only);
-/// `Browse` locks onto a playlist read-only with the panel focused (Enter plays an
-/// entry); `Edit` is a transactional buffer, written only on commit.
-enum Panel {
-    Preview(Preview),
-    Browse(PlaylistPanel),
-    /// Transactional edit — a working buffer written only on commit, so aborting
-    /// just drops it. `focus` toggles between picking tracks in the browser and
-    /// reordering in the playlist.
-    Edit { panel: PlaylistPanel, focus: EditFocus },
-    /// Descriptive-fallback candidate picker for entry `entry` of `panel`. `cursor` is a
-    /// line-scroll offset; the active candidate is the one at the top of the view. `layout`
-    /// is filled by the renderer (variable-height cards) for the input's line-scroll to read.
-    Confirm { panel: PlaylistPanel, entry: usize, candidates: Vec<playlist::Candidate>, cursor: usize, layout: Rc<RefCell<ConfirmLayout>> },
 }
 
 /// The picker's variable-height card layout, published by the renderer for the input's
@@ -468,49 +424,16 @@ fn confirm_active_card(offset: usize, card_starts: &[usize]) -> usize {
     card_starts.partition_point(|&start| start < offset).min(card_starts.len().saturating_sub(1))
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum EditFocus { Browser, Playlist }
-
+/// What the Tags pane shows for the browser highlight.
 enum Preview {
     Empty,
     Track { fields: [String; 7], current_name: String, proposed_name: Option<String> },
     Playlist(PlaylistPanel),
 }
 
-impl Panel {
-    /// True when the browser should be dimmed — the playlist list is the active target
-    /// (Browse, or Edit with the playlist focused). In Edit-Browser you're picking tracks,
-    /// so the browser stays bright.
-    fn dim_browser(&self) -> bool {
-        matches!(self, Panel::Browse(_) | Panel::Confirm { .. } | Panel::Edit { focus: EditFocus::Playlist, .. })
-    }
-
-    /// The playlist the panel is showing/editing, if any.
-    fn playlist_mut(&mut self) -> Option<&mut PlaylistPanel> {
-        match self {
-            Panel::Preview(Preview::Playlist(pp)) | Panel::Browse(pp)
-            | Panel::Edit { panel: pp, .. } | Panel::Confirm { panel: pp, .. } => Some(pp),
-            _ => None,
-        }
-    }
-}
-
-/// Write `panel`'s playlist and adopt it on any deck that has it loaded, keeping
-/// the playing entry pointed at the same track by identity so audio isn't interrupted.
-fn commit_playlist(panel: &PlaylistPanel, decks: &mut [Option<Deck>; 3]) {
+/// Write `panel`'s playlist to its file.
+fn commit_playlist(panel: &PlaylistPanel) {
     let _ = playlist::write_playlist(&panel.path, &panel.playlist);
-    for deck in decks.iter_mut().flatten() {
-        let Some(active) = deck.playlist.as_mut() else { continue };
-        if active.path != panel.path { continue; }
-        let playing_hash = active.playlist.entries.get(active.index).map(|e| e.identity.content_hash.clone());
-        active.playlist = panel.playlist.clone();
-        active.index = playing_hash
-            .and_then(|h| active.playlist.entries.iter().position(|e| e.identity.content_hash == h))
-            .unwrap_or_else(|| active.index.min(active.playlist.entries.len().saturating_sub(1)));
-        // The panel has just resolved these entries; the deck takes its answer rather
-        // than screening the library again.
-        active.unplayable = panel.unplayable();
-    }
 }
 
 /// Clear the target deck and start loading the selection. Returns a message
@@ -520,57 +443,12 @@ fn apply_browser_load(
     deck: usize,
     decks: &mut [Option<Deck>; 3],
     pending_loads: &mut [Option<PendingLoad>; 3],
-    workspace: Option<&Path>,
 ) -> Option<Event> {
     if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
     decks[deck] = None;
     match load {
         BrowserLoad::Track(path) => { pending_loads[deck] = Some(start_load(&path)); None }
-        BrowserLoad::Playlist(path) => open_playlist_on_deck(&path, deck, workspace, pending_loads),
     }
-}
-
-/// Open a `.rpl` on `deck`: read it, load the first resolvable entry, and attach
-/// the playlist so auto-advance and the position indicator follow.
-fn open_playlist_on_deck(
-    rpl_path: &Path,
-    deck: usize,
-    workspace: Option<&Path>,
-    pending_loads: &mut [Option<PendingLoad>; 3],
-) -> Option<Event> {
-    let mut playlist = match playlist::read_playlist(rpl_path) {
-        Ok((playlist, _migrated)) => playlist,
-        Err(e) => return Some(Event::new(Source::Playlist, Severity::Error, format!("Playlist read failed: {e}"))),
-    };
-    let resolved = resolve_playlist(&mut playlist, rpl_path, workspace);
-    let Some((index, track_path)) = resolved.first_playable else {
-        return Some(Event::new(Source::Playlist, Severity::Warning, "No playable tracks in playlist"));
-    };
-    let warning = unplayable_warning(resolved.unplayable, workspace, deck);
-    let mut load = start_load(&track_path);
-    load.attach_playlist = Some(ActivePlaylist {
-        playlist,
-        path: rpl_path.to_path_buf(),
-        index,
-        unplayable: resolved.unplayable,
-        advance_requested: false,
-    });
-    pending_loads[deck] = Some(load);
-    warning
-}
-
-/// The deck's warning for a set carrying tracks it can't play. Without a workspace the
-/// news is that setting one may relocate them; with one set, the count is the news.
-fn unplayable_warning(unplayable: usize, workspace: Option<&Path>, deck: usize) -> Option<Event> {
-    if unplayable == 0 { return None; }
-    let text = match workspace {
-        None => "Some tracks missing — set a workspace (@) to relocate".to_string(),
-        Some(_) => {
-            let plural = if unplayable == 1 { "" } else { "s" };
-            format!("{unplayable} track{plural} unavailable — open the playlist to see which")
-        }
-    };
-    Some(Event::new(Source::Deck(deck), Severity::Warning, text))
 }
 
 /// Create an empty `.rpl` named `name` in `dir`. Errs if a file already exists.
@@ -612,144 +490,16 @@ fn gather_insert_entries(path: &Path, kind: EntryKind, playlist_dir: &Path) -> R
     }
 }
 
-/// Load entry `index` of the panel's playlist onto `deck`, attaching the playlist at
-/// that index. Returns a message when the entry can't be resolved.
-fn play_panel_entry(
-    pp: &PlaylistPanel,
-    index: usize,
-    deck: usize,
-    decks: &mut [Option<Deck>; 3],
-    pending_loads: &mut [Option<PendingLoad>; 3],
-    workspace: Option<&Path>,
-) -> Option<Event> {
-    let Some(entry) = pp.playlist.entries.get(index) else { return None };
+/// Resolve entry `index` of the panel's playlist to a loadable file, or None.
+fn resolve_panel_entry(pp: &PlaylistPanel, index: usize, workspace: Option<&Path>) -> Option<PathBuf> {
+    let entry = pp.playlist.entries.get(index)?;
     let dir = pp.path.parent().unwrap_or_else(|| Path::new("."));
     let library = WorkspaceLibrary::new(workspace);
     let search = playlist::LibrarySearch::new(&library);
-    let playlist::Resolution::Found { path, .. } = playlist::resolve(entry, dir, &search) else {
-        return Some(Event::new(Source::Playlist, Severity::Warning, "That entry is unavailable"));
-    };
-    if let Some(ref d) = decks[deck] { d.audio.player.stop(); }
-    decks[deck] = None;
-    let mut load = start_load(&path);
-    load.attach_playlist = Some(ActivePlaylist {
-        playlist: pp.playlist.clone(),
-        path: pp.path.clone(),
-        index,
-        unplayable: pp.unplayable(),
-        advance_requested: false,
-    });
-    pending_loads[deck] = Some(load);
-    None
-}
-
-/// Skip the selected deck's playlist to the next (`forward`) or previous resolvable
-/// entry and load it. No-op without an active playlist or a resolvable entry that way.
-fn play_playlist_step(
-    slot: usize,
-    forward: bool,
-    decks: &mut [Option<Deck>; 3],
-    pending_loads: &mut [Option<PendingLoad>; 3],
-    workspace: Option<&Path>,
-) {
-    let Some(active) = decks[slot].as_ref().and_then(|d| d.playlist.as_ref()) else { return };
-    let dir = active.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-    let library = WorkspaceLibrary::new(workspace);
-    let search = playlist::LibrarySearch::new(&library);
-    let current = active.index;
-    let order: Vec<usize> = if forward {
-        ((current + 1)..active.playlist.entries.len()).collect()
-    } else {
-        (0..current).rev().collect()
-    };
-    let found = order.into_iter().find_map(|i| match playlist::resolve(&active.playlist.entries[i], &dir, &search) {
-        playlist::Resolution::Found { path, .. } => Some((i, path)),
+    match playlist::resolve(entry, dir, &search) {
+        playlist::Resolution::Found { path, .. } => Some(path),
         _ => None,
-    });
-    let Some((index, track_path)) = found else { return };
-    let playlist = active.playlist.clone();
-    let rpl_path = active.path.clone();
-    let unplayable = active.unplayable;
-    if let Some(ref d) = decks[slot] { d.audio.player.stop(); }
-    decks[slot] = None;
-    let mut load = start_load(&track_path);
-    load.attach_playlist = Some(ActivePlaylist { playlist, path: rpl_path, index, unplayable, advance_requested: false });
-    pending_loads[slot] = Some(load);
-}
-
-/// What resolving a whole playlist found: where a deck can start playing, how many
-/// entries it couldn't play at all, and whether any hint was relocated on the way.
-struct PlaylistResolution {
-    first_playable: Option<(usize, PathBuf)>,
-    unplayable: usize,
-    relocated: bool,
-}
-
-/// Resolve every entry, adopting relocated hints and persisting them back to the
-/// `.rpl`. One screening of the library serves the whole playlist, so counting the
-/// unplayable entries costs no more than finding the first playable one.
-fn resolve_playlist(
-    playlist: &mut playlist::Playlist,
-    rpl_path: &Path,
-    workspace: Option<&Path>,
-) -> PlaylistResolution {
-    let library = WorkspaceLibrary::new(workspace);
-    let search = playlist::LibrarySearch::new(&library);
-    resolve_playlist_against(playlist, rpl_path, &search)
-}
-
-/// As `resolve_playlist`, against a library already probed by the caller — so a pass
-/// over several playlists screens it once rather than once each.
-fn resolve_playlist_against(
-    playlist: &mut playlist::Playlist,
-    rpl_path: &Path,
-    search: &playlist::LibrarySearch,
-) -> PlaylistResolution {
-    let dir = rpl_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut first_playable = None;
-    let mut unplayable = 0;
-    let mut healed = false;
-    for index in 0..playlist.entries.len() {
-        match playlist::resolve(&playlist.entries[index], dir, &search) {
-            playlist::Resolution::Found { path, updated_entry } => {
-                if let Some(entry) = updated_entry {
-                    playlist.entries[index] = entry;
-                    healed = true;
-                }
-                first_playable.get_or_insert((index, path));
-            }
-            _ => unplayable += 1,
-        }
     }
-    if healed {
-        let _ = playlist::write_repaired_playlist(rpl_path, playlist);
-    }
-    PlaylistResolution { first_playable, unplayable, relocated: healed }
-}
-
-/// Resolve entries from `start`, returning the first that locates a file (and its
-/// index), persisting any relocated hints back to the `.rpl`. `None` if none resolve.
-fn resolve_and_heal(
-    playlist: &mut playlist::Playlist,
-    rpl_path: &Path,
-    workspace: Option<&Path>,
-    start: usize,
-) -> Option<(usize, PathBuf)> {
-    let dir = rpl_path.parent().unwrap_or_else(|| Path::new("."));
-    let library = WorkspaceLibrary::new(workspace);
-    let search = playlist::LibrarySearch::new(&library);
-    for index in start..playlist.entries.len() {
-        if let playlist::Resolution::Found { path, updated_entry } =
-            playlist::resolve(&playlist.entries[index], dir, &search)
-        {
-            if let Some(entry) = updated_entry {
-                playlist.entries[index] = entry;
-                let _ = playlist::write_repaired_playlist(rpl_path, playlist);
-            }
-            return Some((index, path));
-        }
-    }
-    None
 }
 
 fn build_deck(
@@ -1252,7 +1002,8 @@ fn handle_tag_editor_key(
                         *text = chars.into_iter().collect();
                     }
                 }
-                KeyCode::Char(c) => {
+                // Alt/Ctrl chords are commands elsewhere in the app, never text.
+                KeyCode::Char(c) if !key.modifiers.intersects(crossterm::event::KeyModifiers::ALT | crossterm::event::KeyModifiers::CONTROL) => {
                     let (text, cursor) = editor.active_field_mut();
                     let mut chars: Vec<char> = text.chars().collect();
                     chars.insert(*cursor, c);
@@ -1368,9 +1119,34 @@ fn tui_loop(
     // player), not attached to a deck.
     let mut tag_editor: Option<TagEditorState> = None;
     let mut browser_state: Option<BrowserState> = None;
-    // The permanent context panel and the browser path its preview last reflected.
-    let mut panel: Panel = Panel::Preview(Preview::Empty);
+    // The browser path the Tags pane's hover preview last reflected.
     let mut panel_source: Option<PathBuf> = None;
+    // The three bottom panes: Playlist | Browser | Tags. One is active. Wide
+    // terminals show all three; narrow ones show a pair — Playlist+Browser when
+    // `playlist_pair`, Browser+Tags otherwise — with the third as a sliver.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Pane { Tags, Browser, Playlist }
+    let mut active_pane = Pane::Browser;
+    let mut playlist_pair = false;
+    // Whether the last frame had room for all three panes at once (wide terminal);
+    // set during render, read by the key handlers.
+    let mut panes_three_across = false;
+    // The pinned playlist (the record box) and the candidate picker over it.
+    let mut box_panel: Option<PlaylistPanel> = None;
+    struct BoxPicker { entry: usize, candidates: Vec<playlist::Candidate>, cursor: usize, layout: Rc<RefCell<ConfirmLayout>> }
+    let mut box_picker: Option<BoxPicker> = None;
+    // What the Tags pane shows while merely following the browser highlight.
+    let mut hover_preview: Preview = Preview::Empty;
+    {
+        let ws = session.workspace().map(|p| p.to_path_buf());
+        if let Some(path) = session.current_box().map(Path::to_path_buf) {
+            if path.is_file() {
+                box_panel = Some(PlaylistPanel::open(path, ws.as_deref()));
+            } else {
+                session.set_current_box(None);
+            }
+        }
+    }
     // A pending load awaiting confirmation because its target deck is playing.
     let mut browser_load_confirm: Option<(BrowserLoad, usize)> = None;
     // Tag-compliance scan: a per-session cache keyed by path, and the current
@@ -1485,6 +1261,24 @@ fn tui_loop(
         }};
     }
 
+    // Insert the browser's highlighted entry (a track, or another playlist's
+    // entries wholesale) into the pinned playlist, writing through at once.
+    macro_rules! insert_into_box {
+        ($bp:expr, $path:expr, $kind:expr, $after:expr, $workspace:expr) => {{
+            let dir = $bp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+            match gather_insert_entries(&$path, $kind, &dir) {
+                Ok(entries) if !entries.is_empty() => {
+                    let at = if $after && !$bp.playlist.entries.is_empty() { $bp.cursor + 1 } else { $bp.cursor };
+                    $bp.insert_at(at, entries);
+                    commit_playlist($bp);
+                    $bp.recompute_status($workspace.as_deref(), false);
+                }
+                Ok(_) => {}
+                Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
+            }
+        }};
+    }
+
     'tui: loop {
         frame_count += 1;
 
@@ -1544,7 +1338,6 @@ fn tui_loop(
                 Ok(Ok((mono, stereo, sample_rate, channels))) => {
                     let pending = pending_loads[slot].take().unwrap();
                     let mut new_deck = build_deck(&pending.path, pending.filename, mono, stereo, sample_rate, channels, mixer, &track_data, Arc::clone(&pfl_active_deck), slot);
-                    new_deck.playlist = pending.attach_playlist;
                     if let Some(snap) = pending.restore {
                         deck::apply_mixer_snapshot(&mut new_deck, &snap);
                         if new_deck.mixer.pfl_level > 0 { pfl_active_deck.store(slot, Ordering::Relaxed); }
@@ -1590,31 +1383,6 @@ fn tui_loop(
         }
         if !restore_offered {
             record_session_decks(&decks, &pending_loads, selected_deck, session);
-        }
-
-        // Auto-advance: a playlist deck signalled end-of-track. Load its next
-        // resolvable entry (lazily resolved and healed just before it plays).
-        for slot in 0..3 {
-            let requested = decks[slot].as_ref().and_then(|d| d.playlist.as_ref())
-                .map_or(false, |pl| pl.advance_requested);
-            if !requested { continue; }
-            let Some(mut active) = decks[slot].as_mut().and_then(|d| d.playlist.take()) else { continue };
-            let workspace = session.workspace().map(|p| p.to_path_buf());
-            if let Some((index, track_path)) =
-                resolve_and_heal(&mut active.playlist, &active.path, workspace.as_deref(), active.index + 1)
-            {
-                let mut load = start_load(&track_path);
-                load.attach_playlist = Some(ActivePlaylist {
-                    playlist: active.playlist,
-                    path: active.path,
-                    index,
-                    unplayable: active.unplayable,
-                    advance_requested: false,
-                });
-                if let Some(ref d) = decks[slot] { d.audio.player.stop(); }
-                decks[slot] = None;
-                pending_loads[slot] = Some(load);
-            }
         }
 
         // Compute render state for all three decks.
@@ -1718,16 +1486,16 @@ fn tui_loop(
                 }
             }
         }
-        // Context-panel preview: while the panel isn't focused (Browse/Edit), it mirrors
-        // the browser highlight — a track's metadata or a playlist's contents — recomputed
-        // only when the highlighted path changes so resolution stays off the hot path.
-        if matches!(panel, Panel::Preview(_)) {
+        // Tags-pane hover: mirrors the browser highlight — a track's metadata,
+        // recomputed only when the highlighted path changes so resolution stays
+        // off the hot path.
+        {
             let highlighted = browser_state.as_ref().and_then(|bs| bs.highlighted_entry());
             let source = highlighted.as_ref().map(|(p, _)| p.clone());
             if source != panel_source {
                 panel_source = source;
                 let ws = session.workspace().map(|p| p.to_path_buf());
-                panel = Panel::Preview(match highlighted {
+                hover_preview = match highlighted {
                     Some((path, EntryKind::Audio)) => match read_tags_for_editor(&path) {
                         Some(fields) => {
                             let current_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
@@ -1743,11 +1511,11 @@ fn tui_loop(
                     },
                     Some((path, EntryKind::Playlist)) => Preview::Playlist(PlaylistPanel::open(path, ws.as_deref())),
                     _ => Preview::Empty,
-                });
+                };
             }
         }
         if browser_state.is_none() {
-            panel = Panel::Preview(Preview::Empty);
+            hover_preview = Preview::Empty;
             panel_source = None;
         }
 
@@ -2179,7 +1947,7 @@ fn tui_loop(
                 frame.render_widget(Paragraph::new(global_line).style(bar_style), area_global);
             }
 
-            // ---- Browser + context panel (permanent 70/30 split) ----
+            // ---- The three panes: Playlist | Browser | Tags ----
             if let Some(ref bs) = browser_state {
                 let area = if c[10].height >= 8 {
                     c[10]
@@ -2187,42 +1955,94 @@ fn tui_loop(
                     frame.render_widget(ratatui::widgets::Clear, inner);
                     inner
                 };
-                let panel_pct = session.get_panel_pct();
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(100 - panel_pct), Constraint::Percentage(panel_pct)])
-                    .split(area);
-                let selected_playing = [&d0, &d1, &d2][selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
-                render_browser(frame, cols[0], bs, selected_deck, selected_playing);
-                if let Some(ref editor) = tag_editor {
-                    // Editing a track's tags — the panel hosts the editor; browser dims.
-                    render::dim_area(frame, cols[0]);
-                    render::render_tag_editor_panel(frame, cols[1], editor);
+                let playlist_pct = session.get_panel_pct();
+                let tags_pct = session.get_tags_pct();
+                const SLIVER_W: u16 = 2;
+                const THREE_ACROSS_MIN_W: u16 = 120;
+                panes_three_across = area.width >= THREE_ACROSS_MIN_W;
+                // An open tag editor always needs its pane on screen.
+                let tags_shown = panes_three_across || !playlist_pair || tag_editor.is_some();
+                let playlist_shown = panes_three_across || !tags_shown;
+                // Wide: all three across. Narrow: the visible pair plus a sliver
+                // of the off-screen pane.
+                let (playlist_area, browser_area, tags_area, sliver) = if panes_three_across {
+                    let cols = Layout::default().direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(playlist_pct), Constraint::Percentage(100 - playlist_pct - tags_pct), Constraint::Percentage(tags_pct)])
+                        .split(area);
+                    (Some(cols[0]), cols[1], Some(cols[2]), None)
+                } else if playlist_shown {
+                    let cols = Layout::default().direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(playlist_pct), Constraint::Percentage(100 - playlist_pct), Constraint::Length(SLIVER_W)])
+                        .split(area);
+                    (Some(cols[0]), cols[1], None, Some((cols[2], "TAGS")))
                 } else {
-                    // Exactly one side reads as driven: the browser dims while the
-                    // panel is the active target, the panel dims while it only
-                    // previews — same hue-preserving fade both ways. Only while
-                    // the browser holds the keyboard: unfocused, the single
-                    // whole-region fade below carries the signal alone, so the
-                    // panel is never dimmed twice into illegibility.
-                    if view_focused && panel.dim_browser() {
-                        render::dim_area(frame, cols[0]);
+                    let cols = Layout::default().direction(Direction::Horizontal)
+                        .constraints([Constraint::Length(SLIVER_W), Constraint::Percentage(100 - tags_pct), Constraint::Percentage(tags_pct)])
+                        .split(area);
+                    (None, cols[1], Some(cols[2]), Some((cols[0], "PLAYLIST")))
+                };
+                let selected_playing = [&d0, &d1, &d2][selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
+                let marks_of = |p: &PlaylistPanel| -> Vec<Option<usize>> {
+                    // A record on a deck is matched by content identity — the
+                    // same hash playlists key on — so renames don't unmark it.
+                    p.playlist.entries.iter().map(|e| {
+                        (0..3).find(|&i| [&d0, &d1, &d2][i].as_ref().is_some_and(|d|
+                            d.tempo.analysis_hash.as_deref() == Some(e.identity.content_hash.as_str())))
+                    }).collect()
+                };
+
+                // Browser pane — always visible, its own chrome as ever.
+                render_browser(frame, browser_area, bs, selected_deck, selected_playing);
+                if view_focused && active_pane != Pane::Browser {
+                    render::dim_area(frame, browser_area);
+                }
+
+                if let Some(pl_area) = playlist_area {
+                    match box_panel.as_ref() {
+                        Some(bp) => {
+                            if let Some(pk) = box_picker.as_ref() {
+                                render::render_confirm(frame, pl_area, bp, pk.entry, &pk.candidates, pk.cursor, &pk.layout);
+                            } else {
+                                let kind = if active_pane == Pane::Playlist { render::PanelKind::Browse } else { render::PanelKind::Preview };
+                                render::render_playlist_panel(frame, pl_area, bp, &marks_of(bp), kind, "Playlist · pinned");
+                            }
+                        }
+                        None => render::render_pane_placeholder(frame, pl_area, "Playlist", "Enter on a playlist pins it"),
                     }
-                    let playing_of = |p: &PlaylistPanel| decks.iter().flatten()
-                        .find_map(|d| d.playlist.as_ref().filter(|a| a.path == p.path).map(|a| a.index));
-                    render::render_panel(frame, cols[1], &panel, &playing_of);
-                    if view_focused && !panel.dim_browser() {
-                        render::dim_area(frame, cols[1]);
+                    if view_focused && active_pane != Pane::Playlist {
+                        render::dim_area(frame, pl_area);
                     }
                 }
-                // Unfocused browser: the whole region fades — the decks hold the
-                // keyboard, and exactly one side of the screen reads as driven.
+                if let Some(tg_area) = tags_area {
+                    // Tags pane: the editor when open, else the hover preview.
+                    if let Some(ref editor) = tag_editor {
+                        render::render_tag_editor_panel(frame, tg_area, editor);
+                    } else {
+                        match &hover_preview {
+                            Preview::Track { fields, current_name, proposed_name } => {
+                                let owned: Vec<(String, usize)> = fields.iter().map(|f| (f.clone(), 0)).collect();
+                                render::render_metadata_panel(frame, tg_area, &owned, None, current_name, proposed_name.as_deref(), None, None);
+                            }
+                            Preview::Playlist(pp) => {
+                                render::render_playlist_panel(frame, tg_area, pp, &marks_of(pp), render::PanelKind::Preview, "Preview · Enter pins");
+                            }
+                            Preview::Empty => render::render_pane_placeholder(frame, tg_area, "Tags", "highlight a track"),
+                        }
+                    }
+                    if view_focused && active_pane != Pane::Tags && tag_editor.is_none() {
+                        render::dim_area(frame, tg_area);
+                    }
+                }
+                if let Some((edge_area, name)) = sliver {
+                    render::render_pane_sliver(frame, edge_area, name);
+                }
+
+                // Unfocused: the whole region fades as one.
                 if !view_focused {
-                    render::dim_area(frame, cols[0]);
-                    render::dim_area(frame, cols[1]);
+                    render::dim_area(frame, area);
                 }
                 // The rename offer's browser-side home: an amber banner over the
-                // panel (the deck corners stay clean while this view shows).
+                // companion pane (the deck corners stay clean while this shows).
                 if tag_editor.is_none() {
                     for d in [&d0, &d1, &d2].into_iter().flatten() {
                         if d.rename_offer_active() {
@@ -2233,7 +2053,7 @@ fn tui_loop(
                             } else {
                                 (format!("⚠ rename {name}? [y]"), Color::Rgb(150, 110, 40))
                             };
-                            render::overlay_top_left(frame, cols[1], Line::from(Span::styled(text, Style::default().fg(fg))), Style::default().bg(Color::Rgb(20, 24, 34)));
+                            render::overlay_top_left(frame, tags_area.or(playlist_area).unwrap_or(browser_area), Line::from(Span::styled(text, Style::default().fg(fg))), Style::default().bg(Color::Rgb(20, 24, 34)));
                             break;
                         }
                     }
@@ -2395,8 +2215,7 @@ session.save();
                             let (load, deck) = browser_load_confirm.take().unwrap();
                             if let Some(bs) = browser_state.as_ref() { *browser_dir = bs.cwd.clone(); }
                             session.set_last_browser_path(browser_dir);
-                            let workspace = session.workspace().map(|p| p.to_path_buf());
-                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads) {
                                 stream.emit(m);
                             }
                             view_focused = false;
@@ -2428,8 +2247,18 @@ session.save();
                         Some(Action::SelectDeck1) => { handle_deck_key!(0); continue; }
                         Some(Action::SelectDeck2) => { handle_deck_key!(1); continue; }
                         Some(Action::SelectDeck3) => { handle_deck_key!(2); continue; }
-                        Some(Action::PanelWiden)  => { session.step_panel_pct(5);  continue; }
-                        Some(Action::PanelNarrow) => { session.step_panel_pct(-5); continue; }
+                        // Alt+h/l drag the active pane's right-hand boundary left or
+                        // right: the playlist/browser divider from the playlist, the
+                        // browser/tags divider from the browser. Tags has none.
+                        Some(a @ (Action::PanelWiden | Action::PanelNarrow)) => {
+                            let rightward = *a == Action::PanelNarrow; // alt+l / alt+right
+                            match active_pane {
+                                Pane::Playlist => session.step_panel_pct(if rightward { 5 } else { -5 }),
+                                Pane::Browser  => session.step_tags_pct(if rightward { -5 } else { 5 }),
+                                Pane::Tags => {}
+                            }
+                            continue;
+                        }
                         _ => {}
                     }
                 }
@@ -2501,90 +2330,85 @@ session.save();
                         }
                     }
                 }
-                // Context panel state machine over the browser. Preview passes keys through
-                // (with playlist transitions on `l`/`e`/Enter); Browse and Edit intercept.
-                if view_focused && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                // The pane keys: H/L move activation across the three panes, the
+                // visible pair following on narrow terminals.
+                if view_focused && key.kind == KeyEventKind::Press {
                     let cmd_mode = browser_state.as_ref().map_or(false, |bs| bs.mode == BrowserMode::Command && bs.name_prompt.is_none());
-                    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
                     let workspace = session.workspace().map(|p| p.to_path_buf());
-                    let mut transition: Option<Panel> = None;
-                    let mut consumed = false;
-                    match &mut panel {
-                        Panel::Preview(_) if cmd_mode => {
-                            if let Some((path, EntryKind::Playlist)) = browser_state.as_ref().and_then(|bs| bs.highlighted_entry()) {
-                                match key.code {
-                                    KeyCode::Char('l') | KeyCode::Enter => {
-                                        transition = Some(Panel::Browse(PlaylistPanel::open(path, workspace.as_deref())));
-                                        consumed = true;
+
+                    // Activation moves: Shift+h/l. In browser search mode these
+                    // are typed characters, so they require command mode there.
+                    if (active_pane != Pane::Browser || cmd_mode)
+                        && matches!(key.code, KeyCode::Char('H') | KeyCode::Char('L'))
+                    {
+                        match key.code {
+                            // H moves left, toward the playlist.
+                            KeyCode::Char('H') => {
+                                active_pane = match active_pane {
+                                    Pane::Tags => Pane::Browser,
+                                    _ => { playlist_pair = true; Pane::Playlist }
+                                };
+                            }
+                            // L moves right, toward the tags.
+                            _ => {
+                                match active_pane {
+                                    Pane::Playlist => active_pane = Pane::Browser,
+                                    // Narrow with the playlist pair showing: L first
+                                    // brings the tags pane into view; only a further
+                                    // L starts editing.
+                                    Pane::Browser if playlist_pair && !panes_three_across => playlist_pair = false,
+                                    Pane::Browser => {
+                                        // Like the playlist pane, arriving is editing:
+                                        // L with the tags pane showing opens the
+                                        // highlighted track's tag editor directly.
+                                        playlist_pair = false;
+                                        match browser_state.as_ref().and_then(|bs| bs.highlighted_audio_path()) {
+                                            Some(path) => {
+                                                tag_editor = TagEditorState::for_track(&path);
+                                                if tag_editor.is_none() {
+                                                    stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                                }
+                                                if let Some(bs) = browser_state.as_ref().filter(|bs| bs.compliance_on) {
+                                                    edit_resume_anchor = bs.entries.get(bs.cursor + 1)
+                                                        .or_else(|| bs.entries.first())
+                                                        .map(|e| e.path.clone());
+                                                }
+                                            }
+                                            None => active_pane = Pane::Tags,
+                                        }
                                     }
-                                    KeyCode::Char('e') => {
-                                        let pp = PlaylistPanel::open(path, workspace.as_deref());
-                                        transition = Some(Panel::Edit { panel: pp, focus: EditFocus::Playlist });
-                                        consumed = true;
-                                    }
-                                    _ => {} // fall through to the browser
+                                    _ => {}
                                 }
                             }
                         }
-                        Panel::Browse(pp) => {
-                            consumed = true;
+                        if active_pane == Pane::Playlist && box_panel.is_none() { active_pane = Pane::Browser; playlist_pair = false; }
+                        continue;
+                    }
+
+                    // Candidate picker over the playlist pane.
+                    if active_pane == Pane::Playlist && box_picker.is_some() {
+                        let mut close = false;
+                        if let (Some(pk), Some(bp)) = (box_picker.as_mut(), box_panel.as_mut()) {
                             match key.code {
-                                KeyCode::Esc | KeyCode::Char('h') => transition = Some(Panel::Preview(Preview::Empty)),
-                                KeyCode::Up | KeyCode::Char('k') => pp.cursor_up(),
-                                KeyCode::Down | KeyCode::Char('j') => pp.cursor_down(),
-                                // Enter: play a resolved entry, open the picker on a needs-confirmation
-                                // one (it can't be played), or nudge for a workspace on an unavailable one.
-                                KeyCode::Enter => match pp.status_at(pp.cursor) {
-                                    EntryStatus::Found => {
-                                        if let Some(m) = play_panel_entry(pp, pp.cursor, selected_deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
-                                            stream.emit(m);
-                                        }
-                                    }
-                                    EntryStatus::NeedsConfirmation => {
-                                        let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-                                        let library = WorkspaceLibrary::new(workspace.as_deref());
-                                        let search = playlist::LibrarySearch::new(&library);
-                                        if let playlist::Resolution::NeedsConfirmation { candidates } = playlist::resolve(&pp.playlist.entries[pp.cursor], &dir, &search) {
-                                            transition = Some(Panel::Confirm { panel: pp.clone(), entry: pp.cursor, candidates, cursor: 0, layout: Rc::new(RefCell::new(ConfirmLayout::default())) });
-                                        }
-                                    }
-                                    EntryStatus::Unavailable => {
-                                        if workspace.is_none() {
-                                            stream.emit(Event::new(Source::Playlist, Severity::Warning, "Set a workspace (@) to find candidates for missing tracks"));
-                                        }
-                                    }
-                                },
-                                KeyCode::Char('e') => {
-                                    transition = Some(Panel::Edit { panel: pp.clone(), focus: EditFocus::Playlist });
+                                KeyCode::Esc | KeyCode::Char('h') => close = true,
+                                KeyCode::Up | KeyCode::Char('k') => pk.cursor = pk.cursor.saturating_sub(1),
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    let max = pk.layout.borrow().total_lines.saturating_sub(1);
+                                    pk.cursor = (pk.cursor + 1).min(max);
                                 }
-                                _ => {} // swallow
-                            }
-                        }
-                        Panel::Confirm { panel: pp, entry, candidates, cursor, layout } => {
-                            consumed = true;
-                            // `cursor` is a line offset; scroll by line and adopt the card at the top.
-                            // The renderer publishes the variable-height card layout into `layout`.
-                            let published = layout.borrow();
-                            let max_offset = published.total_lines.saturating_sub(1);
-                            let active = confirm_active_card(*cursor, &published.card_starts);
-                            drop(published);
-                            match key.code {
-                                KeyCode::Esc | KeyCode::Char('h') => transition = Some(Panel::Browse(pp.clone())),
-                                KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
-                                KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(max_offset),
                                 KeyCode::Enter => {
-                                    if let Some(cand) = candidates.get(active) {
+                                    let active = confirm_active_card(pk.cursor, &pk.layout.borrow().card_starts);
+                                    if let Some(cand) = pk.candidates.get(active) {
                                         let cand_path = cand.path.clone();
-                                        let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        let dir = bp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
                                         match track_facts(&cand_path) {
                                             Some(facts) => {
-                                                let mut new_pp = pp.clone();
-                                                match playlist::adopt_candidate(&mut new_pp.playlist.entries[*entry], &cand_path, &dir, &facts) {
+                                                match playlist::adopt_candidate(&mut bp.playlist.entries[pk.entry], &cand_path, &dir, &facts) {
                                                     Ok(()) => {
-                                                        commit_playlist(&new_pp, &mut decks);
-                                                        new_pp.recompute_status(workspace.as_deref(), false);
+                                                        commit_playlist(bp);
+                                                        bp.recompute_status(workspace.as_deref(), false);
                                                         stream.emit(Event::new(Source::Playlist, Severity::Success, "Track re-linked"));
-                                                        transition = Some(Panel::Browse(new_pp));
+                                                        close = true;
                                                     }
                                                     Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, format!("re-link failed: {e:?}"))),
                                                 }
@@ -2593,68 +2417,97 @@ session.save();
                                         }
                                     }
                                 }
-                                _ => {} // swallow
+                                _ => {}
                             }
                         }
-                        Panel::Edit { panel: pp, focus, .. } => {
-                            match (*focus, key.code) {
-                                (_, KeyCode::Enter) => {
-                                    commit_playlist(pp, &mut decks);
-                                    // Return the browser to the playlist file and enter Browse, so
-                                    // it's not lost and is ready to load a track.
-                                    let dir = pp.path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-                                    let rpl = pp.path.clone();
-                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), None); }
-                                    transition = Some(Panel::Browse(pp.clone()));
-                                    consumed = true;
-                                }
-                                (_, KeyCode::Esc) => {
-                                    // Abort: discard the buffer, but still land back on the playlist.
-                                    let dir = pp.path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-                                    let rpl = pp.path.clone();
-                                    if let Some(bs) = browser_state.as_mut() { let _ = bs.go_to(dir, Some(&rpl), None); }
-                                    transition = Some(Panel::Preview(Preview::Empty));
-                                    consumed = true;
-                                }
-                                (EditFocus::Playlist, KeyCode::Char('h')) => { *focus = EditFocus::Browser; consumed = true; }
-                                (EditFocus::Browser, KeyCode::Char('l')) => { *focus = EditFocus::Playlist; consumed = true; }
-                                // Insert the highlighted browser entry (track, or another playlist's
-                                // entries) after (`a`) or before (`A`) the cursor, Helix-style like
-                                // paste p/P — `a` on the last entry appends.
-                                (EditFocus::Browser, KeyCode::Char(c @ ('a' | 'A'))) if cmd_mode => {
-                                    if let Some((path, kind)) = browser_state.as_ref().and_then(|bs| bs.highlighted_entry()) {
-                                        let dir = pp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
-                                        match gather_insert_entries(&path, kind, &dir) {
-                                            Ok(entries) if !entries.is_empty() => {
-                                                let at = if c == 'a' && !pp.playlist.entries.is_empty() { pp.cursor + 1 } else { pp.cursor };
-                                                pp.insert_at(at, entries);
-                                                pp.recompute_status(workspace.as_deref(), false);
+                        if close { box_picker = None; }
+                        continue;
+                    }
+
+                    // Playlist pane active: pick, live-edit, or open the picker.
+                    if active_pane == Pane::Playlist {
+                        if let Some(bp) = box_panel.as_mut() {
+                            match key.code {
+                                KeyCode::Esc => { active_pane = Pane::Browser; }
+                                KeyCode::Up | KeyCode::Char('k') => bp.cursor_up(),
+                                KeyCode::Down | KeyCode::Char('j') => bp.cursor_down(),
+                                KeyCode::Enter => match bp.status_at(bp.cursor) {
+                                    EntryStatus::Found => {
+                                        match resolve_panel_entry(bp, bp.cursor, workspace.as_deref()) {
+                                            Some(path) => {
+                                                let playing = decks[selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
+                                                if playing {
+                                                    browser_load_confirm = Some((BrowserLoad::Track(path), selected_deck));
+                                                } else {
+                                                    if let Some(m) = apply_browser_load(BrowserLoad::Track(path), selected_deck, &mut decks, &mut pending_loads) {
+                                                        stream.emit(m);
+                                                    }
+                                                    view_focused = false;
+                                                }
                                             }
-                                            Ok(_) => {}
-                                            Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
+                                            None => stream.emit(Event::new(Source::Playlist, Severity::Warning, "That entry is unavailable")),
                                         }
                                     }
-                                    consumed = true;
+                                    EntryStatus::NeedsConfirmation => {
+                                        let dir = bp.path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+                                        let library = WorkspaceLibrary::new(workspace.as_deref());
+                                        let search = playlist::LibrarySearch::new(&library);
+                                        if let playlist::Resolution::NeedsConfirmation { candidates } = playlist::resolve(&bp.playlist.entries[bp.cursor], &dir, &search) {
+                                            box_picker = Some(BoxPicker { entry: bp.cursor, candidates, cursor: 0, layout: Rc::new(RefCell::new(ConfirmLayout::default())) });
+                                        }
+                                    }
+                                    EntryStatus::Unavailable => {
+                                        if workspace.is_none() {
+                                            stream.emit(Event::new(Source::Playlist, Severity::Warning, "Set a workspace (@) to find candidates for missing tracks"));
+                                        }
+                                    }
+                                },
+                                // Live edits: reorder and remove write through at once.
+                                KeyCode::Char('K') => { bp.move_up(); commit_playlist(bp); }
+                                KeyCode::Char('J') => { bp.move_down(); commit_playlist(bp); }
+                                KeyCode::Char('x') | KeyCode::Delete => {
+                                    bp.remove_at_cursor();
+                                    commit_playlist(bp);
+                                    bp.recompute_status(workspace.as_deref(), false);
                                 }
-                                (EditFocus::Playlist, KeyCode::Up) if shift => { pp.move_up(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Down) if shift => { pp.move_down(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Char('K')) => { pp.move_up(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Char('J')) => { pp.move_down(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Up) | (EditFocus::Playlist, KeyCode::Char('k')) => { pp.cursor_up(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Down) | (EditFocus::Playlist, KeyCode::Char('j')) => { pp.cursor_down(); consumed = true; }
-                                (EditFocus::Playlist, KeyCode::Char('x')) | (EditFocus::Playlist, KeyCode::Delete) => { pp.remove_at_cursor(); consumed = true; }
-                                // Edit-Playlist swallows the rest; Edit-Browser lets nav fall through to the browser.
-                                _ => if *focus == EditFocus::Playlist { consumed = true; }
+                                // Insert the browser's highlighted track after/before the cursor.
+                                KeyCode::Char(c @ ('a' | 'A')) => {
+                                    if let Some((path, kind)) = browser_state.as_ref().and_then(|bs| bs.highlighted_entry()) {
+                                        insert_into_box!(bp, path, kind, c == 'a', workspace);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            active_pane = Pane::Browser;
+                        }
+                        continue;
+                    }
+
+                    // Tags pane active: nothing to drive yet; Esc returns.
+                    if active_pane == Pane::Tags {
+                        match key.code {
+                            KeyCode::Esc => { active_pane = Pane::Browser; }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    // Browser active with the playlist on screen: a/A insert the
+                    // highlighted track — a visible playlist is the editing mode.
+                    if (playlist_pair || panes_three_across) && cmd_mode {
+                        if let KeyCode::Char(c @ ('a' | 'A')) = key.code {
+                            if box_panel.is_some() {
+                                if let Some((path, kind)) = browser_state.as_ref().and_then(|bs| bs.highlighted_entry()) {
+                                    let bp = box_panel.as_mut().unwrap();
+                                    insert_into_box!(bp, path, kind, c == 'a', workspace);
+                                }
+                                continue;
                             }
                         }
-                        _ => {} // Preview in search mode: fall through to the browser
                     }
-                    if let Some(t) = transition {
-                        if matches!(t, Panel::Preview(_)) { panel_source = None; }
-                        panel = t;
-                    }
-                    if consumed { continue; }
                 }
+
                 // Browser — intercepts all key events while it holds the keyboard.
                 if let Some(bs) = browser_state.as_mut().filter(|_| view_focused) {
                     // # previews the highlighted audio file — only in Command mode,
@@ -2695,7 +2548,15 @@ session.save();
                             browser_selection_outcome = Some((BrowserLoad::Track(path), selected_deck, bs.cwd.clone()));
                         }
                         Some(BrowserResult::PlaylistSelected(path)) => {
-                            browser_selection_outcome = Some((BrowserLoad::Playlist(path), selected_deck, bs.cwd.clone()));
+                            // Enter on a playlist pins it as the record box and
+                            // activates the playlist pane — nothing loads onto a deck.
+                            let ws = session.workspace().map(|p| p.to_path_buf());
+                            let bp = PlaylistPanel::open(path.clone(), ws.as_deref());
+                            session.set_current_box(Some(&path));
+                            box_panel = Some(bp);
+                            box_picker = None;
+                            active_pane = Pane::Playlist;
+                            playlist_pair = true;
                         }
                         Some(BrowserResult::CreatePlaylist(name)) => {
                             create_playlist_request = Some((name, bs.cwd.clone()));
@@ -2748,26 +2609,10 @@ session.save();
                             let ws = Some(path.as_path());
                             let library = WorkspaceLibrary::new(ws);
                             let search = playlist::LibrarySearch::new(&library);
-                            let mut healed = false;
-                            for (slot, d) in decks.iter_mut().enumerate() {
-                                let Some(d) = d else { continue };
-                                let Some(active) = d.playlist.as_mut() else { continue };
-                                let resolved = resolve_playlist_against(&mut active.playlist, &active.path, &search);
-                                active.unplayable = resolved.unplayable;
-                                healed |= resolved.relocated;
-                                // Silent when the heal fixed everything — the badge going
-                                // back to teal is the signal, and the global message covers it.
-                                if let Some(warning) = unplayable_warning(resolved.unplayable, ws, slot) {
-                                    stream.emit(warning);
-                                }
-                            }
                             // Status recomputation heals as it goes, so the panel needs
                             // one pass, not a heal followed by a recompute.
-                            if let Some(pp) = panel.playlist_mut() {
-                                pp.recompute_status_against(&search, true);
-                            }
-                            if healed {
-                                stream.emit(Event::new(Source::Playlist, Severity::Success, "Relocated moved tracks in open playlists"));
+                            if let Some(bp) = box_panel.as_mut() {
+                                bp.recompute_status_against(&search, true);
                             }
                         }
                         Some(BrowserResult::WorkspaceCleared) => {
@@ -2785,8 +2630,7 @@ session.save();
                             // global bar renders the prompt from this pending state.
                             browser_load_confirm = Some((load, deck));
                         } else {
-                            let workspace = session.workspace().map(|p| p.to_path_buf());
-                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads, workspace.as_deref()) {
+                            if let Some(m) = apply_browser_load(load, deck, &mut decks, &mut pending_loads) {
                                 stream.emit(m);
                             }
                             // The keyboard follows the load: the deck it landed on is
@@ -3215,8 +3059,7 @@ session.save();
                     }
                     Some(Action::SessionRestore) => {
                         if restore_offered {
-                            let ws = session.workspace().map(|p| p.to_path_buf());
-                            for event in restore_session_decks(session.deck_snapshots(), &mut pending_loads, ws.as_deref()) {
+                            for event in restore_session_decks(session.deck_snapshots(), &mut pending_loads) {
                                 stream.emit(event);
                             }
                             let needed = session.deck_snapshots().iter().enumerate()
@@ -3235,14 +3078,6 @@ session.save();
                     Some(Action::SelectDeck1) | Some(Action::SelectDeck2) | Some(Action::SelectDeck3) => {}
                     Some(Action::SelectNextDeck) => { selected_deck = (selected_deck + 1) % deck_count; }
                     Some(Action::SelectPrevDeck) => { selected_deck = (selected_deck + deck_count - 1) % deck_count; }
-                    Some(Action::PlaylistNext) => {
-                        let ws = session.workspace().map(|p| p.to_path_buf());
-                        play_playlist_step(selected_deck, true, &mut decks, &mut pending_loads, ws.as_deref());
-                    }
-                    Some(Action::PlaylistPrev) => {
-                        let ws = session.workspace().map(|p| p.to_path_buf());
-                        play_playlist_step(selected_deck, false, &mut decks, &mut pending_loads, ws.as_deref());
-                    }
                     Some(Action::OpenBrowser) => {
                         // Opening never interrupts anything and re-aims nothing: loads
                         // land on the selected deck, cycled with the same chords as ever.
@@ -3762,12 +3597,6 @@ fn service_deck_frame(
             .unwrap_or((0.0, 0.0));
         d.audio.seek_handle.seek_direct(reset_secs);
         d.display.smooth_display_samp = reset_samp;
-        // On a playlist deck with a further entry, signal the main loop to advance.
-        if let Some(pl) = d.playlist.as_mut() {
-            if pl.index + 1 < pl.playlist.entries.len() {
-                pl.advance_requested = true;
-            }
-        }
         return;
     }
 
@@ -3973,37 +3802,24 @@ mod tests {
         (dir, rpl)
     }
 
-    /// Opening a set counts every entry it can't play, not just the first — that count
-    /// is what turns the deck's badge amber.
-    #[test]
-    fn resolving_a_playlist_counts_unplayable_entries() {
-        let (dir, rpl) = playlist_fixture("unplayable-count", &["present.flac", "gone.flac"]);
-        std::fs::remove_file(dir.join("gone.flac")).unwrap();
-
-        let mut playlist = playlist::read_playlist(&rpl).unwrap().0;
-        let resolved = resolve_playlist(&mut playlist, &rpl, None);
-
-        assert_eq!(resolved.unplayable, 1, "the deleted track should be counted");
-        assert_eq!(resolved.first_playable.map(|(i, _)| i), Some(0));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Re-linking an entry in the browser drops the panel's count to zero — the value
-    /// `commit_playlist` hands to every deck carrying the set, clearing its warning.
+    /// Re-linking an entry drops the box's unresolved count to zero — the flag
+    /// the pinned box shows against entries it can't send.
     #[test]
     fn relinking_clears_the_unplayable_count() {
         let (dir, rpl) = playlist_fixture("unplayable-relink", &["present.flac", "gone.flac"]);
         std::fs::remove_file(dir.join("gone.flac")).unwrap();
 
+        let unresolved = |p: &PlaylistPanel| (0..p.playlist.entries.len())
+            .filter(|&i| !matches!(p.status_at(i), EntryStatus::Found)).count();
         let mut panel = PlaylistPanel::open(rpl, None);
-        assert_eq!(panel.unplayable(), 1, "the deleted track should be counted");
+        assert_eq!(unresolved(&panel), 1, "the deleted track should be counted");
 
         let replacement = dir.join("present.flac");
         let facts = track_facts(&replacement).unwrap();
         playlist::adopt_candidate(&mut panel.playlist.entries[1], &replacement, &dir, &facts).unwrap();
         panel.recompute_status(None, false);
 
-        assert_eq!(panel.unplayable(), 0, "a re-linked entry is playable again");
+        assert_eq!(unresolved(&panel), 0, "a re-linked entry is playable again");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

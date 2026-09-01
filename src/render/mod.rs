@@ -566,8 +566,6 @@ impl SharedDetailRenderer {
 pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool, offer_on_deck: bool) -> Line<'static> {
     let mut spans = tempo_spans(deck, frame_count, beat_on, analysing);
     spans.push(Span::raw(" "));
-    let (badge, _) = playlist_badge(deck);
-    spans.extend(badge);
     spans.push(Span::styled(
         deck.track_name.clone(),
         Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85)),
@@ -628,26 +626,6 @@ pub(crate) fn overlay_bottom_right(frame: &mut ratatui::Frame, area: ratatui::la
     let w = (line.width() as u16).min(area.width);
     let rect = ratatui::layout::Rect { x: area.x + area.width - w, y: area.y + area.height - 1, width: w, height: 1 };
     frame.render_widget(Paragraph::new(line).style(bg), rect);
-}
-
-/// The `≡ x/y` position badge shown before the track name when a playlist is
-/// active on the deck. Returns the spans and their display width.
-fn playlist_badge(deck: &Deck) -> (Vec<Span<'static>>, usize) {
-    match &deck.playlist {
-        Some(pl) => {
-            let text = format!("≡ {}/{}  ", pl.index + 1, pl.playlist.entries.len());
-            let width = text.chars().count();
-            // Amber when the set carries tracks the deck can't play — the same amber the
-            // browser's non-compliant marker uses.
-            let color = if pl.unplayable > 0 {
-                Color::Rgb(230, 170, 60)
-            } else {
-                Color::Rgb(120, 210, 180)
-            };
-            (vec![Span::styled(text, Style::default().fg(color))], width)
-        }
-        None => (Vec::new(), 0),
-    }
 }
 
 pub(crate) fn title_empty_span() -> Span<'static> {
@@ -1824,33 +1802,6 @@ pub(crate) fn render_message_history(
 
 /// The permanent context panel. Renders whichever state it's in: an empty frame,
 /// a track's metadata, or a playlist (preview / browse / edit).
-pub(crate) fn render_panel(
-    frame: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    panel: &crate::Panel,
-    playing_of: &dyn Fn(&crate::PlaylistPanel) -> Option<usize>,
-) {
-    use crate::{EditFocus, Panel, Preview};
-    frame.render_widget(Clear, area);
-    match panel {
-        Panel::Preview(Preview::Empty) => {
-            let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(55, 62, 78)));
-            frame.render_widget(Paragraph::new("").block(block), area);
-        }
-        Panel::Preview(Preview::Track { fields, current_name, proposed_name }) => {
-            let owned: Vec<(String, usize)> = fields.iter().map(|f| (f.clone(), 0)).collect();
-            render_metadata_panel(frame, area, &owned, None, current_name, proposed_name.as_deref(), None, None);
-        }
-        Panel::Preview(Preview::Playlist(pp)) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Preview),
-        Panel::Browse(pp) => render_playlist_panel(frame, area, pp, playing_of(pp), PanelKind::Browse),
-        Panel::Edit { panel: pp, focus } => {
-            let kind = match focus { EditFocus::Playlist => PanelKind::EditList, EditFocus::Browser => PanelKind::EditBrowser };
-            render_playlist_panel(frame, area, pp, playing_of(pp), kind);
-        }
-        Panel::Confirm { panel: pp, entry, candidates, cursor, layout } => render_confirm(frame, area, pp, *entry, candidates, *cursor, layout),
-    }
-}
-
 /// A byte count rendered compactly (MB/KB/B) for the picker's size fields.
 fn human_size(bytes: u64) -> String {
     const MB: f64 = 1_048_576.0;
@@ -1901,7 +1852,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 
 /// The descriptive-fallback candidate picker: a frozen header for the original entry, then a
 /// scrolling list of variable-height candidate cards for the operator to confirm a re-link.
-fn render_confirm(
+pub(crate) fn render_confirm(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     pp: &crate::PlaylistPanel,
@@ -2044,31 +1995,63 @@ fn render_confirm(
     );
 }
 
-enum PanelKind { Preview, Browse, EditList, EditBrowser }
+pub(crate) enum PanelKind { Preview, Browse }
 
 /// A playlist in the panel: entries with ▶ playing / ⇢ next-up markers and status.
 /// A wrapping hint sits below the frame; the border colour marks the active side.
-fn render_playlist_panel(
+/// A pane with nothing to show yet: bordered, named, one dim hint.
+pub(crate) fn render_pane_placeholder(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str, hint: &str) {
+    if area.width == 0 || area.height == 0 { return; }
+    frame.render_widget(Clear, area);
+    let block = Block::default().borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(55, 62, 78)))
+        .title(format!(" {name} "));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(Color::Rgb(90, 100, 120))).wrap(ratatui::widgets::Wrap { trim: true }),
+        inner,
+    );
+}
+
+/// The off-screen pane's sliver: a thin strip naming it vertically.
+pub(crate) fn render_pane_sliver(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str) {
+    if area.width == 0 || area.height == 0 { return; }
+    frame.render_widget(Clear, area);
+    let lines: Vec<Line> = (0..area.height as usize).map(|r| {
+        let ch = name.chars().nth(r.saturating_sub(1)).unwrap_or(' ');
+        Line::from(Span::styled(format!("│{ch}"), Style::default().fg(Color::Rgb(70, 80, 100))))
+    }).collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub(crate) fn render_playlist_panel(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     pp: &crate::PlaylistPanel,
-    playing: Option<usize>,
+    marks: &[Option<usize>],
     kind: PanelKind,
+    header: &str,
 ) {
-    let next_up = pp.next_up(playing);
     let show_cursor = !matches!(kind, PanelKind::Preview);
     let name = pp.path.file_stem().and_then(|s| s.to_str()).unwrap_or("playlist").to_string();
 
-    // Reserve two rows below the frame for the (wrapping) hint text.
+    // A one-row header above the frame: the panel's state and its key tip —
+    // and the border below it lines up with the browser's.
     let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Min(2),
-        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(1),
     ]).split(area);
 
     use crate::EntryStatus;
     let items: Vec<ListItem> = pp.playlist.entries.iter().enumerate().map(|(i, entry)| {
         let status = pp.status_at(i);
-        let marker = if Some(i) == playing { "▶" } else if Some(i) == next_up { "⇢" } else { " " };
+        // A record already on a deck wears that deck's number.
+        let marker = match marks.get(i).copied().flatten() {
+            Some(slot) => format!("◂{}", slot + 1),
+            None => "  ".to_string(),
+        };
         let desc = format!("{} - {}", entry.description.title, entry.description.artist);
         let shown = if desc == " - " { entry.hints.relative_path.clone() } else { desc };
         let (tail, mut style) = match status {
@@ -2079,27 +2062,30 @@ fn render_playlist_panel(
         if show_cursor && i == pp.cursor {
             style = style.bg(Color::Rgb(40, 50, 80)).add_modifier(Modifier::BOLD);
         }
-        ListItem::new(format!("{marker} {:>2}. {shown}{tail}", i + 1)).style(style)
+        ListItem::new(format!("{marker}{:>2}. {shown}{tail}", i + 1)).style(style)
     }).collect();
 
     // Border colour marks which side is active: bright on the focused side, dim otherwise.
     let (border, hint) = match kind {
-        PanelKind::Preview     => (Color::Rgb(70, 90, 110),   "l browse · e edit"),
-        PanelKind::Browse      => (Color::Rgb(120, 210, 180), "j/k move · Enter load · e edit · Esc back"),
-        PanelKind::EditList    => (Color::Rgb(240, 180, 60),  "K/J reorder · x remove · h/Tab → browser · Enter commit · Esc abort"),
-        PanelKind::EditBrowser => (Color::Rgb(130, 100, 40),  "browse left, then a insert-after (append) · A insert-before · l/Tab → list · Enter commit · Esc abort"),
+        PanelKind::Preview     => (Color::Rgb(70, 90, 110),   "Enter pin · e edit · b box"),
+        PanelKind::Browse      => (Color::Rgb(120, 210, 180), "j/k move · Enter load · K/J reorder · x remove · a/A insert · Esc back"),
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border))
         .title(format!(" ♫ {name}  ({}) ", pp.playlist.entries.len()));
+    // Header: state identity in the panel's own accent, tip dim beside it.
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(format!(" {header}"), Style::default().fg(border)))),
+        rows[0],
+    );
     // Select the cursor so the List scrolls to keep it visible when entries overflow the panel.
     let mut state = ListState::default();
     state.select((!pp.playlist.entries.is_empty()).then(|| pp.cursor.min(pp.playlist.entries.len() - 1)));
-    frame.render_stateful_widget(List::new(items).block(block), rows[0], &mut state);
+    frame.render_stateful_widget(List::new(items).block(block), rows[1], &mut state);
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
-        rows[1],
+        rows[2],
     );
 }
 
@@ -2172,7 +2158,7 @@ pub(crate) fn render_metadata_panel(
     }
     if active_field.is_some() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  Enter to confirm  Esc to cancel", label)));
+        lines.push(Line::from(Span::styled("  Enter saves and exits · Esc exits without saving", Style::default().fg(Color::Rgb(150, 170, 210)))));
     }
     let navy = Style::default().bg(Color::Rgb(20, 20, 38));
     let blue = Color::Rgb(40, 60, 100);

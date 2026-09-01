@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 fn default_art_bright_idx() -> u8 { 1 }
-fn default_panel_pct() -> u16 { 30 }
+fn default_panel_pct() -> u16 { 25 }
 
 /// Filename shared by the canonical `.local` database and its workspace mirror,
 /// so relocating one to the other is a plain file copy.
@@ -225,7 +225,7 @@ mod tests {
     fn bpm_of(e: &CacheEntry) -> f32 { e.grid.expect("confirmed grid").bpm }
 
     fn snapshot(path: &str, position_secs: f64) -> DeckSnapshot {
-        DeckSnapshot { path: path.into(), position_secs, playlist_path: None, playlist_index: 0, bpm: 128.0, playback_speed: 1.0, volume: 0.8, pitch_semitones: -1, filter_offset: 3, filter_poles: 2, pfl_level: 0 }
+        DeckSnapshot { path: path.into(), position_secs, bpm: 128.0, playback_speed: 1.0, volume: 0.8, pitch_semitones: -1, filter_offset: 3, filter_poles: 2, pfl_level: 0 }
     }
 
     #[test]
@@ -347,6 +347,9 @@ struct SessionFile {
     /// Browser panel width as a percentage of the browser area.
     #[serde(default = "default_panel_pct")]
     browser_panel_pct: u16,
+    /// Tags pane width when the tags pair is showing.
+    #[serde(default = "default_panel_pct")]
+    tags_panel_pct: u16,
     /// The decks as they last were, one entry per slot; restored on request.
     #[serde(default)]
     decks: Vec<Option<DeckSnapshot>>,
@@ -361,6 +364,9 @@ struct SessionFile {
     /// How many decks exist (1–3).
     #[serde(default = "default_deck_count")]
     deck_count: u8,
+    /// The record box: the pinned playlist's path.
+    #[serde(default)]
+    current_box: Option<String>,
 }
 
 fn default_deck_count() -> u8 { 1 }
@@ -373,11 +379,13 @@ impl Default for SessionFile {
             audio_latency_ms: 0,
             art_bright_idx: default_art_bright_idx(),
             browser_panel_pct: default_panel_pct(),
+            tags_panel_pct: default_panel_pct(),
             decks: Vec::new(),
             selected_deck: 0,
             ghosts_on: false,
             bottom_view: 0,
             deck_count: 1,
+            current_box: None,
         }
     }
 }
@@ -389,10 +397,6 @@ impl Default for SessionFile {
 pub(crate) struct DeckSnapshot {
     pub(crate) path: String,
     pub(crate) position_secs: f64,
-    #[serde(default)]
-    pub(crate) playlist_path: Option<String>,
-    #[serde(default)]
-    pub(crate) playlist_index: usize,
     pub(crate) bpm: f32,
     pub(crate) playback_speed: f32,
     pub(crate) volume: f32,
@@ -424,11 +428,13 @@ pub(crate) struct SessionState {
     audio_latency_ms: i64,
     art_bright_idx: u8,
     browser_panel_pct: u16,
+    tags_panel_pct: u16,
     decks: [Option<DeckSnapshot>; 3],
     selected_deck: usize,
     ghosts_on: bool,
     bottom_view: u8,
     deck_count: u8,
+    current_box: Option<PathBuf>,
     position_written_at: [Option<std::time::Instant>; 3],
     dirty_at: Option<std::time::Instant>,
 }
@@ -453,11 +459,13 @@ impl SessionState {
             audio_latency_ms: file.audio_latency_ms,
             art_bright_idx: file.art_bright_idx,
             browser_panel_pct: file.browser_panel_pct.clamp(15, 70),
+            tags_panel_pct: file.tags_panel_pct.clamp(15, 70),
             decks: std::array::from_fn(|i| file.decks.get(i).cloned().flatten()),
             selected_deck: file.selected_deck.min(2),
             ghosts_on: file.ghosts_on,
             bottom_view: file.bottom_view.min(3),
             deck_count: file.deck_count.clamp(1, 3),
+            current_box: file.current_box.map(PathBuf::from),
             position_written_at: [None; 3],
             dirty_at: None,
         }
@@ -551,6 +559,15 @@ impl SessionState {
     }
 
 
+    pub(crate) fn current_box(&self) -> Option<&Path> {
+        self.current_box.as_deref()
+    }
+
+    pub(crate) fn set_current_box(&mut self, path: Option<&Path>) {
+        self.current_box = path.map(Path::to_path_buf);
+        self.mark_dirty();
+    }
+
     pub(crate) fn get_deck_count(&self) -> u8 {
         self.deck_count
     }
@@ -588,6 +605,15 @@ impl SessionState {
         self.mark_dirty();
     }
 
+    pub(crate) fn get_tags_pct(&self) -> u16 {
+        self.tags_panel_pct
+    }
+
+    pub(crate) fn step_tags_pct(&mut self, delta: i16) {
+        self.tags_panel_pct = (self.tags_panel_pct as i16 + delta).clamp(15, 70) as u16;
+        self.mark_dirty();
+    }
+
     pub(crate) fn flush_if_idle(&mut self) {
         if idle_elapsed(self.dirty_at) {
             self.save();
@@ -606,11 +632,13 @@ impl SessionState {
             audio_latency_ms: self.audio_latency_ms,
             art_bright_idx: self.art_bright_idx,
             browser_panel_pct: self.browser_panel_pct,
+            tags_panel_pct: self.tags_panel_pct,
             decks: self.decks.to_vec(),
             selected_deck: self.selected_deck,
             ghosts_on: self.ghosts_on,
             bottom_view: self.bottom_view,
             deck_count: self.deck_count,
+            current_box: self.current_box.as_ref().and_then(|p| p.to_str().map(str::to_string)),
         }
     }
 

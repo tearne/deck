@@ -26,14 +26,11 @@ select_deck_2 = "alt+2"
 select_deck_3 = "alt+3"
 # Reload the decks as they were when deck last ran (offered while all decks are empty)
 session_restore  = "alt+r"
-# Browser panel resize (browser open only); divider left widens the panel
+# Pane resize (browser open only): drag the active pane's right-hand boundary
+# left / right — the playlist/browser divider from the playlist, the
+# browser/tags divider from the browser
 panel_widen  = ["alt+h", "alt+left"]
 panel_narrow = ["alt+l", "alt+right"]
-# Skip the selected deck's playlist to the next / previous track — unbound by
-# default; bind here if wanted (the view chords took space+n / space+p's row).
-#playlist_next = ""
-#playlist_prev = ""
-
 # Transport / browse (selected deck)
 play_pause   = "space+g"
 open_browser = "space+f"

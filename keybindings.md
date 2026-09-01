@@ -66,10 +66,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
 | `select_deck_<n>` | `alt+<n>` (n = 1–3) | Select that deck; summon it if it's the next one; on the selected deck, destroy it (empty at once, loaded-paused via `y`, playing refused; last deck stays). Works identically in the browser |
 | `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
-| `panel_widen` | `alt+h`, `alt+left` | Widen the browser panel (browser open; persisted) |
-| `panel_narrow` | `alt+l`, `alt+right` | Narrow the browser panel (browser open; persisted) |
-| `playlist_next` | *(unbound)* | Selected deck: skip to next playlist track |
-| `playlist_prev` | *(unbound)* | Selected deck: skip to previous playlist track |
+| `panel_widen` | `alt+h`, `alt+left` | Drag the active pane's right-hand boundary left (playlist: narrower; browser: tags wider). Widths persisted separately |
+| `panel_narrow` | `alt+l`, `alt+right` | Drag the active pane's right-hand boundary right (playlist: wider; browser: tags narrower) |
 | `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 (needs both to exist) |
 | `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 (needs both to exist) |
 
@@ -183,8 +181,8 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 |-----|--------|
 | `Up` / `Down` / `j` / `k` | Navigate entries |
 | `h` | Go up a directory (command mode) |
-| `l` | Enter highlighted directory (command mode; never loads) |
-| `Enter` | Load highlighted track to the selected deck, or open highlighted playlist |
+| `l` | Enter highlighted directory; on a playlist, pin and open it (command mode; never loads tracks) |
+| `Enter` | Load highlighted track to the selected deck; on a playlist, pin it as the record box |
 | `Backspace` / `Left` | Go up a directory |
 | `@` | Set current directory as workspace |
 | `'` | Clear workspace |
@@ -195,15 +193,19 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 | `Tab` | Keyboard to the decks (browser stays showing) |
 | Printable chars | Search (when workspace is set) |
 
-### Playlist editor (right pane; opens on hovering a `.rpl`)
+### Panes (Playlist | Browser | Tags)
+
+On a wide terminal (≥120 columns) all three panes show at once. Narrower, two show at a time — Playlist+Browser, or Browser+Tags — the third reduced to a sliver at the edge. Whenever the playlist is on screen it is the playlist-working mode; edits write to the file live (no commit/abort).
 
 | Key | Action |
 |-----|--------|
-| `l` / `e` | Focus the playlist pane; `h` / `Esc` back to the browser |
-| `Enter` / `a` | (browser focus) append highlighted track |
-| `j` / `k` | (playlist focus) move cursor |
-| `K` / `J` | (playlist focus) reorder entry up / down |
-| `x` / `Delete` | (playlist focus) remove entry |
+| `H` / `L` | Move activation left / right across the panes (the visible pair follows). `L` from the browser with the tags pane showing opens the highlighted track's tag editor directly (playlist pair showing, it first slides the tags pane into view) |
+| `j` / `k` | (playlist active) move |
+| `Enter` | (playlist active) send the entry to the selected deck; on an unresolved entry, open the candidate picker |
+| `K` / `J` | (playlist active) reorder — writes immediately |
+| `x` / `Delete` | (playlist active) remove — writes immediately |
+| `a` / `A` | Insert the browser's highlighted track after/before the playlist cursor (browser or playlist active, playlist on screen) — writes immediately |
+| `Esc` | Back to the browser pane |
 
 ### Tag Editor
 

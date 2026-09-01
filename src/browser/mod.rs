@@ -680,9 +680,14 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         KeyCode::Char('l') => {
             if state.search_results.is_none() {
                 if let Some(entry) = state.entries.get(state.cursor) {
-                    if entry.kind == EntryKind::Dir {
-                        let target = entry.path.clone();
-                        state.navigate_to(target)?;
+                    match entry.kind {
+                        EntryKind::Dir => {
+                            let target = entry.path.clone();
+                            state.navigate_to(target)?;
+                        }
+                        // Vim "into": a playlist pins and opens, like Enter.
+                        EntryKind::Playlist => return Ok(Some(BrowserResult::PlaylistSelected(entry.path.clone()))),
+                        _ => {}
                     }
                 }
             }
