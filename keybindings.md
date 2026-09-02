@@ -199,10 +199,12 @@ On a wide terminal (≥120 columns) all three panes show at once. Narrower, two 
 
 | Key | Action |
 |-----|--------|
-| `H` / `L` | Move activation left / right across the panes (the visible pair follows). `L` from the browser with the tags pane showing opens the highlighted track's tag editor directly (playlist pair showing, it first slides the tags pane into view) |
-| `j` / `k` | (playlist active) move |
+| `H` / `L` | Move activation left / right across the panes — a symmetric walk in every layout (the visible pair follows on narrow terminals) |
+| `e` | (tags active) edit the highlighted track's tags — the same key the browser uses |
+| `j` / `k` or `↓` / `↑` | (playlist active) move |
 | `Enter` | (playlist active) send the entry to the selected deck; on an unresolved entry, open the candidate picker |
-| `K` / `J` | (playlist active) reorder — writes immediately |
+| `K` / `J` or `shift+↑` / `shift+↓` | (playlist active) reorder — writes immediately |
+| `→` / `←` | (playlist / tags active) back to the browser, like Esc |
 | `x` / `Delete` | (playlist active) remove — writes immediately |
 | `a` / `A` | Insert the browser's highlighted track after/before the playlist cursor (browser or playlist active, playlist on screen) — writes immediately |
 | `Esc` | Back to the browser pane |

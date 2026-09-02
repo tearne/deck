@@ -1128,9 +1128,10 @@ fn tui_loop(
     enum Pane { Tags, Browser, Playlist }
     let mut active_pane = Pane::Browser;
     let mut playlist_pair = false;
-    // Whether the last frame had room for all three panes at once (wide terminal);
-    // set during render, read by the key handlers.
+    // What the last frame had room for — all three panes (wide terminal) or
+    // only the browser (very narrow); set during render, read by key handlers.
     let mut panes_three_across = false;
+    let mut panes_single = false;
     // The pinned playlist (the record box) and the candidate picker over it.
     let mut box_panel: Option<PlaylistPanel> = None;
     struct BoxPicker { entry: usize, candidates: Vec<playlist::Candidate>, cursor: usize, layout: Rc<RefCell<ConfirmLayout>> }
@@ -1276,6 +1277,38 @@ fn tui_loop(
                 Ok(_) => {}
                 Err(e) => stream.emit(Event::new(Source::Playlist, Severity::Error, e)),
             }
+        }};
+    }
+
+    // Accepting a deck's rename offer summons the whole fix flow: the browser
+    // view up and focused at the file with compliance markers on, the tag
+    // editor open in the Tags pane, so saving resumes the cleanup flow there.
+    macro_rules! accept_rename_offer {
+        ($d:expr) => {{
+            tag_editor = TagEditorState::for_track(&$d.path);
+            if tag_editor.is_none() {
+                stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+            } else {
+                let track_path = $d.path.clone();
+                if let Some(dir) = track_path.parent() {
+                    let workspace = session.workspace().map(|p| p.to_path_buf());
+                    if let Ok(mut bs) = BrowserState::new(dir.to_path_buf(), workspace) {
+                        let _ = bs.go_to(dir.to_path_buf(), Some(&track_path), Some("rename offer".to_string()));
+                        bs.compliance_on = true;
+                        edit_resume_anchor = bs.entries.iter().position(|e| e.path == track_path)
+                            .and_then(|i| bs.entries.get(i + 1))
+                            .or_else(|| bs.entries.first())
+                            .map(|e| e.path.clone());
+                        browser_state = Some(bs);
+                        preview_output = Some(PreviewOutput::new(mixer));
+                        bottom_view = BottomView::Browser;
+                        view_focused = true;
+                        playlist_pair = false;
+                        active_pane = Pane::Tags;
+                    }
+                }
+            }
+            $d.rename_offer_started = None;
         }};
     }
 
@@ -1719,11 +1752,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_a);
                     }
                     render_detail_waveform(frame, &buf_a, deck, area_detail_a, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_a, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
+                    let bottom_right = countdown_prompt_line(deck)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_a.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 0).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_a, bottom_right, bar_bg);
@@ -1781,11 +1814,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_b);
                     }
                     render_detail_waveform(frame, &buf_b, deck, area_detail_b, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_b, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
+                    let bottom_right = countdown_prompt_line(deck)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_b.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 1).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_b, bottom_right, bar_bg);
@@ -1843,11 +1876,11 @@ fn tui_loop(
                         frame.render_widget(&cached.paragraph, area_overview_c);
                     }
                     render_detail_waveform(frame, &buf_c, deck, area_detail_c, &display_cfg, rs.view_pos_samp, deck.display.palette, detail_ghosts);
-                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active, bottom_view != BottomView::Browser).spans);
+                    title_spans.extend(overview_title_line(deck, frame_count, rs.beat_on, rs.spinner_active).spans);
                     if let Some(transient) = bottom_transient_line(deck) {
                         overlay_bottom_left(frame, area_overview_c, transient, bar_bg);
                     }
-                    let bottom_right = countdown_prompt_line(deck, bottom_view != BottomView::Browser)
+                    let bottom_right = countdown_prompt_line(deck)
                         .unwrap_or_else(|| readout_corner_line(deck, area_overview_c.width as usize, rs.spinner_active,
                             detached.as_ref().filter(|v| v.deck == 2).map(|_| "GRID".to_string())));
                     overlay_bottom_right(frame, area_overview_c, bottom_right, bar_bg);
@@ -1957,31 +1990,42 @@ fn tui_loop(
                 };
                 let playlist_pct = session.get_panel_pct();
                 let tags_pct = session.get_tags_pct();
-                const SLIVER_W: u16 = 2;
                 const THREE_ACROSS_MIN_W: u16 = 120;
+                const PAIR_MIN_W: u16 = 50;
                 panes_three_across = area.width >= THREE_ACROSS_MIN_W;
+                panes_single = area.width < PAIR_MIN_W;
                 // An open tag editor always needs its pane on screen.
                 let tags_shown = panes_three_across || !playlist_pair || tag_editor.is_some();
                 let playlist_shown = panes_three_across || !tags_shown;
-                // Wide: all three across. Narrow: the visible pair plus a sliver
-                // of the off-screen pane.
-                let (playlist_area, browser_area, tags_area, sliver) = if panes_three_across {
+                // Wide: all three across. Narrow: the visible pair — the nav
+                // row carries the off-screen pane's existence. Under the pair
+                // minimum: a carousel — the active pane alone at full width.
+                let (playlist_area, browser_area, tags_area) = if panes_single {
+                    if tag_editor.is_some() {
+                        (None, None, Some(area))
+                    } else {
+                        match active_pane {
+                            Pane::Playlist if box_panel.is_some() => (Some(area), None, None),
+                            Pane::Tags => (None, None, Some(area)),
+                            _ => (None, Some(area), None),
+                        }
+                    }
+                } else if panes_three_across {
                     let cols = Layout::default().direction(Direction::Horizontal)
                         .constraints([Constraint::Percentage(playlist_pct), Constraint::Percentage(100 - playlist_pct - tags_pct), Constraint::Percentage(tags_pct)])
                         .split(area);
-                    (Some(cols[0]), cols[1], Some(cols[2]), None)
+                    (Some(cols[0]), Some(cols[1]), Some(cols[2]))
                 } else if playlist_shown {
                     let cols = Layout::default().direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(playlist_pct), Constraint::Percentage(100 - playlist_pct), Constraint::Length(SLIVER_W)])
+                        .constraints([Constraint::Percentage(playlist_pct), Constraint::Percentage(100 - playlist_pct)])
                         .split(area);
-                    (Some(cols[0]), cols[1], None, Some((cols[2], "TAGS")))
+                    (Some(cols[0]), Some(cols[1]), None)
                 } else {
                     let cols = Layout::default().direction(Direction::Horizontal)
-                        .constraints([Constraint::Length(SLIVER_W), Constraint::Percentage(100 - tags_pct), Constraint::Percentage(tags_pct)])
+                        .constraints([Constraint::Percentage(100 - tags_pct), Constraint::Percentage(tags_pct)])
                         .split(area);
-                    (None, cols[1], Some(cols[2]), Some((cols[0], "PLAYLIST")))
+                    (None, Some(cols[0]), Some(cols[1]))
                 };
-                let selected_playing = [&d0, &d1, &d2][selected_deck].as_ref().is_some_and(|d| !d.audio.player.is_paused());
                 let marks_of = |p: &PlaylistPanel| -> Vec<Option<usize>> {
                     // A record on a deck is matched by content identity — the
                     // same hash playlists key on — so renames don't unmark it.
@@ -1991,10 +2035,8 @@ fn tui_loop(
                     }).collect()
                 };
 
-                // Browser pane — always visible, its own chrome as ever.
-                render_browser(frame, browser_area, bs, selected_deck, selected_playing);
-                if view_focused && active_pane != Pane::Browser {
-                    render::dim_area(frame, browser_area);
+                if let Some(b_area) = browser_area {
+                    render_browser(frame, b_area, bs, active_pane == Pane::Browser);
                 }
 
                 if let Some(pl_area) = playlist_area {
@@ -2004,13 +2046,11 @@ fn tui_loop(
                                 render::render_confirm(frame, pl_area, bp, pk.entry, &pk.candidates, pk.cursor, &pk.layout);
                             } else {
                                 let kind = if active_pane == Pane::Playlist { render::PanelKind::Browse } else { render::PanelKind::Preview };
-                                render::render_playlist_panel(frame, pl_area, bp, &marks_of(bp), kind, "Playlist · pinned");
+                                let hint = if active_pane == Pane::Playlist { "j/k move · Enter load · K/J reorder · x remove · a/A insert · Esc back" } else { "H work the playlist" };
+                                render::render_playlist_panel(frame, pl_area, bp, &marks_of(bp), kind, hint);
                             }
                         }
-                        None => render::render_pane_placeholder(frame, pl_area, "Playlist", "Enter on a playlist pins it"),
-                    }
-                    if view_focused && active_pane != Pane::Playlist {
-                        render::dim_area(frame, pl_area);
+                        None => render::render_pane_placeholder(frame, pl_area, "Playlist", "Enter on a playlist pins it", render::PLAYLIST_FAMILY, active_pane == Pane::Playlist),
                     }
                 }
                 if let Some(tg_area) = tags_area {
@@ -2021,43 +2061,31 @@ fn tui_loop(
                         match &hover_preview {
                             Preview::Track { fields, current_name, proposed_name } => {
                                 let owned: Vec<(String, usize)> = fields.iter().map(|f| (f.clone(), 0)).collect();
-                                render::render_metadata_panel(frame, tg_area, &owned, None, current_name, proposed_name.as_deref(), None, None);
+                                render::render_metadata_panel(frame, tg_area, &owned, None, current_name, proposed_name.as_deref(), None, None, active_pane == Pane::Tags);
                             }
                             Preview::Playlist(pp) => {
-                                render::render_playlist_panel(frame, tg_area, pp, &marks_of(pp), render::PanelKind::Preview, "Preview · Enter pins");
+                                render::render_playlist_panel(frame, tg_area, pp, &marks_of(pp), render::PanelKind::Preview, "Enter pins");
                             }
-                            Preview::Empty => render::render_pane_placeholder(frame, tg_area, "Tags", "highlight a track"),
+                            Preview::Empty => render::render_pane_placeholder(frame, tg_area, "Tags", "highlight a track", render::TAGS_FAMILY, active_pane == Pane::Tags),
                         }
                     }
-                    if view_focused && active_pane != Pane::Tags && tag_editor.is_none() {
-                        render::dim_area(frame, tg_area);
-                    }
                 }
-                if let Some((edge_area, name)) = sliver {
-                    render::render_pane_sliver(frame, edge_area, name);
-                }
+                // The nav strip over the panes' header rows: tips above each
+                // visible pane's corner, off-screen tips docked at the edges.
+                render::render_pane_nav(
+                    frame, area,
+                    [playlist_area.map(|r| r.x), browser_area.map(|r| r.x), tags_area.map(|r| r.x)],
+                    match active_pane { Pane::Playlist => 0, Pane::Browser => 1, Pane::Tags => 2 },
+                    box_panel.is_some(),
+                    browser::mode_accent(bs.mode),
+                );
 
                 // Unfocused: the whole region fades as one.
                 if !view_focused {
                     render::dim_area(frame, area);
                 }
-                // The rename offer's browser-side home: an amber banner over the
-                // companion pane (the deck corners stay clean while this shows).
-                if tag_editor.is_none() {
-                    for d in [&d0, &d1, &d2].into_iter().flatten() {
-                        if d.rename_offer_active() {
-                            let name = d.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            let elapsed = d.rename_offer_started.unwrap().elapsed().as_secs();
-                            let (text, fg) = if elapsed < 10 {
-                                (format!("⚠ rename {name}? [y]  ({}s)", 10 - elapsed), Color::Rgb(230, 170, 60))
-                            } else {
-                                (format!("⚠ rename {name}? [y]"), Color::Rgb(150, 110, 40))
-                            };
-                            render::overlay_top_left(frame, tags_area.or(playlist_area).unwrap_or(browser_area), Line::from(Span::styled(text, Style::default().fg(fg))), Style::default().bg(Color::Rgb(20, 24, 34)));
-                            break;
-                        }
-                    }
-                }
+                // (The rename offer lives on the deck's own corner — the bottom
+                // pane carries no banner for it.)
             } else if c[10].height >= 3 && art_bright_idx < 2 {
                 // The art ground: under the help and messages views too — their
                 // boxes clear their own backing, and the art keeps them company.
@@ -2202,6 +2230,10 @@ session.save();
                         } else if tag_editor.is_none() {
                             // Editor closed without saving (cancelled) — don't advance.
                             edit_resume_anchor = None;
+                        }
+                        // Editor gone either way: the browser resumes driving.
+                        if tag_editor.is_none() && active_pane == Pane::Tags {
+                            active_pane = Pane::Browser;
                         }
                     }
                     continue; // block all other key handling while editor is open
@@ -2354,30 +2386,13 @@ session.save();
                                 match active_pane {
                                     Pane::Playlist => active_pane = Pane::Browser,
                                     // Narrow with the playlist pair showing: L first
-                                    // brings the tags pane into view; only a further
-                                    // L starts editing.
-                                    Pane::Browser if playlist_pair && !panes_three_across => playlist_pair = false,
-                                    Pane::Browser => {
-                                        // Like the playlist pane, arriving is editing:
-                                        // L with the tags pane showing opens the
-                                        // highlighted track's tag editor directly.
-                                        playlist_pair = false;
-                                        match browser_state.as_ref().and_then(|bs| bs.highlighted_audio_path()) {
-                                            Some(path) => {
-                                                tag_editor = TagEditorState::for_track(&path);
-                                                if tag_editor.is_none() {
-                                                    stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
-                                                }
-                                                if let Some(bs) = browser_state.as_ref().filter(|bs| bs.compliance_on) {
-                                                    edit_resume_anchor = bs.entries.get(bs.cursor + 1)
-                                                        .or_else(|| bs.entries.first())
-                                                        .map(|e| e.path.clone());
-                                                }
-                                            }
-                                            None => active_pane = Pane::Tags,
-                                        }
-                                    }
-                                    _ => {}
+                                    // brings the tags pane into view; a further L
+                                    // activates it.
+                                    Pane::Browser if playlist_pair && !panes_three_across && !panes_single => playlist_pair = false,
+                                    // Activation only — editing is `e` from the
+                                    // active pane, so H/L stay a symmetric walk.
+                                    Pane::Browser => { playlist_pair = false; active_pane = Pane::Tags; }
+                                    Pane::Tags => {}
                                 }
                             }
                         }
@@ -2428,7 +2443,10 @@ session.save();
                     if active_pane == Pane::Playlist {
                         if let Some(bp) = box_panel.as_mut() {
                             match key.code {
-                                KeyCode::Esc => { active_pane = Pane::Browser; }
+                                KeyCode::Esc | KeyCode::Right => { active_pane = Pane::Browser; }
+                                // Shift+arrows mirror K/J before the plain arrows match.
+                                KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => { bp.move_up(); commit_playlist(bp); }
+                                KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => { bp.move_down(); commit_playlist(bp); }
                                 KeyCode::Up | KeyCode::Char('k') => bp.cursor_up(),
                                 KeyCode::Down | KeyCode::Char('j') => bp.cursor_down(),
                                 KeyCode::Enter => match bp.status_at(bp.cursor) {
@@ -2484,10 +2502,24 @@ session.save();
                         continue;
                     }
 
-                    // Tags pane active: nothing to drive yet; Esc returns.
+                    // Tags pane active: `e` edits the highlighted track (the same
+                    // key the browser uses for it); Esc/Left return.
                     if active_pane == Pane::Tags {
                         match key.code {
-                            KeyCode::Esc => { active_pane = Pane::Browser; }
+                            KeyCode::Esc | KeyCode::Left => { active_pane = Pane::Browser; }
+                            KeyCode::Char('e') => {
+                                if let Some(path) = browser_state.as_ref().and_then(|bs| bs.highlighted_audio_path()) {
+                                    tag_editor = TagEditorState::for_track(&path);
+                                    if tag_editor.is_none() {
+                                        stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                    }
+                                    if let Some(bs) = browser_state.as_ref().filter(|bs| bs.compliance_on) {
+                                        edit_resume_anchor = bs.entries.get(bs.cursor + 1)
+                                            .or_else(|| bs.entries.first())
+                                            .map(|e| e.path.clone());
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         continue;
@@ -2495,7 +2527,7 @@ session.save();
 
                     // Browser active with the playlist on screen: a/A insert the
                     // highlighted track — a visible playlist is the editing mode.
-                    if (playlist_pair || panes_three_across) && cmd_mode {
+                    if (playlist_pair || panes_three_across) && !panes_single && cmd_mode {
                         if let KeyCode::Char(c @ ('a' | 'A')) = key.code {
                             if box_panel.is_some() {
                                 if let Some((path, kind)) = browser_state.as_ref().and_then(|bs| bs.highlighted_entry()) {
@@ -2565,6 +2597,8 @@ session.save();
                             tag_editor = TagEditorState::for_track(&path);
                             if tag_editor.is_none() {
                                 stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                            } else {
+                                active_pane = Pane::Tags;
                             }
                             // Cleanup mode: remember the entry below this one so a save
                             // resumes there (stable across the rename), wrapping to top.
@@ -2949,32 +2983,7 @@ session.save();
                             if d.rename_offer_active() {
                                 match key.code {
                                     KeyCode::Char('y') => {
-                                        tag_editor = TagEditorState::for_track(&d.path);
-                                        if tag_editor.is_none() {
-                                            stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
-                                        } else {
-                                            // The offer lands on the same screen as the browser
-                                            // route: browser at the file, compliance markers on,
-                                            // editor in the panel. Saving then resumes the normal
-                                            // cleanup flow among the file's neighbours.
-                                            let track_path = d.path.clone();
-                                            if let Some(dir) = track_path.parent() {
-                                                let workspace = session.workspace().map(|p| p.to_path_buf());
-                                                if let Ok(mut bs) = BrowserState::new(dir.to_path_buf(), workspace) {
-                                                    let _ = bs.go_to(dir.to_path_buf(), Some(&track_path), Some("rename offer".to_string()));
-                                                    bs.compliance_on = true;
-                                                    if bs.compliance_on {
-                                                        edit_resume_anchor = bs.entries.iter().position(|e| e.path == track_path)
-                                                            .and_then(|i| bs.entries.get(i + 1))
-                                                            .or_else(|| bs.entries.first())
-                                                            .map(|e| e.path.clone());
-                                                    }
-                                                    browser_state = Some(bs);
-                                                    preview_output = Some(PreviewOutput::new(mixer));
-                                                }
-                                            }
-                                        }
-                                        d.rename_offer_started = None;
+                                        accept_rename_offer!(d);
                                         rename_offer_consumed = true;
                                     }
                                     KeyCode::Esc => {

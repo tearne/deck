@@ -403,95 +403,30 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
     }
 }
 
+/// The accent of the browser's current mode — the browser's family colour
+/// for shared chrome drawn outside this module (the nav strip).
+pub(crate) fn mode_accent(mode: BrowserMode) -> Color {
+    mode_theme(mode).accent
+}
+
 pub(crate) fn render_browser(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     state: &BrowserState,
-    selected_deck: usize,
-    selected_playing: bool,
+    browser_active: bool,
 ) {
     let bg    = Color::Rgb(20, 20, 38);
     let theme = mode_theme(state.mode);
-    let border_style = Style::default().fg(theme.accent).bg(bg);
+    let border_accent = if browser_active { theme.accent } else { crate::render::quiet_of(theme.accent) };
+    let border_style = Style::default().fg(border_accent).bg(bg);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
-    // Top bar: a prominent selected-deck chip on the left (loads land there),
-    // the mode's content right-aligned on the right.
-    let top = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(11), Constraint::Min(0)])
-        .split(chunks[0]);
-    // Chip colour warns about the landing zone: yellow = safe to load,
-    // red = the selected deck is playing (a load will ask to confirm).
-    let chip_bg = if selected_playing { Color::Rgb(255, 70, 70) } else { Color::Rgb(200, 170, 40) };
-    frame.render_widget(
-        Paragraph::new(Line::from(ratatui::text::Span::styled(
-            format!(" ▶ DECK {} ", selected_deck + 1),
-            Style::default().fg(Color::Black).bg(chip_bg).add_modifier(Modifier::BOLD),
-        ))).style(Style::default().bg(bg)),
-        top[0],
-    );
-    let right = top[1];
-    if let Some(name) = &state.name_prompt {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                ratatui::text::Span::styled("new playlist: ", Style::default().fg(theme.accent).bg(bg)),
-                ratatui::text::Span::styled(name.clone(), Style::default().fg(Color::White).bg(bg)),
-                ratatui::text::Span::styled("█  Enter: create  Esc: cancel ", Style::default().fg(theme.accent).bg(bg)),
-            ])).alignment(Alignment::Right).style(Style::default().bg(bg)),
-            right,
-        );
-    } else {
-    match state.mode {
-        BrowserMode::Search => {
-            let mut spans = vec![
-                ratatui::text::Span::styled("search: ", Style::default().fg(theme.accent).bg(bg)),
-            ];
-            if state.search_term.is_empty() {
-                spans.push(ratatui::text::Span::styled("type to filter", Style::default().fg(Color::Rgb(60, 60, 80)).bg(bg)));
-            } else {
-                spans.push(ratatui::text::Span::styled(state.search_term.clone(), Style::default().fg(Color::White).bg(bg)));
-            }
-            spans.push(ratatui::text::Span::styled("█ ", Style::default().fg(theme.accent).bg(bg)));
-            frame.render_widget(Paragraph::new(Line::from(spans)).alignment(Alignment::Right).style(Style::default().bg(bg)), right);
-        }
-        BrowserMode::Move => {
-            let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
-            frame.render_widget(
-                Paragraph::new(format!("Move here → {name}    y: confirm   Esc: cancel "))
-                    .alignment(Alignment::Right)
-                    .style(Style::default().fg(theme.accent).bg(bg)),
-                right,
-            );
-        }
-        BrowserMode::Command => {
-            let msg = if state.workspace.is_some() {
-                "workspace set · ' clear · / search "
-            } else {
-                "@ to set a search workspace "
-            };
-            frame.render_widget(
-                Paragraph::new(msg).alignment(Alignment::Right).style(Style::default().fg(Color::Rgb(80, 100, 140)).bg(bg)),
-                right,
-            );
-        }
-    }
-    }
-    // The jumped-to location label sits prominently at the top-left of the content,
-    // over the mode hint, until the next manual navigation clears it.
-    if let Some(ref label) = state.location_label {
-        frame.render_widget(
-            Paragraph::new(Line::from(ratatui::text::Span::styled(
-                format!(" ◈ {label} "),
-                Style::default().fg(Color::Rgb(170, 195, 225)).bg(Color::Rgb(38, 50, 78)),
-            ))).style(Style::default().bg(bg)),
-            right,
-        );
-    }
+    // Header row: the shared nav strip is drawn over it by the caller.
+    frame.render_widget(Paragraph::new("").style(Style::default().bg(bg)), chunks[0]);
     // List: search results or directory entries.
     let items: Vec<ListItem> = if let Some(ref results) = state.search_results {
         let base = state.workspace.as_deref().unwrap_or(&state.cwd);
@@ -574,18 +509,52 @@ pub(crate) fn render_browser(
     let mut list_state = ListState::default().with_selected(Some(state.cursor));
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 
-    // Status bar: the mode label (in its accent) followed by that mode's legend,
+    // Footer: the mode label (in its accent), then that mode's live input —
+    // the search term, move prompt, or new-playlist name — or its key legend,
     // plus a tag-compliance indicator when cleanup mode is on.
     let mut status_spans = vec![
         ratatui::text::Span::styled(
             format!(" {} ", theme.label),
             Style::default().fg(Color::Black).bg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        ratatui::text::Span::styled(
-            format!("  {}", theme.legend),
-            Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg),
-        ),
     ];
+    if let Some(name) = &state.name_prompt {
+        status_spans.push(ratatui::text::Span::styled("  new playlist: ", Style::default().fg(theme.accent).bg(bg)));
+        status_spans.push(ratatui::text::Span::styled(name.clone(), Style::default().fg(Color::White).bg(bg)));
+        status_spans.push(ratatui::text::Span::styled("█  Enter: create · Esc: cancel", Style::default().fg(theme.accent).bg(bg)));
+    } else {
+        match state.mode {
+            BrowserMode::Search => {
+                status_spans.push(ratatui::text::Span::styled("  search: ", Style::default().fg(theme.accent).bg(bg)));
+                if state.search_term.is_empty() {
+                    status_spans.push(ratatui::text::Span::styled("type to filter", Style::default().fg(Color::Rgb(80, 90, 110)).bg(bg)));
+                } else {
+                    status_spans.push(ratatui::text::Span::styled(state.search_term.clone(), Style::default().fg(Color::White).bg(bg)));
+                }
+                status_spans.push(ratatui::text::Span::styled("█", Style::default().fg(theme.accent).bg(bg)));
+                status_spans.push(ratatui::text::Span::styled("  ↑/↓ move · Enter load · Esc clear/command", Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg)));
+            }
+            BrowserMode::Move => {
+                let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+                status_spans.push(ratatui::text::Span::styled(
+                    format!("  Move here → {name}   y: confirm · Esc: cancel"),
+                    Style::default().fg(theme.accent).bg(bg),
+                ));
+            }
+            BrowserMode::Command => {
+                status_spans.push(ratatui::text::Span::styled(
+                    format!("  {}", theme.legend),
+                    Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg),
+                ));
+                if state.workspace.is_some() {
+                    status_spans.push(ratatui::text::Span::styled(
+                        "   ws set · ' clears",
+                        Style::default().fg(Color::Rgb(170, 150, 90)).bg(bg),
+                    ));
+                }
+            }
+        }
+    }
     if state.compliance_on {
         let flagged = state.non_compliant_count();
         status_spans.push(ratatui::text::Span::styled(
@@ -594,6 +563,20 @@ pub(crate) fn render_browser(
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(status_spans)).style(Style::default().bg(bg)), chunks[2]);
+    // The jumped-to location label sits at the footer's right end until the
+    // next manual navigation clears it.
+    if let Some(ref label) = state.location_label {
+        let text = format!(" ◈ {label} ");
+        let w = (text.chars().count() as u16).min(chunks[2].width);
+        let label_area = ratatui::layout::Rect { x: chunks[2].x + chunks[2].width - w, y: chunks[2].y, width: w, height: 1 };
+        frame.render_widget(
+            Paragraph::new(Line::from(ratatui::text::Span::styled(
+                text,
+                Style::default().fg(Color::Rgb(170, 195, 225)).bg(Color::Rgb(38, 50, 78)),
+            ))),
+            label_area,
+        );
+    }
 }
 
 pub(crate) fn handle_browser_key(

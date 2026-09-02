@@ -563,14 +563,14 @@ impl SharedDetailRenderer {
 
 /// Play state, badge, and track name for the overview's top-left overlay; a
 /// lingering rename offer marks the title it concerns with an amber ⚠.
-pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool, offer_on_deck: bool) -> Line<'static> {
+pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool, analysing: bool) -> Line<'static> {
     let mut spans = tempo_spans(deck, frame_count, beat_on, analysing);
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
         deck.track_name.clone(),
         Style::default().fg(spectral_color(deck.display.palette, 0.0, 0.85)),
     ));
-    if offer_on_deck && deck.rename_offer_active() && deck.rename_offer_started.unwrap().elapsed().as_secs() >= 10 {
+    if deck.rename_offer_active() && deck.rename_offer_started.unwrap().elapsed().as_secs() >= 10 {
         spans.push(Span::styled(" ⚠", Style::default().fg(Color::Rgb(230, 170, 60))));
     }
     Line::from(spans)
@@ -579,8 +579,8 @@ pub(crate) fn overview_title_line(deck: &Deck, frame_count: usize, beat_on: bool
 /// A countdown prompt that momentarily displaces the meters corner: the BPM
 /// confirmation, or the rename offer's active phase. The meters return when
 /// the prompt resolves.
-pub(crate) fn countdown_prompt_line(deck: &Deck, offer_on_deck: bool) -> Option<Line<'static>> {
-    if offer_on_deck && deck.rename_offer_active() {
+pub(crate) fn countdown_prompt_line(deck: &Deck) -> Option<Line<'static>> {
+    if deck.rename_offer_active() {
         let elapsed = deck.rename_offer_started.unwrap().elapsed().as_secs();
         if elapsed < 10 {
             let secs_left = 10 - elapsed;
@@ -1999,30 +1999,138 @@ pub(crate) enum PanelKind { Preview, Browse }
 
 /// A playlist in the panel: entries with ▶ playing / ⇢ next-up markers and status.
 /// A wrapping hint sits below the frame; the border colour marks the active side.
-/// A pane with nothing to show yet: bordered, named, one dim hint.
-pub(crate) fn render_pane_placeholder(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str, hint: &str) {
-    if area.width == 0 || area.height == 0 { return; }
-    frame.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(55, 62, 78)))
-        .title(format!(" {name} "));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::Rgb(90, 100, 120))).wrap(ratatui::widgets::Wrap { trim: true }),
-        inner,
-    );
+// ---- Shared pane chrome ----
+//
+// The three bottom panes share one anatomy — a one-row header, a bordered
+// frame, a one-row footer — so their borders line up by construction. Each
+// pane has a colour family; activation brightens the family, it never
+// changes hue. The browser's family is its mode accent.
+
+pub(crate) const PANE_BG: Color = Color::Rgb(20, 20, 38);
+/// (bright, quiet) — bright when the pane is active, quiet otherwise.
+pub(crate) const PLAYLIST_FAMILY: (Color, Color) = (Color::Rgb(120, 210, 160), Color::Rgb(60, 100, 80));
+pub(crate) const TAGS_FAMILY: (Color, Color) = (Color::Rgb(175, 140, 230), Color::Rgb(90, 75, 120));
+
+pub(crate) fn pane_accent(family: (Color, Color), active: bool) -> Color {
+    if active { family.0 } else { family.1 }
 }
 
-/// The off-screen pane's sliver: a thin strip naming it vertically.
-pub(crate) fn render_pane_sliver(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str) {
+/// The nav strip: each pane's name-and-reach-key tip sits above its pane's
+/// top-left corner; tips of off-screen panes dock at the nearest screen edge,
+/// so narrowing compresses the strip instead of losing it.
+pub(crate) fn render_pane_nav(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    pane_x: [Option<u16>; 3], // left column of each pane, when visible
+    active: usize,
+    playlist_pinned: bool,
+    browser_accent: Color,
+) {
+    if area.height == 0 || area.width == 0 { return; }
+    let colours = [
+        if playlist_pinned { PLAYLIST_FAMILY.0 } else { Color::Rgb(70, 78, 95) },
+        browser_accent,
+        TAGS_FAMILY.0,
+    ];
+    let names = ["Playlist", "Browser", "Tags"];
+    let hint_style = Style::default().fg(Color::Rgb(110, 120, 150)).bg(PANE_BG);
+    let tip = |i: usize| -> (Line<'static>, u16) {
+        if i == active {
+            let s = format!(" {} ", names[i]);
+            let w = s.chars().count() as u16;
+            (Line::from(Span::styled(s, Style::default().fg(Color::Black).bg(colours[i]).add_modifier(Modifier::BOLD))), w)
+        } else {
+            let key = if i < active { "[H]" } else { "[L]" };
+            let name_s = format!("{} ", names[i]);
+            let w = (name_s.chars().count() + key.chars().count()) as u16;
+            (Line::from(vec![
+                Span::styled(name_s, Style::default().fg(colours[i]).bg(PANE_BG)),
+                Span::styled(key.to_string(), hint_style),
+            ]), w)
+        }
+    };
+    let first_visible = pane_x.iter().position(|x| x.is_some()).unwrap_or(1);
+    let last_visible = pane_x.iter().rposition(|x| x.is_some()).unwrap_or(1);
+    let mut placed: Vec<(u16, Line<'static>, u16)> = Vec::new();
+    // Visible panes anchor at their own column (pushed right past any earlier
+    // tip); panes hidden to the left dock at the left edge, in order.
+    let mut cursor = area.x;
+    for i in 0..=last_visible {
+        let (line, w) = tip(i);
+        let anchor = match pane_x[i] {
+            Some(x) => x.max(cursor),
+            None if i < first_visible => cursor,
+            None => continue,
+        };
+        let x = (anchor + 1).min((area.x + area.width).saturating_sub(w));
+        placed.push((x, line, w));
+        cursor = x + w + 2;
+    }
+    // Panes hidden to the right dock at the right edge, order preserved.
+    let mut right_edge = area.x + area.width;
+    for i in ((last_visible + 1)..3).rev() {
+        let (line, w) = tip(i);
+        let x = right_edge.saturating_sub(w + 1).max(cursor);
+        placed.push((x, line, w));
+        right_edge = x;
+    }
+    for (x, line, w) in placed {
+        let width = w.min((area.x + area.width).saturating_sub(x));
+        if width == 0 { continue; }
+        let rect = ratatui::layout::Rect { x, y: area.y, width, height: 1 };
+        frame.render_widget(Paragraph::new(line).style(Style::default().bg(PANE_BG)), rect);
+    }
+}
+
+/// A colour's quiet variant, for inactive chrome.
+pub(crate) fn quiet_of(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => Color::Rgb(r / 2, g / 2, b / 2),
+        other => other,
+    }
+}
+
+/// The uniform vertical anatomy: header row, frame, footer row.
+pub(crate) fn pane_rows(area: ratatui::layout::Rect) -> (ratatui::layout::Rect, ratatui::layout::Rect, ratatui::layout::Rect) {
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Min(2),
+        ratatui::layout::Constraint::Length(1),
+    ]).split(area);
+    (rows[0], rows[1], rows[2])
+}
+
+pub(crate) fn pane_frame(title: Line<'static>, accent: Color) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(accent).bg(PANE_BG))
+        .style(Style::default().bg(PANE_BG))
+        .title(title)
+}
+
+pub(crate) fn pane_header(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line) {
+    frame.render_widget(Paragraph::new(line).style(Style::default().bg(PANE_BG)), area);
+}
+
+pub(crate) fn pane_footer(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line) {
+    frame.render_widget(Paragraph::new(line).style(Style::default().bg(PANE_BG)), area);
+}
+
+/// A pane with nothing to show yet: full chrome, one dim hint inside.
+pub(crate) fn render_pane_placeholder(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str, hint: &str, family: (Color, Color), active: bool) {
     if area.width == 0 || area.height == 0 { return; }
     frame.render_widget(Clear, area);
-    let lines: Vec<Line> = (0..area.height as usize).map(|r| {
-        let ch = name.chars().nth(r.saturating_sub(1)).unwrap_or(' ');
-        Line::from(Span::styled(format!("│{ch}"), Style::default().fg(Color::Rgb(70, 80, 100))))
-    }).collect();
-    frame.render_widget(Paragraph::new(lines), area);
+    let accent = pane_accent(family, active);
+    let (header, body, footer) = pane_rows(area);
+    pane_header(frame, header, Line::from(""));
+    let block = pane_frame(Line::from(Span::styled(format!(" {name} "), Style::default().fg(accent))), accent);
+    let inner = block.inner(body);
+    frame.render_widget(block, body);
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(Color::Rgb(90, 100, 120)).bg(PANE_BG)).wrap(ratatui::widgets::Wrap { trim: true }),
+        inner,
+    );
+    pane_footer(frame, footer, Line::from(""));
 }
 
 pub(crate) fn render_playlist_panel(
@@ -2031,27 +2139,16 @@ pub(crate) fn render_playlist_panel(
     pp: &crate::PlaylistPanel,
     marks: &[Option<usize>],
     kind: PanelKind,
-    header: &str,
+    hint: &str,
 ) {
     let show_cursor = !matches!(kind, PanelKind::Preview);
     let name = pp.path.file_stem().and_then(|s| s.to_str()).unwrap_or("playlist").to_string();
-
-    // A one-row header above the frame: the panel's state and its key tip —
-    // and the border below it lines up with the browser's.
-    let rows = ratatui::layout::Layout::vertical([
-        ratatui::layout::Constraint::Length(1),
-        ratatui::layout::Constraint::Min(2),
-        ratatui::layout::Constraint::Length(1),
-    ]).split(area);
+    let (header_row, frame_row, footer_row) = pane_rows(area);
 
     use crate::EntryStatus;
+    let row_width = (area.width as usize).saturating_sub(2);
     let items: Vec<ListItem> = pp.playlist.entries.iter().enumerate().map(|(i, entry)| {
         let status = pp.status_at(i);
-        // A record already on a deck wears that deck's number.
-        let marker = match marks.get(i).copied().flatten() {
-            Some(slot) => format!("◂{}", slot + 1),
-            None => "  ".to_string(),
-        };
         let desc = format!("{} - {}", entry.description.title, entry.description.artist);
         let shown = if desc == " - " { entry.hints.relative_path.clone() } else { desc };
         let (tail, mut style) = match status {
@@ -2062,31 +2159,37 @@ pub(crate) fn render_playlist_panel(
         if show_cursor && i == pp.cursor {
             style = style.bg(Color::Rgb(40, 50, 80)).add_modifier(Modifier::BOLD);
         }
-        ListItem::new(format!("{marker}{:>2}. {shown}{tail}", i + 1)).style(style)
+        let text = format!("{:>2}. {shown}{tail}", i + 1);
+        // A record already on a deck wears that deck's number as a badge at
+        // the row's right edge, over the name's tail — the name stays fully
+        // readable on the deck itself. Rows without a badge keep the width.
+        match marks.get(i).copied().flatten() {
+            Some(slot) => {
+                let body_width = row_width.saturating_sub(3);
+                let body: String = text.chars().take(body_width).collect();
+                let pad = " ".repeat(body_width.saturating_sub(body.chars().count()));
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{body}{pad}"), style),
+                    Span::styled(format!(" ▸{}", slot + 1), Style::default().fg(Color::Black).bg(PLAYLIST_FAMILY.0).add_modifier(Modifier::BOLD)),
+                ]))
+            }
+            None => ListItem::new(text).style(style),
+        }
     }).collect();
 
-    // Border colour marks which side is active: bright on the focused side, dim otherwise.
-    let (border, hint) = match kind {
-        PanelKind::Preview     => (Color::Rgb(70, 90, 110),   "Enter pin · e edit · b box"),
-        PanelKind::Browse      => (Color::Rgb(120, 210, 180), "j/k move · Enter load · K/J reorder · x remove · a/A insert · Esc back"),
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .title(format!(" ♫ {name}  ({}) ", pp.playlist.entries.len()));
-    // Header: state identity in the panel's own accent, tip dim beside it.
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(format!(" {header}"), Style::default().fg(border)))),
-        rows[0],
+    // Activation lives in the chrome: family colour bright when driven.
+    let active = !matches!(kind, PanelKind::Preview);
+    let accent = pane_accent(PLAYLIST_FAMILY, active);
+    let block = pane_frame(
+        Line::from(Span::styled(format!(" ♫ {name}  ({}) ", pp.playlist.entries.len()), Style::default().fg(accent))),
+        accent,
     );
+    pane_header(frame, header_row, Line::from(""));
     // Select the cursor so the List scrolls to keep it visible when entries overflow the panel.
     let mut state = ListState::default();
     state.select((!pp.playlist.entries.is_empty()).then(|| pp.cursor.min(pp.playlist.entries.len() - 1)));
-    frame.render_stateful_widget(List::new(items).block(block), rows[1], &mut state);
-    frame.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::Rgb(110, 120, 140))).wrap(ratatui::widgets::Wrap { trim: true }),
-        rows[2],
-    );
+    frame.render_stateful_widget(List::new(items).block(block), frame_row, &mut state);
+    pane_footer(frame, footer_row, Line::from(Span::styled(format!(" {hint}"), Style::default().fg(Color::Rgb(110, 120, 140)))));
 }
 
 /// The tag editor rendered in the context panel: labelled fields with a caret on
@@ -2105,16 +2208,16 @@ pub(crate) fn render_metadata_panel(
     proposed_name: Option<&str>,
     collision_error: Option<&str>,
     rename_toggle: Option<(bool, bool)>, // (enabled, focused) — edit mode only
+    pane_active: bool,
 ) {
     let inner_width = (area.width as usize).saturating_sub(2).max(12);
     let text_width  = inner_width.saturating_sub(9);
     let label = Style::default().fg(Color::Rgb(90, 110, 150));
-    let mut lines: Vec<Line<'static>> = std::iter::once(section_divider("Tags", inner_width))
-        .chain(TAG_FIELD_LABELS.iter().enumerate()
-            .flat_map(|(i, &lab)| {
-                let (val, cur) = &fields[i];
-                render_editor_field(lab, val, active_field == Some(i), *cur, text_width)
-            }))
+    let mut lines: Vec<Line<'static>> = TAG_FIELD_LABELS.iter().enumerate()
+        .flat_map(|(i, &lab)| {
+            let (val, cur) = &fields[i];
+            render_editor_field(lab, val, active_field == Some(i), *cur, text_width)
+        })
         .collect();
     // The decision is the section header: `── [x] Rename File ──` — in edit
     // mode the divider itself is the toggle (Tab to it, Space flips).
@@ -2156,22 +2259,21 @@ pub(crate) fn render_metadata_panel(
     if let Some(err) = collision_error {
         lines.push(Line::from(Span::styled(format!(" \u{26a0} {err}"), Style::default().fg(Color::Red))));
     }
-    if active_field.is_some() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  Enter saves and exits · Esc exits without saving", Style::default().fg(Color::Rgb(150, 170, 210)))));
-    }
-    let navy = Style::default().bg(Color::Rgb(20, 20, 38));
-    let blue = Color::Rgb(40, 60, 100);
-    let title = if active_field.is_some() { " Edit tags and rename file " } else { " Tags " };
+    let editing = active_field.is_some();
+    let accent = pane_accent(TAGS_FAMILY, pane_active || editing);
+    let hint = if editing {
+        "Enter saves and exits · Esc exits without saving"
+    } else {
+        "e edit tags"
+    };
     frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(Span::styled(title, Style::default().fg(Color::Yellow)))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(blue))
-        .style(navy);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), inner);
+    let (header_row, frame_row, footer_row) = pane_rows(area);
+    pane_header(frame, header_row, Line::from(""));
+    let block = pane_frame(Line::from(Span::styled(" Tags ", Style::default().fg(accent))), accent);
+    let inner = block.inner(frame_row);
+    frame.render_widget(block, frame_row);
+    frame.render_widget(Paragraph::new(lines).style(Style::default().bg(PANE_BG)), inner);
+    pane_footer(frame, footer_row, Line::from(Span::styled(format!(" {hint}"), Style::default().fg(Color::Rgb(110, 120, 140)))));
 }
 
 pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, editor: &crate::deck::TagEditorState) {
@@ -2187,6 +2289,7 @@ pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui:
         Some(&with_ext(&proposed)),
         editor.collision_error.as_deref(),
         Some((editor.rename_enabled, editor.active_field == TAG_FIELD_LABELS.len())),
+        true,
     );
 }
 pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
