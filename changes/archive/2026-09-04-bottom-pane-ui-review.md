@@ -65,6 +65,10 @@ Once the nav row and chrome land: `H`/`L` unchanged (lowercase belongs to browse
 
 **Done when** the bottom pane reads as one coherent three-pane surface — borders aligned, nav row carrying orientation, activation and identity in the chrome, badges moved, narrowing degrading through the ladder — or an element is rejected with reasons recorded.
 
+## Conclusion
+
+Accepted; ships as 0.37.9 (minor bump confirmed). The keys went further than planned — the Zellij-style alt layer replaced the `H`/`L` walk wholesale rather than regularising around it. Footer hint overload was deliberately left to the open key-hint-overload change. keybindings.md is current.
+
 ## Log
 
 - First chrome build (0.37.1): shared header/frame/footer anatomy in `render::pane_*` helpers; browser and playlist already had the three rows, tags gained them. Nav row replaces the browser's top-bar mode content; search/move/name-prompt inputs relocated to the browser footer beside the mode chip. Slivers and per-pane content dims deleted; the whole-region unfocused dim stays.
@@ -76,3 +80,5 @@ Once the nav row and chrome land: `H`/`L` unchanged (lowercase belongs to browse
 - Ladder settled by feel: the three→two boundary stays at 120 columns; under 50 the layout is a carousel — the active pane alone at full width, `H`/`L` walking between all three (0.37.5, reworked from 0.37.4's browser-only single mode on feedback). a/A inserts stay off while the playlist is off-screen.
 - "Arriving is editing" rejected for the tags side (0.37.6): the modal editor swallowed `H`, breaking the walk symmetry the moment you arrived. `L` now only activates the Tags pane; `e` opens the editor from it — the same key as the browser's edit, making `e` the one editing key everywhere. `H`/`L` are a symmetric walk in every layout.
 - Nav strip distributed (0.37.7): the header state texts ("Playlist · pinned", "Preview · follows the highlight", the edit banner) are gone — each pane's name-and-key tip now sits above its own top-left corner, and off-screen panes' tips dock at the nearest screen edge, compressing instead of vanishing as the layout narrows. The browser no longer owns the nav row; the jumped-to location label moved to the footer's right end. Pinned-ness now reads from the tip's colour (green vs grey).
+- Key regularisation landed as the Zellij-style alt layer (0.37.8): `alt+h/l` walk the panes (new `pane_left`/`pane_right` actions), width moves to `alt+←/→` alone, `H`/`L` retired. The walk works in every browser mode — search included, which `H`/`L` never could. "Arriving is editing" returns for the tags side, now sound: alt chords aren't text, so `alt+l` in opens the editor and `alt+h` cancels back out through the modal; the tags-pane `e` is gone (browser `e` remains). Picker closes on Esc/← (the `h` anomaly folded). Also fixed stale keybindings.md prose still describing slivers.
+- Picker chrome unified (0.37.9): `render_confirm` now sits on the shared pane anatomy in the playlist slot, keeping its amber accent — attention colour, not a family; its two-row hint became the standard one-row footer.

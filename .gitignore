@@ -5,3 +5,6 @@ agent/
 *.csv
 changes/agent/
 __pycache__/
+ndd/
+AGENTS.md
+.claude/

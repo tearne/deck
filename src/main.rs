@@ -37,6 +37,7 @@ mod config;
 mod deck;
 mod error_reports;
 mod frame_stats;
+mod hints;
 mod library;
 mod messages;
 mod playlist;
@@ -1554,7 +1555,37 @@ fn tui_loop(
 
         let draw_start = Instant::now();
         terminal.draw(|frame| {
-            let area = frame.area();
+            let screen = frame.area();
+            let context = if tag_editor.is_some() { hints::Context::Tags }
+                else if browser_state.is_some() && browser_load_confirm.is_some() { hints::Context::ConfirmLoad }
+                else if pending_dismiss.is_some() { hints::Context::ConfirmDismiss }
+                else if !view_focused && pending_quit.is_some() { hints::Context::ConfirmQuit }
+                else if !view_focused { hints::Context::Decks }
+                else if bottom_view == BottomView::Messages { hints::Context::Messages }
+                else if active_pane == Pane::Playlist && box_picker.is_some() { hints::Context::Candidates }
+                else if active_pane == Pane::Playlist { hints::Context::Playlist }
+                else if active_pane == Pane::Tags { hints::Context::TagPreview }
+                else if let Some(bs) = browser_state.as_ref() {
+                    if bs.name_prompt.is_some() { hints::Context::Naming }
+                    else { match bs.mode {
+                        BrowserMode::Command => hints::Context::Command,
+                        BrowserMode::Search => hints::Context::Search,
+                        BrowserMode::Move => hints::Context::Move,
+                    }}
+                } else { hints::Context::Decks };
+            let hint_state = hints::State {
+                context,
+                browser: browser_state.is_some(),
+                focusable: matches!(bottom_view, BottomView::Browser | BottomView::Messages),
+                command_chords: view_focused && browser_state.as_ref().is_some_and(|bs| bs.mode == BrowserMode::Command && bs.name_prompt.is_none()),
+                insert: box_panel.is_some() && screen.width.saturating_sub(1) >= 50
+                    && (playlist_pair || screen.width.saturating_sub(1) >= 120),
+                workspace: browser_state.as_ref().is_some_and(|bs| bs.workspace.is_some()),
+                filtered: browser_state.as_ref().is_some_and(|bs| bs.has_filter()),
+                rename_toggle: tag_editor.as_ref().is_some_and(|e| e.active_field == TAG_FIELD_LABELS.len()),
+            };
+            let hint_lines = hints::Hints::for_state(&hint_state, &keymap).lines(screen.width);
+            let (area, hint_area) = hints::split(screen, hint_lines.len());
             // Reserve a one-column gutter on the left for the active-deck accent bar;
             // everything else lays out in the content area to its right.
             let gutter_split = Layout::default()
@@ -2046,8 +2077,7 @@ fn tui_loop(
                                 render::render_confirm(frame, pl_area, bp, pk.entry, &pk.candidates, pk.cursor, &pk.layout);
                             } else {
                                 let kind = if active_pane == Pane::Playlist { render::PanelKind::Browse } else { render::PanelKind::Preview };
-                                let hint = if active_pane == Pane::Playlist { "j/k move · Enter load · K/J reorder · x remove · a/A insert · Esc back" } else { "H work the playlist" };
-                                render::render_playlist_panel(frame, pl_area, bp, &marks_of(bp), kind, hint);
+                                render::render_playlist_panel(frame, pl_area, bp, &marks_of(bp), kind);
                             }
                         }
                         None => render::render_pane_placeholder(frame, pl_area, "Playlist", "Enter on a playlist pins it", render::PLAYLIST_FAMILY, active_pane == Pane::Playlist),
@@ -2064,7 +2094,7 @@ fn tui_loop(
                                 render::render_metadata_panel(frame, tg_area, &owned, None, current_name, proposed_name.as_deref(), None, None, active_pane == Pane::Tags);
                             }
                             Preview::Playlist(pp) => {
-                                render::render_playlist_panel(frame, tg_area, pp, &marks_of(pp), render::PanelKind::Preview, "Enter pins");
+                                render::render_playlist_panel(frame, tg_area, pp, &marks_of(pp), render::PanelKind::Preview);
                             }
                             Preview::Empty => render::render_pane_placeholder(frame, tg_area, "Tags", "highlight a track", render::TAGS_FAMILY, active_pane == Pane::Tags),
                         }
@@ -2077,7 +2107,9 @@ fn tui_loop(
                     [playlist_area.map(|r| r.x), browser_area.map(|r| r.x), tags_area.map(|r| r.x)],
                     match active_pane { Pane::Playlist => 0, Pane::Browser => 1, Pane::Tags => 2 },
                     box_panel.is_some(),
-                    browser::mode_accent(bs.mode),
+                    bs.mode,
+                    &hints::pane_keys(&keymap),
+                    tag_editor.is_some() || matches!(hover_preview, Preview::Track { .. }),
                 );
 
                 // Unfocused: the whole region fades as one.
@@ -2148,6 +2180,7 @@ fn tui_loop(
                 }
             }
 
+            hints::render(frame, hint_area, hint_lines);
         })?;
         let draw_dur = draw_start.elapsed();
 
@@ -2222,6 +2255,17 @@ session.save();
                 }
                 // Tag editor — a standalone modal; intercepts all keys while open.
                 if tag_editor.is_some() {
+                    // Alt+h — the key that walked in — walks back out, cancelling,
+                    // so the walk stays symmetric through the modal editor.
+                    if key.kind == KeyEventKind::Press
+                        && key.modifiers.contains(KeyModifiers::ALT)
+                        && keymap.get(&KeyBinding::AltChord(key.code)) == Some(&Action::PaneLeft)
+                    {
+                        tag_editor = None;
+                        edit_resume_anchor = None;
+                        active_pane = Pane::Browser;
+                        continue;
+                    }
                     if let KeyEventKind::Press = key.kind {
                         let saved = handle_tag_editor_key(&mut tag_editor, &mut decks, &mut browser_state, &mut stream, &mut compliance_cache, key);
                         if saved {
@@ -2279,7 +2323,44 @@ session.save();
                         Some(Action::SelectDeck1) => { handle_deck_key!(0); continue; }
                         Some(Action::SelectDeck2) => { handle_deck_key!(1); continue; }
                         Some(Action::SelectDeck3) => { handle_deck_key!(2); continue; }
-                        // Alt+h/l drag the active pane's right-hand boundary left or
+                        // Alt+h/l walk activation across the panes — every browser
+                        // mode, search included (alt chords are never text). Walking
+                        // into Tags opens the editor: arriving is editing, and the
+                        // modal exits on the same alt+h that walked in.
+                        Some(Action::PaneLeft) => {
+                            active_pane = match active_pane {
+                                Pane::Tags => Pane::Browser,
+                                _ => { playlist_pair = true; Pane::Playlist }
+                            };
+                            if active_pane == Pane::Playlist && box_panel.is_none() { active_pane = Pane::Browser; playlist_pair = false; }
+                            continue;
+                        }
+                        Some(Action::PaneRight) => {
+                            match active_pane {
+                                Pane::Playlist => active_pane = Pane::Browser,
+                                Pane::Browser => {
+                                    // Change focus and layout only after an editable track
+                                    // is available. Folders and playlists have no tag editor.
+                                    if let Some(path) = browser_state.as_ref().and_then(|bs| bs.highlighted_audio_path()) {
+                                        if let Some(editor) = TagEditorState::for_track(&path) {
+                                            tag_editor = Some(editor);
+                                            playlist_pair = false;
+                                            active_pane = Pane::Tags;
+                                            if let Some(bs) = browser_state.as_ref().filter(|bs| bs.compliance_on) {
+                                                edit_resume_anchor = bs.entries.get(bs.cursor + 1)
+                                                    .or_else(|| bs.entries.first())
+                                                    .map(|e| e.path.clone());
+                                            }
+                                        } else {
+                                            stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
+                                        }
+                                    }
+                                }
+                                Pane::Tags => {}
+                            }
+                            continue;
+                        }
+                        // Alt+←/→ drag the active pane's right-hand boundary left or
                         // right: the playlist/browser divider from the playlist, the
                         // browser/tags divider from the browser. Tags has none.
                         Some(a @ (Action::PanelWiden | Action::PanelNarrow)) => {
@@ -2362,50 +2443,18 @@ session.save();
                         }
                     }
                 }
-                // The pane keys: H/L move activation across the three panes, the
-                // visible pair following on narrow terminals.
+                // The pane keys — activation walks live on alt+h/l, handled in
+                // the alt-chord block above; here only pane-local keys remain.
                 if view_focused && key.kind == KeyEventKind::Press {
                     let cmd_mode = browser_state.as_ref().map_or(false, |bs| bs.mode == BrowserMode::Command && bs.name_prompt.is_none());
                     let workspace = session.workspace().map(|p| p.to_path_buf());
-
-                    // Activation moves: Shift+h/l. In browser search mode these
-                    // are typed characters, so they require command mode there.
-                    if (active_pane != Pane::Browser || cmd_mode)
-                        && matches!(key.code, KeyCode::Char('H') | KeyCode::Char('L'))
-                    {
-                        match key.code {
-                            // H moves left, toward the playlist.
-                            KeyCode::Char('H') => {
-                                active_pane = match active_pane {
-                                    Pane::Tags => Pane::Browser,
-                                    _ => { playlist_pair = true; Pane::Playlist }
-                                };
-                            }
-                            // L moves right, toward the tags.
-                            _ => {
-                                match active_pane {
-                                    Pane::Playlist => active_pane = Pane::Browser,
-                                    // Narrow with the playlist pair showing: L first
-                                    // brings the tags pane into view; a further L
-                                    // activates it.
-                                    Pane::Browser if playlist_pair && !panes_three_across && !panes_single => playlist_pair = false,
-                                    // Activation only — editing is `e` from the
-                                    // active pane, so H/L stay a symmetric walk.
-                                    Pane::Browser => { playlist_pair = false; active_pane = Pane::Tags; }
-                                    Pane::Tags => {}
-                                }
-                            }
-                        }
-                        if active_pane == Pane::Playlist && box_panel.is_none() { active_pane = Pane::Browser; playlist_pair = false; }
-                        continue;
-                    }
 
                     // Candidate picker over the playlist pane.
                     if active_pane == Pane::Playlist && box_picker.is_some() {
                         let mut close = false;
                         if let (Some(pk), Some(bp)) = (box_picker.as_mut(), box_panel.as_mut()) {
                             match key.code {
-                                KeyCode::Esc | KeyCode::Char('h') => close = true,
+                                KeyCode::Esc | KeyCode::Left => close = true,
                                 KeyCode::Up | KeyCode::Char('k') => pk.cursor = pk.cursor.saturating_sub(1),
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     let max = pk.layout.borrow().total_lines.saturating_sub(1);
@@ -2502,24 +2551,11 @@ session.save();
                         continue;
                     }
 
-                    // Tags pane active: `e` edits the highlighted track (the same
-                    // key the browser uses for it); Esc/Left return.
+                    // Tags pane active without the editor (no track highlighted):
+                    // Esc/Left return; the walk keys handle the rest.
                     if active_pane == Pane::Tags {
                         match key.code {
                             KeyCode::Esc | KeyCode::Left => { active_pane = Pane::Browser; }
-                            KeyCode::Char('e') => {
-                                if let Some(path) = browser_state.as_ref().and_then(|bs| bs.highlighted_audio_path()) {
-                                    tag_editor = TagEditorState::for_track(&path);
-                                    if tag_editor.is_none() {
-                                        stream.emit(Event::new(Source::Tags, Severity::Warning, "Couldn't read that file's tags"));
-                                    }
-                                    if let Some(bs) = browser_state.as_ref().filter(|bs| bs.compliance_on) {
-                                        edit_resume_anchor = bs.entries.get(bs.cursor + 1)
-                                            .or_else(|| bs.entries.first())
-                                            .map(|e| e.path.clone());
-                                    }
-                                }
-                            }
                             _ => {}
                         }
                         continue;
@@ -3301,7 +3337,8 @@ session.save();
                             history_scroll = 0;
                         }
                     }
-                    Some(Action::PanelWiden) | Some(Action::PanelNarrow) => {} // browser-only
+                    Some(Action::PanelWiden) | Some(Action::PanelNarrow)
+                    | Some(Action::PaneLeft) | Some(Action::PaneRight) => {} // browser-only
                     Some(Action::GridMode) => {
                         // Toggle the detached view on the selected deck. A live view
                         // captures no printable keys except its own, so `g` reaches

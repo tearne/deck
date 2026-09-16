@@ -1,26 +1,13 @@
 # Resilient Playlists
 
-[Down](#entry-structure)
-[Down](#track-identity)
-[Down](#file-resolution)
-[Down](#resilient-writes)
+[Contents](#contents) \
+[Entry Structure](#entry-structure) \
+[Track Identity](#track-identity) \
+[File Resolution](#file-resolution) \
+[Resilient Writes](#resilient-writes)
 
-```
-Resilient Playlists
-├ Entry Structure
-│ ├ Identity
-│ ├ Description
-│ ├ Hints
-│ └ Settings
-├ Track Identity
-│ └ Conformance
-├ File Resolution
-│ ├ Descriptive Fallback
-│ ├ Tags Refresh
-│ └ Method Migration
-└ Resilient Writes
-  ├ Write Procedure
-  └ Backup Scheme
+```yaml
+id: 2o6m
 ```
 
 An ordered list of tracks saved as a `.rpl` (**r**esilient **p**lay**l**ist) file, identified by audio content with file location as a hint. When a track moves, the playlist finds it and quietly updates its own hints — accurate through library reorganisation with no manual repair.
@@ -37,16 +24,46 @@ Designed to be portable: the format and algorithms here are a complete specifica
 ```
 
 - The filename stem is the playlist name; the file may live anywhere the user places it.
+
 - The `version` field allows forward extension without breaking older readers.
+
+
+# Contents
+
+[↑ Resilient Playlists](#resilient-playlists)
+
+```yaml
+id: ft45
+```
+
+- [Resilient Playlists](#resilient-playlists)
+  - [Entry Structure](#entry-structure)
+    - [Identity](#identity)
+    - [Description](#description)
+    - [Hints](#hints)
+    - [Settings](#settings)
+  - [Track Identity](#track-identity)
+    - [Conformance](#conformance)
+  - [File Resolution](#file-resolution)
+    - [Descriptive Fallback](#descriptive-fallback)
+    - [Tags Refresh](#tags-refresh)
+    - [Method Migration](#method-migration)
+  - [Resilient Writes](#resilient-writes)
+    - [Write Procedure](#write-procedure)
+    - [Backup Scheme](#backup-scheme)
 
 
 # Entry Structure
 
-[Up](#resilient-playlists)
-[Down](#identity)
-[Down](#description)
-[Down](#hints)
-[Down](#settings)
+[↑ Resilient Playlists](#resilient-playlists) \
+[Identity](#identity) \
+[Description](#description) \
+[Hints](#hints) \
+[Settings](#settings)
+
+```yaml
+id: 1f7a
+```
 
 Each entry is a structured object with four visibly distinct roles: what the track *is*, what it is *called*, where it was *last seen*, and how it should *play*. Keeping these roles separate means the entry remains displayable when the file can't be found, and rewritable hints don't risk corrupting the things that matter.
 
@@ -70,7 +87,11 @@ The same track may appear more than once in a playlist with different settings �
 
 # Identity
 
-[Up](#entry-structure)
+[↑ Entry Structure](#entry-structure)
+
+```yaml
+id: 6mdx
+```
 
 The content-derived, unambiguous identifier for the track — stable across moves, renames, and retags.
 
@@ -88,19 +109,27 @@ Two separable things live here: *which* track the entry denotes, and *how* that 
 ```
 
 - `duration_secs` lives here rather than in hints because it is content-derived and participates in candidate pre-filtering during resolution.
+
 - `duration_secs` is compared only within tolerance, never for equality — decoders legitimately disagree on the same file by more than that comparison cares about. An implementation may therefore write it rounded, provided rounding error stays at least an order of magnitude below the resolution tolerance (see [File Resolution](#file-resolution)).
+
 - Two independent axes describe how `content_hash` was produced. `hash_algorithm` names the hash function; `payload_extraction_version` names the byte-range rules that selected the bytes fed into it. Either can change without the other — a new hash function, or a correction to which bytes count as audio — so they are versioned separately. Both are recorded per entry, so a partially-migrated playlist (some files present and re-hashed, some missing and not) can hold a mix.
+
 - An implementation encountering a value it does not implement — an unknown `hash_algorithm`, or a `payload_extraction_version` it cannot reproduce — must treat the entry as unresolvable by hash rather than computing a wrong result silently. See [Method Migration](#method-migration) for how an entry made by an older version is healed forward.
 
 **See also**
 
 - [Track Identity](#track-identity) — how `content_hash` is computed
+
 - [File Resolution](#file-resolution) — when the denoted track may change
 
 
 # Description
 
-[Up](#entry-structure)
+[↑ Entry Structure](#entry-structure)
+
+```yaml
+id: zqmv
+```
 
 A durable record of the track's metadata, sourced from the file's tags but held independently. The entry displays correctly when the file can't be found, and a shared playlist tells a friend exactly what to look for.
 
@@ -116,6 +145,7 @@ A durable record of the track's metadata, sourced from the file's tags but held 
 ```
 
 - Only `artist`, `title`, `album`, `year` are stored — not a verbatim tag dump.
+
 - Refreshed automatically when a located file's tags differ (see [Tags Refresh](#tags-refresh)).
 
 **See also**
@@ -125,7 +155,11 @@ A durable record of the track's metadata, sourced from the file's tags but held 
 
 # Hints
 
-[Up](#entry-structure)
+[↑ Entry Structure](#entry-structure)
+
+```yaml
+id: zs4v
+```
 
 Where the file was last seen. Rewritable and fully re-derivable — losing them costs only a re-search, never any meaningful data.
 
@@ -139,6 +173,7 @@ Where the file was last seen. Rewritable and fully re-derivable — losing them 
 ```
 
 - `relative_path` is relative to the directory containing the `.rpl` file. Arbitrary relative paths including `../` are permitted — the path is only a hint, confirmed by hash before use, so a wrong path falls through to search rather than loading the wrong audio.
+
 - `file_size_bytes` is used as a cheap pre-filter during relocation search (see [File Resolution](#file-resolution)).
 
 **See also**
@@ -148,7 +183,11 @@ Where the file was last seen. Rewritable and fully re-derivable — losing them 
 
 # Settings
 
-[Up](#entry-structure)
+[↑ Entry Structure](#entry-structure)
+
+```yaml
+id: m4a6
+```
 
 Per-entry playback configuration. Currently reserved and always empty; the `version` field at the playlist level gates future additions.
 
@@ -163,8 +202,12 @@ Likely future content: in/out points (to play a sub-section of a track), per-ent
 
 # Track Identity
 
-[Up](#resilient-playlists)
-[Down](#conformance)
+[↑ Resilient Playlists](#resilient-playlists) \
+[Conformance](#conformance)
+
+```yaml
+id: qgx6
+```
 
 Identity is a hash of the file's **encoded audio payload** — the raw compressed bytes on disk, tag regions excluded, never decompressed to PCM. Any implementation reading the same file computes the same hash byte-for-byte.
 
@@ -191,12 +234,17 @@ Implementations must iterate each file's structure to extract these ranges exact
 **See also**
 
 - [File Resolution](#file-resolution) — how the content hash is used in candidate screening
+
 - [Conformance](#conformance) — how an implementation proves its hashing is correct
 
 
 # Conformance
 
-[Up](#track-identity)
+[↑ Track Identity](#track-identity)
+
+```yaml
+id: 1fij
+```
 
 Byte-range extraction is the one place implementations must agree exactly — a hash computed over the wrong bytes silently fails to match every other implementation. Prose alone can't guarantee that agreement, so conformance is defined by a shared **test-vector corpus**: a set of small audio files with, for each, its expected content hash and audio byte-range. An implementation conforms when it reproduces every expected hash.
 
@@ -205,21 +253,29 @@ The corpus covers one clean file per supported format, plus tag-placement edge c
 **Detail**
 
 - The corpus files are synthetic (generated from a tone, no third-party audio) and pinned alongside `target_results.json` — the expected hashes and byte-ranges — so the contract is immutable and reproducible offline.
+
 - Reference implementation: the `resilient-playlists` crate (`src/lib.rs`), with its corpus and `target_results.json` under `corpus/`. A new implementation validates against those target results.
 
 
 # File Resolution
 
-[Up](#resilient-playlists)
-[Down](#descriptive-fallback)
-[Down](#tags-refresh)
-[Down](#method-migration)
+[↑ Resilient Playlists](#resilient-playlists) \
+[Descriptive Fallback](#descriptive-fallback) \
+[Tags Refresh](#tags-refresh) \
+[Method Migration](#method-migration)
+
+```yaml
+id: mcnl
+```
 
 How an implementation locates the audio file for a given entry and keeps location hints up to date.
 
 1. Resolve `hints.relative_path` against the playlist's directory. If a file exists there, confirm by content hash. Match → done; update nothing.
+
 2. If miss, search the implementation's library root, confirming candidates by content hash. Try files whose `file_size_bytes` matches exactly first — a file that was only moved preserves it — then widen to files within the duration tolerance, which survives retagging when size does not. Screening must not require decoding audio. First hash match wins → rewrite hints.
+
 3. If no hash match anywhere, see [Descriptive Fallback](#descriptive-fallback).
+
 4. If no match and no confirmed re-link, keep the entry and mark it unavailable. Never silently drop; never silently re-link.
 
 **Detail**
@@ -229,12 +285,17 @@ How an implementation locates the audio file for a given entry and keeps locatio
 **See also**
 
 - [Track Identity](#track-identity) — how the content hash is computed
+
 - [Entry Structure](#entry-structure) — which fields are rewritten at each step
 
 
 # Descriptive Fallback
 
-[Up](#file-resolution)
+[↑ File Resolution](#file-resolution)
+
+```yaml
+id: k1l1
+```
 
 When no hash match exists anywhere, the track may have been re-encoded — its compressed bytes are entirely new so its identity can never match. The fallback offers library files whose duration and description are similar, for the user to confirm.
 
@@ -247,12 +308,17 @@ No match and no confirmed re-link → the entry is kept and shown unavailable.
 **Detail**
 
 - Candidates are ranked by implementation-defined description similarity.
+
 - The fallback also re-links a shared playlist against a friend's differently-encoded rip of the same track, provided the user confirms.
 
 
 # Tags Refresh
 
-[Up](#file-resolution)
+[↑ File Resolution](#file-resolution)
+
+```yaml
+id: vw5r
+```
 
 Whenever a file is located (steps 1–2 of [File Resolution](#file-resolution)), compare its current tags against the stored `description`. If any field differs, refresh `description` from the file.
 
@@ -261,7 +327,11 @@ A plain move leaves tags unchanged so nothing refreshes; deliberate retags propa
 
 # Method Migration
 
-[Up](#file-resolution)
+[↑ File Resolution](#file-resolution)
+
+```yaml
+id: xoba
+```
 
 A correction to the byte-range rules bumps `payload_extraction_version`, which changes the hashes a newer implementation computes. Without care, every entry made by the older version would fail its hash confirm even for files sitting exactly where the playlist says — and degrade to the descriptive fallback needlessly. Migration heals this forward, one entry at a time.
 
@@ -276,9 +346,13 @@ When resolving an entry whose `payload_extraction_version` is older than the one
 
 # Resilient Writes
 
-[Up](#resilient-playlists)
-[Down](#write-procedure)
-[Down](#backup-scheme)
+[↑ Resilient Playlists](#resilient-playlists) \
+[Write Procedure](#write-procedure) \
+[Backup Scheme](#backup-scheme)
+
+```yaml
+id: huzm
+```
 
 Writes protect identity, entry order, and the last-known description against interrupted writes and parser bugs — description refreshes from tags when the file is found, but is the only record when it isn't. Location hints are disposable: if lost, file resolution will recover them.
 
@@ -287,13 +361,20 @@ Writes protect identity, entry order, and the last-known description against int
 
 # Write Procedure
 
-[Up](#resilient-writes)
+[↑ Resilient Writes](#resilient-writes)
+
+```yaml
+id: hz6f
+```
 
 Required behaviour for every write to a `.rpl` file:
 
 1. Serialise to JSON and validate that the result re-parses cleanly. If validation fails, abort — no partial write.
+
 2. Write to a temporary file in the **same directory** as the `.rpl` file.
+
 3. If the write records a change the user made, rotate the backup set: shift `.bak2` → `.bak3` (drop oldest), `.bak1` → `.bak2`, current primary → `.bak1`. Writes the implementation makes on its own — a relocated hint, a refreshed description — skip this step.
+
 4. Rename the temporary file to the primary filename.
 
 **Detail**
@@ -307,7 +388,11 @@ Required behaviour for every write to a `.rpl` file:
 
 # Backup Scheme
 
-[Up](#resilient-writes)
+[↑ Resilient Writes](#resilient-writes)
+
+```yaml
+id: e8pa
+```
 
 Up to **3** hidden sibling backups per playlist, named `.<stem>.rpl.bak1`, `.<stem>.rpl.bak2`, `.<stem>.rpl.bak3`. Hidden naming (leading `.`) keeps them out of directory listings that filter for `.rpl`.
 

@@ -16,21 +16,30 @@ The spatial layout below matches the in-app help overlay (`?`). Keys up to the m
     ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
       ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ╭         ╭  ╭  ╭ +Gain
       A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid    H         J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ╰ Help    ╰  ╰  ╰ 100%
+      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰         ╰ Play    ╰         ╰  ╰  ╰ 100%
         ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain
         Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     N         M  ,  . -Lvl
-        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%
+        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰         ╰         ╰         ╰  ╰  ╰ 0%
 ──────────────────────────────────────────────────────────────────────────────── ╭ [Shift]
-` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit         │ [Bare]
+` mode   ¬ nudge  -/= zoom  {/} height  [/] latency             Esc quit         │ [Bare]
 / art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\ metro                             ╰ [Space]
-Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   h/l panel   r restore   [Alt]
+Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   r restore   [Alt]
 ```
 
-Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Empty modifier cells = no binding on that layer.
+Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Unlabelled cells either have no binding or belong to the contextual hints.
 
-Not shown in the overlay: `?` (alias for `space+h` help).
+View shortcuts (`space+f/h/v/n`, with `?` as a help alias), Tab focus, pane switching and pane width controls are shown in contextual hints or pane headers rather than repeated in this layout.
 
 `Tab` is fixed (not configurable): it flips the keyboard between the decks and the showing bottom view (browser or messages; help and art take no input).
+
+
+## Contextual Hints
+
+A shared hint area across the bottom shows controls for the current keyboard context: browser mode, playlist, candidate selection, tag editing, messages, or decks. Groups describe their controls consistently: Navigate, Actions, Edit, Switch and Views. Related controls stay together and wrap to additional rows as the terminal narrows. Pane-specific groups share their pane’s colour: browser mode colours, playlist green, and tags violet; shared switching and view controls stay neutral. Configurable actions show their current binding; typing modes omit commands intercepted as text.
+
+Pane names and the configured pane-switch keys remain above their content. Tags has no navigation hint and cannot take focus when the highlighted item has no editable track metadata. Redundant arrow alternatives are omitted from hints; arrows remain shown where they have distinct roles, such as search selection and text editing. Search and Move are labelled beside the Browser chip; command mode has no suffix. Tag warnings, location and search result count appear in the browser’s bottom border. The workspace is shown by `@` and its path in the top border. Active text input and the move destination have a separate shaded area at the top inside the frame, above the file list. Search and playlist-name input wrap, keeping the input tail visible on short screens. Confirmation and editing controls take priority when height limits the hint area; an overflow notice asks for more terminal space.
+
+With deck focus, the hints show view/focus controls and the key for the full keyboard reference. Hints are always visible; there is no minimise action.
 
 
 ## Config Actions
@@ -66,8 +75,10 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `select_prev_deck` | `alt+k`, `alt+up` | Cycle to previous deck (wraps; works in the browser too) |
 | `select_deck_<n>` | `alt+<n>` (n = 1–3) | Select that deck; summon it if it's the next one; on the selected deck, destroy it (empty at once, loaded-paused via `y`, playing refused; last deck stays). Works identically in the browser |
 | `session_restore` | `alt+r` | Reload the decks as they were when deck last ran (offered while all decks are empty) |
-| `panel_widen` | `alt+h`, `alt+left` | Drag the active pane's right-hand boundary left (playlist: narrower; browser: tags wider). Widths persisted separately |
-| `panel_narrow` | `alt+l`, `alt+right` | Drag the active pane's right-hand boundary right (playlist: wider; browser: tags narrower) |
+| `pane_left` | `alt+h` | Walk pane activation left (Tags → Browser → Playlist); cancels out of the tag editor. Works in every browser mode |
+| `pane_right` | `alt+l` | Walk pane activation right; walking into Tags opens the highlighted track's tag editor; stays in Browser when no editable track is highlighted |
+| `panel_widen` | `alt+left` | Drag the active pane's right-hand boundary left (playlist: narrower; browser: tags wider). Widths persisted separately |
+| `panel_narrow` | `alt+right` | Drag the active pane's right-hand boundary right (playlist: wider; browser: tags narrower) |
 | `swap_deck1_deck2` | `space+=` | Swap decks 1 ↔ 2 (needs both to exist) |
 | `swap_deck2_deck3` | `space+-` | Swap decks 2 ↔ 3 (needs both to exist) |
 
@@ -195,12 +206,11 @@ Toggled with `grid_mode` (`g`). The detail waveform stops tracking the playhead 
 
 ### Panes (Playlist | Browser | Tags)
 
-On a wide terminal (≥120 columns) all three panes show at once. Narrower, two show at a time — Playlist+Browser, or Browser+Tags — the third reduced to a sliver at the edge. Whenever the playlist is on screen it is the playlist-working mode; edits write to the file live (no commit/abort).
+On a wide terminal (≥120 columns) all three panes show at once. Narrower, two show at a time — Playlist+Browser, or Browser+Tags; under 50 columns the active pane has the width to itself. The nav strip above the panes names all three, off-screen tips docked at the screen edges. Whenever the playlist is on screen it is the playlist-working mode; edits write to the file live (no commit/abort).
 
 | Key | Action |
 |-----|--------|
-| `H` / `L` | Move activation left / right across the panes — a symmetric walk in every layout (the visible pair follows on narrow terminals) |
-| `e` | (tags active) edit the highlighted track's tags — the same key the browser uses |
+| `alt+h` / `alt+l` | Walk activation left / right across the panes — every layout, every browser mode. Walking into Tags opens the tag editor; `alt+h` cancels back out |
 | `j` / `k` or `↓` / `↑` | (playlist active) move |
 | `Enter` | (playlist active) send the entry to the selected deck; on an unresolved entry, open the candidate picker |
 | `K` / `J` or `shift+↑` / `shift+↓` | (playlist active) reorder — writes immediately |

@@ -26,11 +26,15 @@ select_deck_2 = "alt+2"
 select_deck_3 = "alt+3"
 # Reload the decks as they were when deck last ran (offered while all decks are empty)
 session_restore  = "alt+r"
+# Pane walk (browser open): move activation across Playlist | Browser | Tags.
+# Walking into Tags opens the tag editor; alt+h cancels back out of it.
+pane_left  = "alt+h"
+pane_right = "alt+l"
 # Pane resize (browser open only): drag the active pane's right-hand boundary
 # left / right — the playlist/browser divider from the playlist, the
 # browser/tags divider from the browser
-panel_widen  = ["alt+h", "alt+left"]
-panel_narrow = ["alt+l", "alt+right"]
+panel_widen  = "alt+left"
+panel_narrow = "alt+right"
 # Transport / browse (selected deck)
 play_pause   = "space+g"
 open_browser = "space+f"

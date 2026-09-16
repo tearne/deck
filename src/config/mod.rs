@@ -3,6 +3,7 @@ use crossterm::event::KeyCode;
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Action {
     Quit, Help, MessageHistory, ModeCycle, GridMode, PanelWiden, PanelNarrow,
+    PaneLeft, PaneRight,
     ZoomIn, ZoomOut, HeightIncrease, HeightDecrease,
     LatencyIncrease, LatencyDecrease,
     FpsIncrease, FpsDecrease,
@@ -54,6 +55,8 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     // Legacy alias from the global vinyl/beat toggle era.
     ("vinyl_mode_toggle",   Action::ModeCycle),
     ("grid_mode",           Action::GridMode),
+    ("pane_left",           Action::PaneLeft),
+    ("pane_right",          Action::PaneRight),
     ("panel_widen",         Action::PanelWiden),
     ("panel_narrow",        Action::PanelNarrow),
     ("zoom_in",           Action::ZoomIn),

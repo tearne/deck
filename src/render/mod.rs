@@ -1663,7 +1663,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     let row9 = Line::from(vec![
         Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
         Span::styled("╰", wh),
-        Span::styled(" Brows   ╰ Play    ╰ Help    ╰  ╰  ╰ 100%", sp),
+        Span::styled("         ╰ Play    ╰         ╰  ╰  ╰ 100%", sp),
     ]);
     // Row 11: Bare — -Ndge / +BPM use muted sage
     let row11 = Line::from(vec![
@@ -1687,7 +1687,7 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     // Row 16: the Alt layer — sparse enough for one line of its own.
     let al = Style::default().fg(Color::Rgb(170, 110, 150));  // Alt layer: muted plum
     let row16 = Line::from(vec![
-        Span::styled(format!("{:<w$}", "Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   h/l panel   r restore", w = (TEXT_W - 9) as usize), al),
+        Span::styled(format!("{:<w$}", "Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   r restore", w = (TEXT_W - 9) as usize), al),
         Span::styled("  [Alt]  ", al),
     ]);
 
@@ -1703,10 +1703,10 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
         row9,
         Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain", sh),
         row11,
-        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Art     ╰         ╰ Msgs    ╰  ╰  ╰ 0%", sp),
+        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰         ╰         ╰         ╰  ╰  ╰ 0%", sp),
         row13,
         Line::from(Span::styled(
-            format!("{:<w$}│ [Bare] ", "` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Tab focus  Esc quit", w = (TEXT_W - 9) as usize), ba)),
+            format!("{:<w$}│ [Bare] ", "` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Esc quit", w = (TEXT_W - 9) as usize), ba)),
         row15,
         row16,
     ];
@@ -1862,21 +1862,26 @@ pub(crate) fn render_confirm(
     layout: &std::cell::RefCell<crate::ConfirmLayout>,
 ) {
     use ratatui::layout::{Constraint, Layout};
-    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(area);
+    // The picker sits in the playlist pane's slot, on the shared pane anatomy;
+    // its accent stays amber — a confirmation wants attention, not a family.
+    let (header_row, frame_row) = pane_rows(area);
 
     let dim = Style::default().fg(Color::Rgb(120, 140, 175));
     let label = Style::default().fg(Color::Rgb(90, 110, 150));
     let val = Style::default().fg(Color::Rgb(200, 220, 255));
-    let amber_bold = Style::default().fg(Color::Rgb(230, 190, 100)).add_modifier(Modifier::BOLD);
+    let amber = Color::Rgb(230, 190, 100);
+    let amber_bold = Style::default().fg(amber).add_modifier(Modifier::BOLD);
     let match_green = Style::default().fg(Color::Rgb(120, 210, 150));
     let miss = Style::default().fg(Color::Rgb(150, 130, 120));
     let orig = pp.playlist.entries.get(entry);
 
+    frame.render_widget(Clear, area);
+    pane_header(frame, header_row, Line::from(""));
     // Place the block first so the list width (which the path wraps to) is known before the
     // header height is computed — the width doesn't depend on the header, only the height does.
-    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(230, 190, 100))).title(" confirm re-link ");
-    let inner = block.inner(rows[0]);
-    frame.render_widget(block, rows[0]);
+    let block = pane_frame(Line::from(Span::styled(" confirm re-link ", Style::default().fg(amber))), amber);
+    let inner = block.inner(frame_row);
+    frame.render_widget(block, frame_row);
     let scrollbar_col = 1u16;
     let path_indent = 6usize;
     let path_width = (inner.width.saturating_sub(scrollbar_col) as usize).saturating_sub(path_indent);
@@ -1989,20 +1994,16 @@ pub(crate) fn render_confirm(
         );
     }
 
-    frame.render_widget(
-        Paragraph::new("j/k select · Enter confirm · Esc cancel").style(dim).wrap(ratatui::widgets::Wrap { trim: true }),
-        rows[1],
-    );
 }
 
 pub(crate) enum PanelKind { Preview, Browse }
 
 /// A playlist in the panel: entries with ▶ playing / ⇢ next-up markers and status.
-/// A wrapping hint sits below the frame; the border colour marks the active side.
+/// The border colour marks the active side; controls use the shared hint area.
 // ---- Shared pane chrome ----
 //
 // The three bottom panes share one anatomy — a one-row header, a bordered
-// frame, a one-row footer — so their borders line up by construction. Each
+// frame — so their borders line up by construction. Each
 // pane has a colour family; activation brightens the family, it never
 // changes hue. The browser's family is its mode accent.
 
@@ -2015,7 +2016,7 @@ pub(crate) fn pane_accent(family: (Color, Color), active: bool) -> Color {
     if active { family.0 } else { family.1 }
 }
 
-/// The nav strip: each pane's name-and-reach-key tip sits above its pane's
+/// The nav strip: each pane's name and navigation key sit above its pane's
 /// top-left corner; tips of off-screen panes dock at the nearest screen edge,
 /// so narrowing compresses the strip instead of losing it.
 pub(crate) fn render_pane_nav(
@@ -2024,30 +2025,36 @@ pub(crate) fn render_pane_nav(
     pane_x: [Option<u16>; 3], // left column of each pane, when visible
     active: usize,
     playlist_pinned: bool,
-    browser_accent: Color,
+    browser_mode: crate::browser::BrowserMode,
+    pane_keys: &[Option<String>; 2],
+    tags_available: bool,
 ) {
     if area.height == 0 || area.width == 0 { return; }
     let colours = [
         if playlist_pinned { PLAYLIST_FAMILY.0 } else { Color::Rgb(70, 78, 95) },
-        browser_accent,
-        TAGS_FAMILY.0,
+        crate::browser::mode_accent(browser_mode),
+        if tags_available { TAGS_FAMILY.0 } else { Color::Rgb(70, 78, 95) },
     ];
     let names = ["Playlist", "Browser", "Tags"];
-    let hint_style = Style::default().fg(Color::Rgb(110, 120, 150)).bg(PANE_BG);
     let tip = |i: usize| -> (Line<'static>, u16) {
-        if i == active {
-            let s = format!(" {} ", names[i]);
-            let w = s.chars().count() as u16;
-            (Line::from(Span::styled(s, Style::default().fg(Color::Black).bg(colours[i]).add_modifier(Modifier::BOLD))), w)
+        let style = if i == active {
+            Style::default().fg(Color::Black).bg(colours[i]).add_modifier(Modifier::BOLD)
         } else {
-            let key = if i < active { "[H]" } else { "[L]" };
-            let name_s = format!("{} ", names[i]);
-            let w = (name_s.chars().count() + key.chars().count()) as u16;
-            (Line::from(vec![
-                Span::styled(name_s, Style::default().fg(colours[i]).bg(PANE_BG)),
-                Span::styled(key.to_string(), hint_style),
-            ]), w)
+            Style::default().fg(colours[i]).bg(PANE_BG)
+        };
+        let mut line = Line::from(Span::styled(format!(" {} ", names[i]), style));
+        if i == 1 {
+            if let Some(mode) = crate::browser::mode_label(browser_mode) {
+                line.spans.push(Span::styled(format!(" {mode} "), Style::default().fg(colours[i]).bg(PANE_BG)));
+            }
         }
+        if i != active && (i != 2 || tags_available) {
+            if let Some(key) = &pane_keys[usize::from(i > active)] {
+                line.spans.push(Span::styled(format!("[{key}]"), Style::default().fg(Color::Rgb(110, 120, 150)).bg(PANE_BG)));
+            }
+        }
+        let width = line.width().min(u16::MAX as usize) as u16;
+        (line, width)
     };
     let first_visible = pane_x.iter().position(|x| x.is_some()).unwrap_or(1);
     let last_visible = pane_x.iter().rposition(|x| x.is_some()).unwrap_or(1);
@@ -2090,14 +2097,13 @@ pub(crate) fn quiet_of(c: Color) -> Color {
     }
 }
 
-/// The uniform vertical anatomy: header row, frame, footer row.
-pub(crate) fn pane_rows(area: ratatui::layout::Rect) -> (ratatui::layout::Rect, ratatui::layout::Rect, ratatui::layout::Rect) {
+/// Pane names stay above their frame; instructions live in the shared hint area.
+pub(crate) fn pane_rows(area: ratatui::layout::Rect) -> (ratatui::layout::Rect, ratatui::layout::Rect) {
     let rows = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Length(1),
-        ratatui::layout::Constraint::Min(2),
-        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Min(0),
     ]).split(area);
-    (rows[0], rows[1], rows[2])
+    (rows[0], rows[1])
 }
 
 pub(crate) fn pane_frame(title: Line<'static>, accent: Color) -> Block<'static> {
@@ -2112,16 +2118,12 @@ pub(crate) fn pane_header(frame: &mut ratatui::Frame, area: ratatui::layout::Rec
     frame.render_widget(Paragraph::new(line).style(Style::default().bg(PANE_BG)), area);
 }
 
-pub(crate) fn pane_footer(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, line: Line) {
-    frame.render_widget(Paragraph::new(line).style(Style::default().bg(PANE_BG)), area);
-}
-
 /// A pane with nothing to show yet: full chrome, one dim hint inside.
 pub(crate) fn render_pane_placeholder(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, name: &str, hint: &str, family: (Color, Color), active: bool) {
     if area.width == 0 || area.height == 0 { return; }
     frame.render_widget(Clear, area);
     let accent = pane_accent(family, active);
-    let (header, body, footer) = pane_rows(area);
+    let (header, body) = pane_rows(area);
     pane_header(frame, header, Line::from(""));
     let block = pane_frame(Line::from(Span::styled(format!(" {name} "), Style::default().fg(accent))), accent);
     let inner = block.inner(body);
@@ -2130,7 +2132,6 @@ pub(crate) fn render_pane_placeholder(frame: &mut ratatui::Frame, area: ratatui:
         Paragraph::new(hint).style(Style::default().fg(Color::Rgb(90, 100, 120)).bg(PANE_BG)).wrap(ratatui::widgets::Wrap { trim: true }),
         inner,
     );
-    pane_footer(frame, footer, Line::from(""));
 }
 
 pub(crate) fn render_playlist_panel(
@@ -2139,11 +2140,10 @@ pub(crate) fn render_playlist_panel(
     pp: &crate::PlaylistPanel,
     marks: &[Option<usize>],
     kind: PanelKind,
-    hint: &str,
 ) {
     let show_cursor = !matches!(kind, PanelKind::Preview);
     let name = pp.path.file_stem().and_then(|s| s.to_str()).unwrap_or("playlist").to_string();
-    let (header_row, frame_row, footer_row) = pane_rows(area);
+    let (header_row, frame_row) = pane_rows(area);
 
     use crate::EntryStatus;
     let row_width = (area.width as usize).saturating_sub(2);
@@ -2189,11 +2189,10 @@ pub(crate) fn render_playlist_panel(
     let mut state = ListState::default();
     state.select((!pp.playlist.entries.is_empty()).then(|| pp.cursor.min(pp.playlist.entries.len() - 1)));
     frame.render_stateful_widget(List::new(items).block(block), frame_row, &mut state);
-    pane_footer(frame, footer_row, Line::from(Span::styled(format!(" {hint}"), Style::default().fg(Color::Rgb(110, 120, 140)))));
 }
 
 /// The tag editor rendered in the context panel: labelled fields with a caret on
-/// the active one, the resulting filename, and a hint. Input is the same handler
+/// the active one and the resulting filename. Input is the same handler
 /// as the full-screen modal.
 /// The one metadata panel: identical form for passive preview and active
 /// editing — the symmetric dim carries the state difference, so the RHS never
@@ -2219,8 +2218,15 @@ pub(crate) fn render_metadata_panel(
             render_editor_field(lab, val, active_field == Some(i), *cur, text_width)
         })
         .collect();
+    // Keep the active text cursor or rename toggle visible when shared hints
+    // leave only a few rows for the editor.
+    let active_row = if rename_toggle.is_some_and(|(_, focused)| focused) {
+        Some(lines.len())
+    } else {
+        lines.iter().position(|line| line.spans.iter().any(|span| span.style.bg == Some(Color::Yellow)))
+    };
     // The decision is the section header: `── [x] Rename File ──` — in edit
-    // mode the divider itself is the toggle (Tab to it, Space flips).
+    // mode the divider itself is the toggle (arrow to it, Space flips).
     let rename_on = rename_toggle.map_or(true, |(enabled, _)| enabled);
     match rename_toggle {
         Some((enabled, focused)) => {
@@ -2261,19 +2267,14 @@ pub(crate) fn render_metadata_panel(
     }
     let editing = active_field.is_some();
     let accent = pane_accent(TAGS_FAMILY, pane_active || editing);
-    let hint = if editing {
-        "Enter saves and exits · Esc exits without saving"
-    } else {
-        "e edit tags"
-    };
     frame.render_widget(Clear, area);
-    let (header_row, frame_row, footer_row) = pane_rows(area);
+    let (header_row, frame_row) = pane_rows(area);
     pane_header(frame, header_row, Line::from(""));
     let block = pane_frame(Line::from(Span::styled(" Tags ", Style::default().fg(accent))), accent);
     let inner = block.inner(frame_row);
     frame.render_widget(block, frame_row);
-    frame.render_widget(Paragraph::new(lines).style(Style::default().bg(PANE_BG)), inner);
-    pane_footer(frame, footer_row, Line::from(Span::styled(format!(" {hint}"), Style::default().fg(Color::Rgb(110, 120, 140)))));
+    let scroll = active_row.map_or(0, |row| row.saturating_sub(inner.height.saturating_sub(1) as usize));
+    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(u16::MAX as usize) as u16, 0)).style(Style::default().bg(PANE_BG)), inner);
 }
 
 pub(crate) fn render_tag_editor_panel(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, editor: &crate::deck::TagEditorState) {
@@ -2353,6 +2354,31 @@ pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) 
                 .fg(blend(style.fg.unwrap_or(Color::Reset), KEEP_FG))
                 .bg(blend(style.bg.unwrap_or(Color::Reset), KEEP_BG));
             cell.set_style(dimmed);
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod hint_layout_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn short_tag_pane_keeps_each_active_field_and_toggle_visible() {
+        let fields: Vec<_> = TAG_FIELD_LABELS.iter().map(|_| ("some text".to_string(), 4)).collect();
+        for active in 0..=TAG_FIELD_LABELS.len() {
+            let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
+            terminal.draw(|f| render_metadata_panel(f, f.area(), &fields, Some(active),
+                "track.flac", Some("new.flac"), None,
+                Some((true, active == TAG_FIELD_LABELS.len())), true)).unwrap();
+            let buffer = terminal.backend().buffer();
+            if active < TAG_FIELD_LABELS.len() {
+                assert!(buffer.content.iter().any(|c| c.bg == Color::Yellow), "field {active} cursor hidden");
+            } else {
+                let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+                assert!(text.contains("Rename File"));
+            }
         }
     }
 }

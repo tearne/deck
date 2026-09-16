@@ -270,7 +270,7 @@ impl BrowserState {
     }
 
     /// Whether a search filter is currently narrowing the listing.
-    fn has_filter(&self) -> bool {
+    pub(crate) fn has_filter(&self) -> bool {
         self.search_results.is_some() || !self.search_term.is_empty()
     }
 
@@ -374,7 +374,6 @@ struct ModeTheme {
     highlight_fg: Color,
     highlight_bg: Color,
     label: &'static str,
-    legend: &'static str,
 }
 
 fn mode_theme(mode: BrowserMode) -> ModeTheme {
@@ -384,21 +383,18 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
             highlight_fg: Color::Yellow,
             highlight_bg: Color::Rgb(60, 50, 0),
             label: "COMMAND",
-            legend: "h/j/k/l move · Enter load · # listen · alt+j/k deck · ` jump · / search · @ ws · T tags · Esc back",
         },
         BrowserMode::Search => ModeTheme {
             accent: Color::Rgb(100, 180, 220),
             highlight_fg: Color::Rgb(210, 235, 255),
             highlight_bg: Color::Rgb(20, 50, 70),
             label: "SEARCH",
-            legend: "type to filter · ↑/↓ move · Enter load · alt+j/k deck · Esc clear/command",
         },
         BrowserMode::Move => ModeTheme {
             accent: Color::Rgb(150, 190, 250),
             highlight_fg: Color::Rgb(200, 220, 255),
             highlight_bg: Color::Rgb(30, 50, 90),
             label: "MOVE",
-            legend: "j/k move · Enter/l into · h up · y move here · Esc cancel (exit)",
         },
     }
 }
@@ -407,6 +403,11 @@ fn mode_theme(mode: BrowserMode) -> ModeTheme {
 /// for shared chrome drawn outside this module (the nav strip).
 pub(crate) fn mode_accent(mode: BrowserMode) -> Color {
     mode_theme(mode).accent
+}
+
+/// Command is the unlabelled default; other modes accompany the Browser chip.
+pub(crate) fn mode_label(mode: BrowserMode) -> Option<&'static str> {
+    (mode != BrowserMode::Command).then(|| mode_theme(mode).label)
 }
 
 pub(crate) fn render_browser(
@@ -422,7 +423,7 @@ pub(crate) fn render_browser(
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
     // Header row: the shared nav strip is drawn over it by the caller.
@@ -481,103 +482,61 @@ pub(crate) fn render_browser(
         ))
     };
 
-    let result_count_title = state.search_results.as_ref().map(|r| {
-        Line::from(ratatui::text::Span::styled(
-            format!(" {} results ", r.len()),
-            Style::default().fg(Color::Rgb(100, 140, 220)).bg(bg),
-        )).alignment(Alignment::Left)
-    });
-
     let mut block = Block::default()
         .title(path_title.alignment(Alignment::Left))
         .border_style(border_style)
         .style(Style::default().bg(bg))
         .borders(Borders::ALL);
-    if let Some(t) = result_count_title {
-        // Second left title sits below the path title — used during search to show match count.
-        block = block.title_bottom(t);
+    let status = browser_status(state);
+    if !status.is_empty() {
+        block = block.title_bottom(Line::from(ratatui::text::Span::styled(
+            format!(" {status} "), Style::default().fg(border_accent).bg(bg),
+        )));
     }
 
     let highlight_style = Style::default()
         .fg(theme.highlight_fg)
         .bg(theme.highlight_bg)
         .add_modifier(Modifier::BOLD);
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(highlight_style);
-
+    // Persistent status belongs to the border, never a file-list row.
+    // Active text entry or a move destination sits above the file list.
+    let body = block.inner(chunks[1]);
+    frame.render_widget(block, chunks[1]);
+    let status_lines = browser_input(state)
+        .map(|input| crate::hints::wrap_text(&input, body.width))
+        .unwrap_or_default();
+    let wanted = status_lines.len().min(u16::MAX as usize) as u16;
+    let status_widget = Paragraph::new(status_lines)
+        .style(Style::default().fg(theme.accent).bg(Color::Rgb(30, 36, 52)));
+    let status_height = wanted.min(body.height);
+    let rows = Layout::vertical([Constraint::Length(status_height), Constraint::Min(0)]).split(body);
     let mut list_state = ListState::default().with_selected(Some(state.cursor));
-    frame.render_stateful_widget(list, chunks[1], &mut list_state);
+    frame.render_stateful_widget(List::new(items).highlight_style(highlight_style), rows[1], &mut list_state);
+    // Long typed text scrolls to its end when the screen cannot show every row.
+    frame.render_widget(status_widget.scroll((wanted.saturating_sub(status_height), 0)), rows[0]);
+}
 
-    // Footer: the mode label (in its accent), then that mode's live input —
-    // the search term, move prompt, or new-playlist name — or its key legend,
-    // plus a tag-compliance indicator when cleanup mode is on.
-    let mut status_spans = vec![
-        ratatui::text::Span::styled(
-            format!(" {} ", theme.label),
-            Style::default().fg(Color::Black).bg(theme.accent).add_modifier(Modifier::BOLD),
-        ),
-    ];
+fn browser_status(state: &BrowserState) -> String {
+    let mut parts = Vec::new();
+    if state.compliance_on { parts.push(format!("tags: {} ⚠", state.non_compliant_count())); }
+    if let Some(label) = &state.location_label { parts.push(format!("◈ {label}")); }
+    if let Some(results) = &state.search_results { parts.push(format!("{} results", results.len())); }
+    parts.join(" · ")
+}
+
+fn browser_input(state: &BrowserState) -> Option<String> {
     if let Some(name) = &state.name_prompt {
-        status_spans.push(ratatui::text::Span::styled("  new playlist: ", Style::default().fg(theme.accent).bg(bg)));
-        status_spans.push(ratatui::text::Span::styled(name.clone(), Style::default().fg(Color::White).bg(bg)));
-        status_spans.push(ratatui::text::Span::styled("█  Enter: create · Esc: cancel", Style::default().fg(theme.accent).bg(bg)));
+        Some(format!("New playlist: {name}█"))
+    } else if state.mode == BrowserMode::Search {
+        Some(format!("Search: {}█", state.search_term))
+    } else if state.mode == BrowserMode::Move {
+        let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+        Some(format!("Move here → {name}"))
     } else {
-        match state.mode {
-            BrowserMode::Search => {
-                status_spans.push(ratatui::text::Span::styled("  search: ", Style::default().fg(theme.accent).bg(bg)));
-                if state.search_term.is_empty() {
-                    status_spans.push(ratatui::text::Span::styled("type to filter", Style::default().fg(Color::Rgb(80, 90, 110)).bg(bg)));
-                } else {
-                    status_spans.push(ratatui::text::Span::styled(state.search_term.clone(), Style::default().fg(Color::White).bg(bg)));
-                }
-                status_spans.push(ratatui::text::Span::styled("█", Style::default().fg(theme.accent).bg(bg)));
-                status_spans.push(ratatui::text::Span::styled("  ↑/↓ move · Enter load · Esc clear/command", Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg)));
-            }
-            BrowserMode::Move => {
-                let name = state.cwd.file_name().and_then(|n| n.to_str()).unwrap_or("/");
-                status_spans.push(ratatui::text::Span::styled(
-                    format!("  Move here → {name}   y: confirm · Esc: cancel"),
-                    Style::default().fg(theme.accent).bg(bg),
-                ));
-            }
-            BrowserMode::Command => {
-                status_spans.push(ratatui::text::Span::styled(
-                    format!("  {}", theme.legend),
-                    Style::default().fg(Color::Rgb(120, 130, 160)).bg(bg),
-                ));
-                if state.workspace.is_some() {
-                    status_spans.push(ratatui::text::Span::styled(
-                        "   ws set · ' clears",
-                        Style::default().fg(Color::Rgb(170, 150, 90)).bg(bg),
-                    ));
-                }
-            }
-        }
-    }
-    if state.compliance_on {
-        let flagged = state.non_compliant_count();
-        status_spans.push(ratatui::text::Span::styled(
-            format!("   tags: {flagged} ⚠  (e fixes, then advances)"),
-            Style::default().fg(Color::Rgb(230, 170, 60)).bg(bg),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(status_spans)).style(Style::default().bg(bg)), chunks[2]);
-    // The jumped-to location label sits at the footer's right end until the
-    // next manual navigation clears it.
-    if let Some(ref label) = state.location_label {
-        let text = format!(" ◈ {label} ");
-        let w = (text.chars().count() as u16).min(chunks[2].width);
-        let label_area = ratatui::layout::Rect { x: chunks[2].x + chunks[2].width - w, y: chunks[2].y, width: w, height: 1 };
-        frame.render_widget(
-            Paragraph::new(Line::from(ratatui::text::Span::styled(
-                text,
-                Style::default().fg(Color::Rgb(170, 195, 225)).bg(Color::Rgb(38, 50, 78)),
-            ))),
-            label_area,
-        );
+        None
     }
 }
+
 
 pub(crate) fn handle_browser_key(
     state: &mut BrowserState,
@@ -860,4 +819,54 @@ mod tests {
         state.move_up();
         assert_eq!(state.cursor, 0);
     }
+
+    #[test]
+    fn shared_hints_and_browser_inputs_render_without_overlap() {
+        use crate::hints::{self, Context, Hints, State};
+        use ratatui::{backend::TestBackend, Terminal};
+        let map = crate::config::parse_keymap(include_str!("../../resources/config.toml"), &mut std::collections::HashMap::new());
+        let mut previews = String::new();
+        for (width, height) in [(140, 32), (80, 24), (40, 18), (40, 10)] {
+            for mode in [BrowserMode::Command, BrowserMode::Search, BrowserMode::Move] {
+                let mut state = make_state(&[EntryKind::Dir, EntryKind::Audio, EntryKind::Audio]);
+                state.mode = mode;
+                state.workspace = Some(PathBuf::from("/test"));
+                state.location_label = Some("Deck 1".into());
+                state.search_term = "a long 音楽 search ending here".into();
+                let context = match mode { BrowserMode::Command => Context::Command, BrowserMode::Search => Context::Search, BrowserMode::Move => Context::Move };
+                let hs = State { context, browser: true, focusable: true,
+                    command_chords: mode == BrowserMode::Command, insert: width >= 50,
+                    workspace: true, filtered: true, rename_toggle: false };
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|f| {
+                    let lines = Hints::for_state(&hs, &map).lines(width);
+                    let (content, hint_area) = hints::split(f.area(), lines.len());
+                    // Exercise the same single/pair/three-pane widths as the UI.
+                    let cols = if width >= 120 {
+                        Layout::horizontal([Constraint::Percentage(25), Constraint::Percentage(50), Constraint::Percentage(25)]).split(content)
+                    } else if width >= 50 {
+                        Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).split(content)
+                    } else { Layout::horizontal([Constraint::Percentage(100)]).split(content) };
+                    let browser = if cols.len() > 1 { cols[1] } else { cols[0] };
+                    if cols.len() > 1 { crate::render::render_pane_placeholder(f, cols[0], "Playlist", "Playlist content", crate::render::PLAYLIST_FAMILY, false); }
+                    if cols.len() > 2 { crate::render::render_pane_placeholder(f, cols[2], "Tags", "Track metadata", crate::render::TAGS_FAMILY, false); }
+                    render_browser(f, browser, &state, true);
+                    hints::render(f, hint_area, lines);
+                }).unwrap();
+                let buffer = terminal.backend().buffer();
+                let rows: Vec<String> = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect();
+                let screen = rows.join("\n");
+                if mode == BrowserMode::Search {
+                    assert!(screen.contains("█"), "cursor lost at {width}x{height}: {screen}");
+                    assert!(screen.contains("here"), "input tail lost: {screen}");
+                }
+                assert!(!screen.contains("ws set · ' clears"));
+                let status_row = rows.iter().find(|row| row.contains("◈ Deck 1")).unwrap();
+                assert!(status_row.contains('└'), "status must be on the border: {status_row}");
+                previews.push_str(&format!("\n{width}x{height} — {}\n{screen}\n", mode_theme(mode).label));
+            }
+        }
+        if let Ok(path) = std::env::var("DECK_HINT_PREVIEW") { std::fs::write(path, previews).unwrap(); }
+    }
+
 }

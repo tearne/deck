@@ -1,110 +1,121 @@
-# Application
+# Deck Player
 
-[Down](#deck)
-[Down](#bottom-pane)
-[Down](#browser)
-[Down](#playlists)
-[Down](#mixer)
-[Down](#keymap)
-[Down](#track-database)
-[Down](#session-state)
-[Down](#messages)
-[Down](#fault-capture)
-[Down](#album-art)
-[Down](#audio-latency)
+[Contents](#contents) \
+[Deck](#deck) \
+[Bottom Pane](#bottom-pane) \
+[Browser](#browser) \
+[Playlists](#playlists) \
+[Mixer](#mixer) \
+[Keymap](#keymap) \
+[Track Database](#track-database) \
+[Session State](#session-state) \
+[Messages](#messages) \
+[Fault Capture](#fault-capture) \
+[Album Art](#album-art) \
+[Audio Latency](#audio-latency) \
+[Performance](#performance)
 
-A minimal terminal DJ player. Modern DJ equipment does so much it removes the fun — deck blends the convenience of software with the skill of beat-matching and mixing. One to three decks, summoned as the set needs them, real-time waveform visualisation, nudge/speed adjustment, unified filter, optional BPM.
-
-Deliberately excludes loops, effects, jump points, samples, and track recommendations.
-
-Designed to perform well on slow hardware. Three recurring constraints:
-
-- **Never block the audio thread** — all communication via lock-free atomics. Any blocking causes audible glitches.
-
-- **Do work once, reuse** — full decode at load, pre-rendered waveform buffers, pre-computed overview peaks.
-
-- **Recompute only on change** — dirty flags, drift thresholds, adaptive frame timing. Most iterations are no-ops.
-
-These hold across several threads: decode runs in the background so the UI stays live and shows progress, then hashing and the grid-cache lookup follow on another pass; waveform rasterisation has its own thread (see Wide Buffer), and audio playback its own. State crosses threads through lock-free or low-contention primitives, so the audio thread never stalls.
-
+```yaml
+id: ol4b
 ```
-Application
-├ Deck
-│ ├ Deck Selection
-│ ├ Track Loading
-│ │ └ Renaming
-│ ├ Spectral Colour
-│ ├ Overview Waveform
-│ ├ Spectrum Analyser
-│ ├ Detail Waveform
-│ │ ├ Zoom
-│ │ ├ Wide Buffer
-│ │ ├ Sliding Viewport
-│ │ │ ├ Drift Snap
-│ │ │ └ Partial Drift Correction
-│ │ └ Sub-Column Smoothing
-│ ├ Transport
-│ │ ├ Mode
-│ │ ├ Nudge
-│ │ ├ Beat Jump
-│ │ ├ Needle Drop
-│ │ ├ Speed Control
-│ │ └ Click-free Seek
-│ │   ├ Quiet-Frame Search
-│ │   ├ Fade Envelope
-│ │   └ Pipeline Flush
-│ ├ Beat Grid
-│ │ ├ Grid Refinement
-│ │ └ Cue Point
-│ └ Audio Pipeline
-│   ├ Filter
-│   ├ Level & Gain
-│   ├ Pitch Shift
-│   └ Metronome
-├ Bottom Pane
-├ Browser
-│ ├ Search
-│ ├ Preview
-│ ├ Jump to Loaded
-│ ├ Tag Compliance
-│ ├ Context Panel
-│ └ File Operations
-│   ├ Metadata Editor
-│   └ Move
-├ Playlists
-│ ├ Loaded Playlist
-│ ├ Playlist Editing
-│ └ Finding Tracks
-│   ├ Library Scan Cost
-│   └ Candidate Picker
-├ Mixer
-│ └ PFL Monitor
-├ Keymap
-│ └ Key Reporting
-├ Track Database
-├ Session State
-│ └ Session Restore
-├ Messages
-│ ├ History View
-│ └ Event Log
-├ Fault Capture
-├ Album Art
-└ Audio Latency
+
+A minimal terminal DJ player, blending software convenience with the skill of beat-matching and mixing. One to three decks, summoned as the set needs them, provide real-time waveforms, nudge and speed adjustment, a unified filter and optional BPM.
+
+Deliberately excludes loops, effects, jump points, samples and track recommendations.
+
+Designed to perform well on slow hardware; [Performance](#performance) describes the constraints that keep playback and the interface responsive.
+
+
+# Contents
+
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: 7qhn
 ```
+
+- [Deck Player](#deck-player)
+  - [Deck](#deck)
+    - [Deck Selection](#deck-selection)
+    - [Track Loading](#track-loading)
+      - [Renaming](#renaming)
+    - [Spectral Colour](#spectral-colour)
+    - [Overview Waveform](#overview-waveform)
+    - [Spectrum Analyser](#spectrum-analyser)
+    - [Detail Waveform](#detail-waveform)
+      - [Zoom](#zoom)
+      - [Wide Buffer](#wide-buffer)
+      - [Sliding Viewport](#sliding-viewport)
+        - [Drift Snap](#drift-snap)
+        - [Partial Drift Correction](#partial-drift-correction)
+      - [Sub-Column Smoothing](#sub-column-smoothing)
+    - [Transport](#transport)
+      - [Mode](#mode)
+      - [Nudge](#nudge)
+      - [Beat Jump](#beat-jump)
+      - [Needle Drop](#needle-drop)
+      - [Speed Control](#speed-control)
+      - [Click-free Seek](#click-free-seek)
+        - [Quiet-Frame Search](#quiet-frame-search)
+        - [Fade Envelope](#fade-envelope)
+        - [Pipeline Flush](#pipeline-flush)
+    - [Beat Grid](#beat-grid)
+      - [Grid Refinement](#grid-refinement)
+      - [Cue Point](#cue-point)
+    - [Audio Pipeline](#audio-pipeline)
+      - [Filter](#filter)
+      - [Level & Gain](#level--gain)
+      - [Pitch Shift](#pitch-shift)
+      - [Metronome](#metronome)
+  - [Bottom Pane](#bottom-pane)
+  - [Browser](#browser)
+    - [Browser Modes](#browser-modes)
+    - [Search](#search)
+    - [Preview](#preview)
+    - [File Operations](#file-operations)
+      - [Metadata Editor](#metadata-editor)
+      - [Move](#move)
+    - [Tag Compliance](#tag-compliance)
+    - [Jump to Loaded](#jump-to-loaded)
+    - [Browser Layout](#browser-layout)
+  - [Playlists](#playlists)
+    - [Loaded Playlist](#loaded-playlist)
+    - [Playlist Editing](#playlist-editing)
+    - [Finding Tracks](#finding-tracks)
+      - [Library Scan Cost](#library-scan-cost)
+      - [Candidate Picker](#candidate-picker)
+  - [Mixer](#mixer)
+    - [PFL Monitor](#pfl-monitor)
+  - [Keymap](#keymap)
+    - [Key Reporting](#key-reporting)
+  - [Track Database](#track-database)
+  - [Session State](#session-state)
+    - [Session Restore](#session-restore)
+  - [Messages](#messages)
+    - [History View](#history-view)
+    - [Event Log](#event-log)
+  - [Fault Capture](#fault-capture)
+  - [Album Art](#album-art)
+  - [Audio Latency](#audio-latency)
+  - [Performance](#performance)
 
 
 # Deck
 
-[Up](#application)
-[Down](#deck-selection)
-[Down](#track-loading)
-[Down](#spectral-colour)
-[Down](#overview-waveform)
-[Down](#spectrum-analyser)
-[Down](#detail-waveform)
-[Down](#transport)
-[Down](#beat-grid)
-[Down](#audio-pipeline)
+[↑ Deck Player](#deck-player) \
+[Deck Selection](#deck-selection) \
+[Track Loading](#track-loading) \
+[Spectral Colour](#spectral-colour) \
+[Overview Waveform](#overview-waveform) \
+[Spectrum Analyser](#spectrum-analyser) \
+[Detail Waveform](#detail-waveform) \
+[Transport](#transport) \
+[Beat Grid](#beat-grid) \
+[Audio Pipeline](#audio-pipeline)
+
+```yaml
+id: qk40
+```
 
 A loaded track with waveform visualisation and transport controls. Each deck has its own track, playback state, BPM, and audio output.
 
@@ -119,7 +130,11 @@ Three deck instances share one conceptual model. The map describes the deck, not
 
 # Deck Selection
 
-[Up](#deck)
+[↑ Deck](#deck)
+
+```yaml
+id: 7ihk
+```
 
 Each deck is independent, one selected at a time. The selected deck receives all deck-specific input — transport, BPM, cue, nudge, pitch. The mixer controls — level, gain, and filter — are the exception: they address each deck directly, whichever is selected.
 
@@ -132,8 +147,12 @@ Two decks can be swapped wholesale when both exist — their entire state trades
 
 # Track Loading
 
-[Up](#deck)
-[Down](#renaming)
+[↑ Deck](#deck) \
+[Renaming](#renaming)
+
+```yaml
+id: ovem
+```
 
 Decoding runs in the background while the UI stays responsive; a progress screen tracks it, and the deck arrives **loaded but paused** — the operator starts playback deliberately. Hashing and the grid-cache lookup follow on a further background pass (see Beat Grid).
 
@@ -146,34 +165,49 @@ Supported formats: FLAC, MP3, OGG, WAV, AAC, OPUS.
 
 # Renaming
 
-[Up](#track-loading)
+[↑ Track Loading](#track-loading)
+
+```yaml
+id: gajy
+```
 
 Keeps track filenames matching their tags. The convention is `Title - Artist` (an optional `(suffix)` allowed), checked against the raw filename stem at load. A conforming file loads silently; a non-conforming one raises a rename offer that counts down in the deck's readout corner — accept it to open the metadata editor, or carry on and it shrinks to an amber `⚠` beside the track title until dealt with. This is the automatic prompt to fix a non-conforming name; the same editor can also be opened deliberately from File Operations.
 
 **See also**
 
 - [Metadata Editor](#metadata-editor) — the editor the offer opens, on the same browser screen the `e` route uses
+
 - [File Operations](#file-operations) — editing the same file on demand, from the browser
+
 - [Keymap](#keymap) — fixed rename/editor keys
 
 
 # File Operations
 
-[Up](#browser)
-[Down](#metadata-editor)
-[Down](#move)
+[↑ Browser](#browser) \
+[Metadata Editor](#metadata-editor) \
+[Move](#move)
+
+```yaml
+id: um1g
+```
 
 The browser's command mode acts on the highlighted file: `e` edits its tags and name, `m` moves it to another directory. Any audio file you can navigate to, not just one loaded on a deck — the browser is a file manager. If a touched file is currently loaded on a deck, that deck follows it (its path and name update).
 
 **See also**
 
 - [Renaming](#renaming) — the load-time offer that also opens the editor
+
 - [Keymap](#keymap) — the fixed command-mode file-op keys
 
 
 # Metadata Editor
 
-[Up](#file-operations)
+[↑ File Operations](#file-operations)
+
+```yaml
+id: zjfv
+```
 
 The editor that does the renaming, by way of editing the track's metadata. Seven fields — Artist, Title, Album, Year, Track, Genre, Comment — are seeded from the file and shown with a live preview of the resulting filename. A `[x] Rename File` toggle heads the filename section (on by default; off makes the save tags-only). Confirming writes the edited metadata back to the file and, when the toggle is on, renames it to the sanitised `Title - Artist`; Artist and Title are required (they form the name), and the rename aborts rather than overwrite an existing file. Cancelling leaves the file untouched. It renders in the browser's right-hand panel, the browser dimmed beside it, and captures all input while open.
 
@@ -184,19 +218,27 @@ Reached two ways onto one screen: `e` on a highlighted file in the browser, or t
 **Detail**
 
 - Tags read via symphonia (ID3v2 preferred over container tags), written via `lofty` (symphonia is read-only).
+
 - Filename-illegal characters `/ \ : * ? " < > |` become `-`; renamed only when the proposed stem differs.
+
 - Identity check: a mismatch is a critical fault (most likely a byte-range extraction bug), surfaced and preserved rather than reverted — the audio-payload-only hash is the same invariant the playlist format's conformance relies on (tags excluded from identity).
 
 **See also**
 
 - [Renaming](#renaming) — the load-time offer that also opens this
+
 - [Keymap](#keymap) — editor keys (fixed, not configurable)
+
 - [Fault Capture](#fault-capture) — where a payload-change mismatch is preserved
 
 
 # Move
 
-[Up](#file-operations)
+[↑ File Operations](#file-operations)
+
+```yaml
+id: 5v36
+```
 
 Relocates the highlighted file to another directory — for sorting tracks into folders while listening. Pressing `m` in command mode enters the browser's move mode: a folder-focused view where folders read in clear blue and are the only thing selectable, tracks and other files shown but dimmed and inert. Navigate to the target folder and `y` moves the file there. If the file is loaded on a deck, that deck follows it; playback is unaffected since the audio is already decoded in memory.
 
@@ -211,7 +253,11 @@ Relocates the highlighted file to another directory — for sorting tracks into 
 
 # Spectral Colour
 
-[Up](#deck)
+[↑ Deck](#deck)
+
+```yaml
+id: lf2a
+```
 
 Both waveforms use the same colour scheme: a spectral gradient driven by bass ratio, giving a visual sense of the frequency content at each point in the track. Low bass is one end of the palette, high bass the other. Applied per column in both overview and detail views.
 
@@ -220,8 +266,11 @@ Both waveforms use the same colour scheme: a spectral gradient driven by bass ra
 Bass ratio computed per column from mono sample data within that column's sample range. Box-smoothed with radius 3 to prevent flicker at wide zoom. Interpolated across a 4-stop linear palette, from treble (bass=0) to bass (bass=1):
 
 1. Cyan `(0, 255, 255)`
+
 2. Teal `(0, 255, 120)`
+
 3. Gold `(220, 255, 0)`
+
 4. Amber `(255, 120, 0)`
 
 Interpolation is linear between adjacent stops, with brightness scaling that normalises to max channel = 255 to preserve saturation at all brightness levels.
@@ -233,7 +282,11 @@ The looked-up colours are emitted as xterm-256 indexed colours rather than truec
 
 # Overview Waveform
 
-[Up](#deck)
+[↑ Deck](#deck)
+
+```yaml
+id: eoby
+```
 
 The full-track waveform — a miniature map of the whole song. Playhead and cue point shown as vertical lines; spectral colour is shared with the detail view.
 
@@ -248,14 +301,21 @@ With ghost playheads on (`ghosts_toggle`, remembered between runs), each beat-ju
 **See also**
 
 - [Spectral Colour](#spectral-colour) — the colour encoding both views share
+
 - [Needle Drop](#needle-drop) — seeking via the overview
+
 - [Beat Grid](#beat-grid) — the BPM and offset that position the bar markers
+
 - [Beat Jump](#beat-jump) — the ghost playheads' source and rules
 
 
 # Spectrum Analyser
 
-[Up](#deck)
+[↑ Deck](#deck)
+
+```yaml
+id: q5i6
+```
 
 A compact real-time frequency display at the tail of the deck's readout — 16 braille characters wide (32 logarithmically spaced bins, 20 Hz to 20 kHz), one braille row tall. Each character encodes two adjacent bins as a bottom-up bar chart. Active whenever a track is loaded.
 
@@ -270,17 +330,23 @@ Goertzel algorithm over a 4096-sample Hann-windowed window at the current playba
 **See also**
 
 - [Filter](#filter) — the shaded region tracks filter position
+
 - [Overview Waveform](#overview-waveform) — the readout it sits in, overlaid bottom-right
+
 - [Keymap](#keymap) — no config actions; the analyser is always on
 
 
 # Detail Waveform
 
-[Up](#deck)
-[Down](#zoom)
-[Down](#wide-buffer)
-[Down](#sliding-viewport)
-[Down](#sub-column-smoothing)
+[↑ Deck](#deck) \
+[Zoom](#zoom) \
+[Wide Buffer](#wide-buffer) \
+[Sliding Viewport](#sliding-viewport) \
+[Sub-Column Smoothing](#sub-column-smoothing)
+
+```yaml
+id: teyh
+```
 
 Smooth scrolling without per-frame redraw. Four mechanisms work together: zoom controls the time scale, the wide buffer provides pre-rendered content, the viewport slides across it, and sub-column smoothing gives half-character precision.
 
@@ -291,7 +357,11 @@ Smooth scrolling without per-frame redraw. Four mechanisms work together: zoom c
 
 # Zoom
 
-[Up](#detail-waveform)
+[↑ Detail Waveform](#detail-waveform)
+
+```yaml
+id: 0zj6
+```
 
 The user steps through discrete zoom levels controlling how many seconds of audio are visible on screen. Zooming triggers a buffer recompute. BPM-adjusted playback is accounted for so that beat grids align visually across decks at the same effective tempo.
 
@@ -302,7 +372,11 @@ Zoom levels: 1.0, 2.0, 4.0, 8.0, 16.0, 32.0 seconds per screen width. Samples pe
 
 # Wide Buffer
 
-[Up](#detail-waveform)
+[↑ Detail Waveform](#detail-waveform)
+
+```yaml
+id: knl5
+```
 
 A pre-rendered waveform image, much wider than the screen, computed in the background, before the UI needs it. A dedicated background thread maintains the buffer. It polls for changes and recomputes only when needed. Most iterations are no-ops. The buffer is a grid of braille characters, anchored at a sample position at a specific zoom level.
 
@@ -311,18 +385,27 @@ A pre-rendered waveform image, much wider than the screen, computed in the backg
 **Detail**
 
 - Buffer width: 5x screen width in columns.
+
 - Background thread: OS thread with 8ms sleep per iteration (~125Hz).
+
 - Recompute triggers are per deck: playhead drift past 75% of buffer width, track load, and parameter changes (BPM, offset, cue, gain, loop) rebuild only that deck's buffer; resize and zoom rebuild all three.
+
 - Changes to operator-adjusted values (BPM, offset, gain, loop bounds, speed) rebuild at most ~10 times a second while the value keeps changing, then once more ~50 ms after it stops. A held key therefore shows the waveform updating live, and the final state is exact. Drift, resize, zoom, and load rebuild immediately.
+
 - Buffer content: 2D grid of braille characters (each char is a 2x4 dot matrix). One column = one sample range determined by zoom level.
+
 - Buffer swap: computed into a new buffer, then swapped in under a mutex. The mutex is held only for the pointer swap, not during computation.
 
 
 # Sliding Viewport
 
-[Up](#detail-waveform)
-[Down](#drift-snap)
-[Down](#partial-drift-correction)
+[↑ Detail Waveform](#detail-waveform) \
+[Drift Snap](#drift-snap) \
+[Partial Drift Correction](#partial-drift-correction)
+
+```yaml
+id: 9c8d
+```
 
 Each UI frame advances the displayed position by the **measured** frame interval × *sample_rate × speed*, accumulated into a running value. Measured intervals telescope to exact wall time, so timer jitter cannot compound into drift — advancing at an *expected* rate would.
 
@@ -333,6 +416,7 @@ Alignment with the audio's true position is maintained by two separate mechanism
 **Detail**
 
 - The audio thread's sample counter — read via atomic load (Relaxed ordering) — is the reference point for drift detection. It counts samples emitted to the OS, so it leads what the user hears by the hardware buffer depth.
+
 - Viewport offset — the column at which the playhead should appear — is calculated as *(current playhead sample − wide buffer start sample)*, converted to a column position plus half-column for sub-character precision.
 
 **See also**
@@ -342,20 +426,30 @@ Alignment with the audio's true position is maintained by two separate mechanism
 
 # Drift Snap
 
-[Up](#sliding-viewport)
+[↑ Sliding Viewport](#sliding-viewport)
+
+```yaml
+id: 9i1n
+```
 
 When the displayed position diverges too far from the audio's true output position, a snap immediately re-aligns the display. This prevents accumulated lag between the cursor and what the user hears.
 
 **Detail**
 
 - While playing, the threshold is 0.1 s — far above steady-state drift and audio-batch noise (sub-millisecond and ~25 ms respectively since the drift damper fix), while catching short seeks like a 1-beat jump at high BPM that the old 0.3 s threshold left to crawl in via partial correction.
+
 - While paused and not nudging, the threshold tightens to a single sample — without motion to mask it, any gap is obvious.
+
 - After the snap, the display position is rounded to the nearest half-column.
 
 
 # Partial Drift Correction
 
-[Up](#sliding-viewport)
+[↑ Sliding Viewport](#sliding-viewport)
+
+```yaml
+id: 15vq
+```
 
 Between snaps, each frame pulls the running display position a small fraction of the way toward the audio's true position. This absorbs the step noise from the audio thread's batched position reads, which would otherwise show up as flicker if the display fully tracked the audio sample-by-sample.
 
@@ -364,13 +458,19 @@ The correction is applied to the running value itself, so it accumulates frame t
 **Detail**
 
 - Factor: 0.002 per frame — position −= 0.002 × (position − audio position).
+
 - Steady-state offset under clock skew ≈ rate × skew / (0.002 × fps): sub-millisecond at typical ppm-level crystal skew.
+
 - Applies only while playing and below the snap threshold.
 
 
 # Sub-Column Smoothing
 
-[Up](#detail-waveform)
+[↑ Detail Waveform](#detail-waveform)
+
+```yaml
+id: 0hqx
+```
 
 When the playhead falls between character boundaries, braille bit manipulation shifts the display by half a character width, giving sub-character precision without re-rendering.
 
@@ -381,22 +481,28 @@ Applies only while playing: paused decks and the detached view both snap to the 
 **Detail**
 
 - Half-column detection: `delta_half = (delta / half_col_samp).round()`, sub-column when `delta_half % 2 != 0`.
+
 - Braille shift: moves right dot-column bits (positions 3, 4, 5, 7) to left dot-column (positions 0, 1, 2, 6) of the adjacent character.
 
 
 # Transport
 
-[Up](#deck)
-[Down](#mode)
-[Down](#nudge)
-[Down](#beat-jump)
-[Down](#needle-drop)
-[Down](#speed-control)
-[Down](#click-free-seek)
+[↑ Deck](#deck) \
+[Mode](#mode) \
+[Nudge](#nudge) \
+[Beat Jump](#beat-jump) \
+[Needle Drop](#needle-drop) \
+[Speed Control](#speed-control) \
+[Click-free Seek](#click-free-seek)
+
+```yaml
+id: uy19
+```
 
 Play, pause, seek, and position control. Reaching the end of the track pauses the transport and returns the playhead to the start, the view staying interactive. The deck's mode shapes behaviour:
 
 - **Beat mode** — BPM-relative operations: beat jump by N beats, speed as BPM ratio
+
 - **Playback mode** — hides BPM machinery, speed as percentage, beat jumps remapped to fixed time intervals
 
 **See also**
@@ -406,7 +512,11 @@ Play, pause, seek, and position control. Reaching the end of the track pauses th
 
 # Mode
 
-[Up](#transport)
+[↑ Transport](#transport)
+
+```yaml
+id: 41ef
+```
 
 Each deck runs in its own mode, cycled with the mode key on the selected deck — an empty deck has none. A track reopens in the mode it last used, remembered per identity alongside cue and gain; without a grid it opens in Playback whatever the record says.
 
@@ -420,13 +530,19 @@ Switching preserves audio speed — no audible change on the cycle. Each deck's 
 
 - [Track Database](#track-database) — where the per-track mode memory lives
 
+
 # Nudge
 
-[Up](#transport)
+[↑ Transport](#transport)
+
+```yaml
+id: y86z
+```
 
 Fine position adjustment with two sub-modes (jump and warp):
 
 - **While playing** — jump mode seeks ±10ms per press; warp mode applies a continuous ±10% speed offset while held, returning to normal on release
+
 - **While paused** — both modes play a short audio snippet at the new position so the DJ can hear where they are. Jump moves one display column per press — the step follows zoom, finer zoomed in; warp fires continuously at half-column intervals as the position drifts
 
 Warp needs the terminal to report key releases; where it can't, the mode toggle refuses warp with a notification — a warp that can't see the release would latch on with no way to end it.
@@ -434,16 +550,22 @@ Warp needs the terminal to report key releases; where it can't, the mode toggle 
 **See also**
 
 - [Click-free Seek](#click-free-seek) — shared seek mechanism used by nudge and beat jump
+
 - [Key Reporting](#key-reporting) — what makes release detection available, and the fallback when it isn't
 
 
 # Beat Jump
 
-[Up](#transport)
+[↑ Transport](#transport)
+
+```yaml
+id: qn79
+```
 
 Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction.
 
 - **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds: exactly N beat periods away, grid phase preserved
+
 - **Playback mode** — N beats at the track's tempo when it has a grid, else N × 0.5 s (120 BPM)
 
 Paused, a jump past an edge clamps to it; playing, an edge-crossing jump is refused — forward even when a further jump wouldn't fit after it.
@@ -461,7 +583,11 @@ Paused, a jump past an edge clamps to it; playing, an edge-crossing jump is refu
 
 # Needle Drop
 
-[Up](#transport)
+[↑ Transport](#transport)
+
+```yaml
+id: rovj
+```
 
 A left-click on the overview waveform seeks to the start of the nearest bar at or left of the click, preserving play/pause state.
 
@@ -472,11 +598,16 @@ A left-click on the overview waveform seeks to the start of the nearest bar at o
 
 # Speed Control
 
-[Up](#transport)
+[↑ Transport](#transport)
+
+```yaml
+id: csmi
+```
 
 Adjusts playback speed like a turntable — faster playback raises pitch, slower lowers it. The representation depends on mode:
 
 - **Beat mode** — two tiers: `base_bpm_increase`/`base_bpm_decrease` adjust the native BPM in 0.01 steps; `bpm_increase`/`bpm_decrease` adjust the playback BPM in 0.1 steps. Playback speed is the ratio `bpm / base_bpm`.
+
 - **Playback mode** — the same keys adjust `playback_speed` in 0.001 steps (±0.1%). Speed is passed directly to the player.
 
 Clamped to 40.0–240.0 BPM in beat mode. All underlying values retain full precision; rounding is display-only.
@@ -484,15 +615,20 @@ Clamped to 40.0–240.0 BPM in beat mode. All underlying values retain full prec
 **See also**
 
 - [Pitch Shift](#pitch-shift) — independent key adjustment without changing tempo
+
 - [Keymap](#keymap) — keys bound to the speed adjustment actions
 
 
 # Click-free Seek
 
-[Up](#transport)
-[Down](#quiet-frame-search)
-[Down](#fade-envelope)
-[Down](#pipeline-flush)
+[↑ Transport](#transport) \
+[Quiet-Frame Search](#quiet-frame-search) \
+[Fade Envelope](#fade-envelope) \
+[Pipeline Flush](#pipeline-flush)
+
+```yaml
+id: kffm
+```
 
 When seeking during playback (beat jump or nudge), three independent layers prevent audible clicks. Each catches a different artifact: the fade handles raw discontinuity, the quiet-frame search minimises what the fade has to hide, and the pipeline flush prevents downstream processing from reintroducing what the fade already dealt with.
 
@@ -503,7 +639,11 @@ When paused, seeks use direct repositioning with no fade — there's no audible 
 
 # Quiet-Frame Search
 
-[Up](#click-free-seek)
+[↑ Click-free Seek](#click-free-seek)
+
+```yaml
+id: 17tf
+```
 
 The target is nudged to the quietest sample within a small window around the requested beat, landing on a naturally low-amplitude moment.
 
@@ -512,34 +652,49 @@ Search window: +/-10ms around the requested target position. Selects the frame w
 
 # Fade Envelope
 
-[Up](#click-free-seek)
+[↑ Click-free Seek](#click-free-seek)
+
+```yaml
+id: sxre
+```
 
 The audio thread fades out at the old position, jumps, then fades in at the new position. The crossfade is very short — inaudible but eliminates the discontinuity.
 
 **Detail**
 
 - Fade duration: 256 samples (~5.8ms at 44.1kHz).
+
 - Audio thread (TrackingSource) detects a pending seek target via atomic swap. Fades out over 256 samples, jumps, fades in over 256 samples.
+
 - When paused: direct position write (seek_direct) with no fade — instant repositioning since there's no audible output.
 
 
 # Pipeline Flush
 
-[Up](#click-free-seek)
+[↑ Click-free Seek](#click-free-seek)
+
+```yaml
+id: m9nb
+```
 
 The pitch shifter and filter carry internal state (buffered samples, filter history). On a seek, these are flushed or crossfaded independently so stale audio doesn't bleed through.
 
 **Detail**
 
 - **Pitch shifter (PitchSource):** internal SoundTouch buffers flushed on seek. Processes in 512-frame chunks; output buffered in a VecDeque.
+
 - **Filter (FilterSource):** crossfades from previous filter state to new state over 256 samples. Biquad history (per-channel) is pre-allocated — no allocations on the audio path.
 
 
 # Beat Grid
 
-[Up](#deck)
-[Down](#grid-refinement)
-[Down](#cue-point)
+[↑ Deck](#deck) \
+[Grid Refinement](#grid-refinement) \
+[Cue Point](#cue-point)
+
+```yaml
+id: ix1c
+```
 
 The rhythmic framework overlaid on the track — a BPM value (`base_bpm`) and a phase offset (`offset_ms`) that together determine where beat ticks fall. Everything that displays or acts on beats consumes these two values; a single constant tempo across the track is assumed.
 
@@ -566,11 +721,17 @@ The **phase offset** positions the grid relative to a datum: a pinned anchor, el
 **See also**
 
 - [Keymap](#keymap) — keys bound to BPM tap and manual adjust
+
 - [Track Database](#track-database) — BPM, offset, and anchor persisted per track by audio hash
+
 
 # Grid Refinement
 
-[Up](#beat-grid)
+[↑ Beat Grid](#beat-grid)
+
+```yaml
+id: umz6
+```
 
 The grid is tuned by looking, not computed: detach the deck's view (`g`) — playback runs on while the detail waveform follows a free cursor — pin an **anchor** on a downbeat (`a`, exact), then jump progressively further out, adjusting the base BPM until ticks sit on transients at each distance. Each jump multiplies the leverage of the same alignment; a few stages land within hundredths of a BPM, and a mis-tune is recovered by tuning while looking.
 
@@ -581,6 +742,7 @@ While detached, jumps and nudge steer the cursor, ticks show in any deck mode as
 **Detail**
 
 - The detached view snaps to whole columns (no sub-column smoothing — nothing moves).
+
 - Blue = grid furniture; lighter cyan = the movable cursor.
 
 **See also**
@@ -590,11 +752,16 @@ While detached, jumps and nudge steer the cursor, ticks show in any deck mode as
 
 # Cue Point
 
-[Up](#beat-grid)
+[↑ Beat Grid](#beat-grid)
+
+```yaml
+id: e6re
+```
 
 A single saved position per deck with two distinct actions:
 
 - **Cue set** (`cue`) — only works while paused; stores the current position, which acts as the grid's zero datum when no anchor is pinned (an anchor outranks it)
+
 - **Cue play** (`cue_play`) — jumps to the cue and maintains current play state (playing continues, paused stays paused)
 
 Persisted to cache alongside BPM and offset.
@@ -602,22 +769,30 @@ Persisted to cache alongside BPM and offset.
 **See also**
 
 - [Click-free Seek](#click-free-seek) — cue play uses the same seek mechanism
+
 - [Track Database](#track-database) — cue position persisted per track
+
 - [Keymap](#keymap) — keys bound to `cue` and `cue_play`
 
 
 # Audio Pipeline
 
-[Up](#deck)
-[Down](#filter)
-[Down](#level--gain)
-[Down](#pitch-shift)
-[Down](#metronome)
+[↑ Deck](#deck) \
+[Filter](#filter) \
+[Level & Gain](#level--gain) \
+[Pitch Shift](#pitch-shift) \
+[Metronome](#metronome)
+
+```yaml
+id: uir1
+```
 
 Per-deck signal chain on the audio thread. Stages run in order — each transforms the signal before passing it on:
 
 1. **Filter** — unified HPF/LPF
+
 2. **Level & Gain** — volume, gain staging, PFL signal taken here
+
 3. **Pitch shift** — key adjustment without changing tempo
 
 The metronome injects click tones into the mixer output rather than sitting in the signal chain, but is grouped here as an audio-output concern.
@@ -625,7 +800,11 @@ The metronome injects click tones into the mixer output rather than sitting in t
 
 # Filter
 
-[Up](#audio-pipeline)
+[↑ Audio Pipeline](#audio-pipeline)
+
+```yaml
+id: 58c9
+```
 
 A single `filter_offset` parameter (−16 to +16, default 0) controls a second-order Butterworth IIR filter. Negative values give low-pass, positive give high-pass, zero bypasses.
 
@@ -640,16 +819,22 @@ Config actions: `deck<n>_filter_increase`, `deck<n>_filter_decrease`, `deck<n>_f
 **See also**
 
 - [Spectrum Analyser](#spectrum-analyser) — displays filter position as shaded region
+
 - [Keymap](#keymap) — keys bound to the filter and slope actions
 
 
 # Level & Gain
 
-[Up](#audio-pipeline)
+[↑ Audio Pipeline](#audio-pipeline)
+
+```yaml
+id: zgm7
+```
 
 Two independent volume controls per deck:
 
 - **Level** — playback volume in 5% steps (0–100%). Not persisted.
+
 - **Gain** — trim in 1 dB steps (±12 dB) for matching track loudness. A soft-knee limiter engages near 0 dBFS to prevent clipping when gain is raised. Persisted to cache.
 
 **Detail**
@@ -661,13 +846,19 @@ The limiter is a soft-knee curve (cubic Hermite) over the zone [1.0 − 0.3, 1.0
 **See also**
 
 - [PFL Monitor](#pfl-monitor) — the pre-fader monitor tap, taken raw ahead of this stage
+
 - [Keymap](#keymap) — keys bound to level and gain actions
+
 - [Track Database](#track-database) — gain persisted per track; level is session-only
 
 
 # Pitch Shift
 
-[Up](#audio-pipeline)
+[↑ Audio Pipeline](#audio-pipeline)
+
+```yaml
+id: u6ax
+```
 
 Adjusts the key of a track in semitone steps (±6) without changing tempo — for key matching between tracks. Not persisted between sessions.
 
@@ -680,12 +871,17 @@ Time-domain pitch shifting via SoundTouch. Processes in 512-frame chunks; output
 **See also**
 
 - [Speed Control](#speed-control) — turntable-style speed change that affects both tempo and pitch
+
 - [Keymap](#keymap) — keys bound to pitch up/down
 
 
 # Metronome
 
-[Up](#audio-pipeline)
+[↑ Audio Pipeline](#audio-pipeline)
+
+```yaml
+id: zzut
+```
 
 A click tone on every beat, synced to `base_bpm` and `offset_ms`. Only fires during playback; no click sounds on the beat where it is switched on, clicks beginning from the next. The click is timed against the audio buffer write position (ahead of the speaker by `audio_latency_ms`), so it arrives at the speaker on the beat when latency is correctly calibrated.
 
@@ -694,53 +890,87 @@ Config: `metronome_toggle`. Resets to off on each new track load.
 **See also**
 
 - [Audio Latency](#audio-latency) — metronome timing depends on correct latency calibration
+
 - [Keymap](#keymap) — the key bound to `metronome_toggle`
 
 
 # Bottom Pane
 
-[Up](#application)
+[↑ Deck Player](#deck-player)
 
-The space beneath the decks shows exactly one of four views — album art (the ground state), browser, help, messages — picked by their view actions — `open_browser`, `help`, `message_history`, `art_view` — bound to Space chords that mean the same thing from anywhere. Which view is showing is one choice; whether the keyboard talks to the view or the decks is a separate one. `Tab` flips focus; only the browser and messages can take it — help and art accept no input. Whichever side is unfocused is dimmed, so exactly one side of the screen reads as driven.
+```yaml
+id: 8r36
+```
 
-Esc steps up: focus back to the decks, the view closed to art, quit. The showing view persists across sessions.
+The space beneath the decks shows one of four views: album art (the ground state), browser, help or messages. Their view actions work from anywhere. Tab flips keyboard focus between the decks and the view; only browser and messages take focus. The unfocused side dims. Esc returns focus to the decks, closes the view to art, then offers quit. The showing view persists across sessions.
+
+A shared hint area spans the screen below the content. It follows the current input context, with temporary tasks taking precedence. Controls are grouped by task and wrap as space requires; configurable actions show their current bindings. Pane-switch hints stay in destination headers. With deck focus, the hints offer view/focus controls and access to the full keyboard reference.
 
 **See also**
 
 - [Browser](#browser) — the view that drives loading; focused it captures the keyboard
+
 - [Album Art](#album-art) — the ground state view
+
 - [History View](#history-view) — the messages view
+
 - [Session State](#session-state) — where the showing view persists
+
 - [Keymap](#keymap) — the action table and Tab
+
 
 # Browser
 
-[Up](#application)
-[Down](#search)
-[Down](#preview)
-[Down](#file-operations)
-[Down](#tag-compliance)
-[Down](#jump-to-loaded)
-[Down](#context-panel)
+[↑ Deck Player](#deck-player) \
+[Browser Modes](#browser-modes) \
+[Search](#search) \
+[Preview](#preview) \
+[File Operations](#file-operations) \
+[Tag Compliance](#tag-compliance) \
+[Jump to Loaded](#jump-to-loaded) \
+[Browser Layout](#browser-layout)
 
-A file navigator for loading tracks. The working view of the [Bottom Pane](#bottom-pane) — `open_browser` summons and focuses it from anywhere, never interrupting playback. Entries are listed alphabetically — audio files highlighted and selectable, everything else shown but inert.
+```yaml
+id: la16
+```
 
-The last-visited directory is remembered between sessions, so the browser reopens where you left off (a command-line path wins the first open only). `Enter` loads the highlighted track onto the **selected deck** and hands the keyboard to it; the browser stays showing. `Alt+j`/`Alt+k` cycle selection inside the browser as everywhere, and the deck chip and gutter accent turn bright red when a load would land on a playing deck.
+A file navigator in the [Bottom Pane](#bottom-pane). `open_browser` opens and focuses it without interrupting playback. Entries sort alphabetically; folders, tracks and playlists are navigable, other files inert.
 
-Unfocused, the browser is a passive follower — each load highlights the landed track, its tags shown in the context panel.
+It remembers the last directory; a command-line path overrides the first open. `Enter` loads the highlighted track onto the selected deck and returns focus to it, leaving the browser visible. `Alt+j`/`Alt+k` select decks; the deck chip and gutter turn bright red if the target is playing.
 
-The browser is modal, like a modal text editor. **Command mode** navigates vim-style (`h`/`j`/`k`/`l` or arrows — `h` up a directory, `l` into one, never loading) and issues commands, including editing (`e`) and moving (`m`) the highlighted file (see File Operations); **search mode** filters the listing by typing; **move mode** picks a destination directory (see Move). `/` enters search; the last-used primary mode is restored on reopen (Tab is the Bottom Pane's focus flip, never a mode toggle). `Esc` backs out one level — clearing an active search filter in place, then search back to command, then the keyboard back to the decks — the browser stays showing. Each mode carries its own accent colour and a status bar naming it and its keys, so which mode you're in is unmistakable.
+Tab flips focus between the decks and the browser. While unfocused, it follows each loaded track and shows its tags. [Browser Modes](#browser-modes) describes navigation and commands; [Browser Layout](#browser-layout) describes the panes, status and inputs.
 
 **See also**
 
 - [Session State](#session-state) — where the last-visited directory and workspace persist
+
 - [File Operations](#file-operations) — editing and moving files from command mode
+
 - [Keymap](#keymap) — navigation and action keys
+
+
+# Browser Modes
+
+[↑ Browser](#browser)
+
+```yaml
+id: q29i
+```
+
+Command mode navigates with h/j/k/l or arrows: h goes up a directory, l enters a folder or playlist without loading a track. Commands include e to [edit tags](#file-operations) and m to [move a file](#move). / enters [search mode](#search), where typing filters the listing; move mode selects a destination directory. The last-used primary mode returns on reopen.
+
+Esc backs out one level: clear an active search filter, leave search for command mode, then return focus to the decks. In move mode it cancels the move. Tab changes focus, never mode.
+
+Mode colours carry through the browser chrome and shared key hints: command amber, search cyan, move blue. SEARCH or MOVE appears beside the Browser chip; command leaves it bare.
 
 
 # Search
 
-[Up](#browser)
+[↑ Browser](#browser)
+
+```yaml
+id: m7sy
+```
 
 Fuzzy track-finding, entered as **search mode** (`Tab` or `/` from command mode). With a **workspace** set — a directory nominated as the search root (`@` sets the current directory, `'` clears it) — typing searches recursively beneath the root, each match shown relative to it, best-match-first. With no workspace, typing filters the current directory's own listing instead. Clearing the term restores the full listing.
 
@@ -749,13 +979,19 @@ The workspace persists between sessions and is silently dropped if it no longer 
 **See also**
 
 - [Session State](#session-state) — where the workspace persists
+
 - [Keymap](#keymap) — workspace and search keys
+
 - [Finding Tracks](#finding-tracks) — the same workspace is the search root for relocating a playlist's tracks
 
 
 # Preview
 
-[Up](#browser)
+[↑ Browser](#browser)
+
+```yaml
+id: 2hcb
+```
 
 A quick listen to the highlighted track without loading it. `#` plays it from 20% of the way in (or 30 s if the duration isn't known) through the main output, independent of the decks, so it doesn't disturb what's loaded. `#` again restarts; any other key stops it and then does its normal job — Tab included, so the keyboard never leaves the browser with a preview still sounding.
 
@@ -766,14 +1002,22 @@ A quick listen to the highlighted track without loading it. `#` plays it from 20
 
 # Jump to Loaded
 
-[Up](#browser)
+[↑ Browser](#browser)
+
+```yaml
+id: gllx
+```
 
 `` ` `` in command mode jumps straight to the **selected deck's** track, highlighting it — `Alt+j`/`Alt+k` (or `Alt+<n>`) re-aim it before the press. One fire, no cycle; an empty deck answers with a notification.
 
 
 # Tag Compliance
 
-[Up](#browser)
+[↑ Browser](#browser)
+
+```yaml
+id: 6vf7
+```
 
 A cleanup mode (toggle `T`) for finding and fixing badly-named files. When on, the current directory's audio files are checked in the background — a file is flagged when its name doesn't match its tags (the `Title - Artist` convention) — and flagged entries show an amber `⚠` marker with a count. The same amber marks the load-time rename offer on a deck, so the signal is consistent.
 
@@ -786,16 +1030,23 @@ Fix them in sequence: `j`/`k` to the first flagged, `e` to edit it, and the curs
 **See also**
 
 - [File Operations](#file-operations) — `e` opens the editor that fixes a flagged file
+
 - [Renaming](#renaming) — the same non-conformance check, at load time
 
 
-# Context Panel
+# Browser Layout
 
-[Up](#browser)
+[↑ Browser](#browser)
 
-The browser's right-hand pane, showing whatever the highlight implies: nothing, a track's metadata (in the tag editor's own form, with the proposed rename when one applies), or a playlist's entries. It follows the highlight passively until the operator focuses it. While the browser view shows, the rename offer lives here too — an amber banner over the panel naming the file, keeping the deck corners clean.
+```yaml
+id: 41r6
+```
 
-Focusing it makes it the active list. On a highlighted playlist, `l` opens it for browsing — the cursor moves independently of the browser, and `Enter` sends the chosen entry to the selected deck, the second way onto a deck and the one that picks any entry rather than starting from the first. `e` opens the same playlist for editing instead, and an entry needing confirmation opens the candidate picker. Focus is shown by light: whichever list is being driven is bright, the other dimmed — the panel fades while it merely follows the highlight, the browser fades while the panel is the target — all while the browser side holds the keyboard; unfocused, the whole region fades as one.
+Three aligned panes: Playlist holds a pinned set, Browser lists files, Tags follows the highlighted track. Alt+h/l walks available panes. Tags opens its editor only when the selected browser item has tags. Rename offers stay on the deck.
+
+The active border and title brighten: Playlist green, Tags violet, Browser mode-coloured. Content dims only when decks hold focus. Narrowing shows three panes, then Browser with a neighbour, then the active pane alone. Headers keep off-screen navigation hints.
+
+The top browser border shows path and workspace; the bottom shows tag warnings and loaded location. Search/name inputs and move destination sit above the list; key hints sit below the content. Playlist browsing, editing and candidate selection share its pane.
 
 **See also**
 
@@ -808,10 +1059,14 @@ Focusing it makes it the active list. On a highlighted playlist, `l` opens it fo
 
 # Playlists
 
-[Up](#application)
-[Down](#loaded-playlist)
-[Down](#playlist-editing)
-[Down](#finding-tracks)
+[↑ Deck Player](#deck-player) \
+[Loaded Playlist](#loaded-playlist) \
+[Playlist Editing](#playlist-editing) \
+[Finding Tracks](#finding-tracks)
+
+```yaml
+id: mzap
+```
 
 A saved running order. An `.rpl` file lists its tracks by **content identity** — the hash of the audio payload — and keeps the file path only as a hint, so a set survives its tracks being moved, renamed, or retagged.
 
@@ -822,12 +1077,17 @@ Deck implements the format; it doesn't define it. The `.rpl` spec — byte range
 **See also**
 
 - [Resilient Playlists](resilient-playlists/map.md#resilient-playlists) — the format itself: identity rules, resolution steps, write procedure
+
 - [Track Database](#track-database) — the same content identity, keyed per track for BPM and cue
 
 
 # Loaded Playlist
 
-[Up](#playlists)
+[↑ Playlists](#playlists)
+
+```yaml
+id: 73qo
+```
 
 A set attached to a deck. Loading an `.rpl` plays the first entry that resolves and attaches the rest, so the deck works through the running order without further browsing. A `≡ x/y` badge before the track name gives the position in the set.
 
@@ -846,7 +1106,11 @@ A set carrying entries the deck can't play says so on load and turns the badge a
 
 # Playlist Editing
 
-[Up](#playlists)
+[↑ Playlists](#playlists)
+
+```yaml
+id: fwf3
+```
 
 Building and reordering a set, in the browser's context panel. `n` creates an empty `.rpl` in the current directory; `e` on a highlighted one opens it for editing.
 
@@ -856,7 +1120,7 @@ A commit reaches decks as well as the file: any deck carrying the same set adopt
 
 **See also**
 
-- [Context Panel](#context-panel) — the pane this happens in, and its other states
+- [Browser Layout](#browser-layout) — the pane this happens in, and its other states
 
 - [Loaded Playlist](#loaded-playlist) — what a committed set does to a deck already carrying it
 
@@ -865,9 +1129,13 @@ A commit reaches decks as well as the file: any deck carrying the same set adopt
 
 # Finding Tracks
 
-[Up](#playlists)
-[Down](#library-scan-cost)
-[Down](#candidate-picker)
+[↑ Playlists](#playlists) \
+[Library Scan Cost](#library-scan-cost) \
+[Candidate Picker](#candidate-picker)
+
+```yaml
+id: nilf
+```
 
 Turning an entry into a file on disk. Every entry resolves to one of three outcomes: **found** and playable, **needs confirmation**, or **unavailable**. Only found entries play.
 
@@ -884,7 +1152,11 @@ Repairs found on the way are written back to the `.rpl`.
 
 # Library Scan Cost
 
-[Up](#finding-tracks)
+[↑ Finding Tracks](#finding-tracks)
+
+```yaml
+id: xqss
+```
 
 Searching is the expensive part: a walk of the library and a probe per file. It happens **at most once per operation**, and only when something actually needs looking for — a set whose tracks are all where it left them never triggers it.
 
@@ -897,7 +1169,11 @@ A whole set resolves when it is opened on a deck or in the panel, when a workspa
 
 # Candidate Picker
 
-[Up](#finding-tracks)
+[↑ Finding Tracks](#finding-tracks)
+
+```yaml
+id: ohc1
+```
 
 Where the operator settles an entry the rules can't. When nothing in the library hashes to the entry's identity the track was most likely re-encoded — new bytes, so no hash can ever match it again — and the fallback offers library files that resemble it by duration and description. They appear as cards, closest first; choosing one re-links the entry to that file.
 
@@ -907,20 +1183,28 @@ Confirming rewrites the entry's identity to the chosen file's, so the set follow
 
 - [Descriptive Fallback](resilient-playlists/map.md#descriptive-fallback) — how candidates are found and ranked
 
-- [Context Panel](#context-panel) — the pane the picker occupies
+- [Browser Layout](#browser-layout) — the pane the picker occupies
 
 
 # Mixer
 
-[Up](#application)
-[Down](#pfl-monitor)
+[↑ Deck Player](#deck-player) \
+[PFL Monitor](#pfl-monitor)
+
+```yaml
+id: 8wtv
+```
 
 Sums the three deck audio pipeline outputs into a single stereo stream for the audio device. PFL routing splits the output: right channel always carries the main mix, left channel carries the PFL deck's pre-fader signal when active.
 
 
 # PFL Monitor
 
-[Up](#mixer)
+[↑ Mixer](#mixer)
+
+```yaml
+id: vtrz
+```
 
 Pre-fader listen: routes one deck's raw audio to the left output channel for headphone cueing, so the operator can preview a deck before mixing it in. Exclusive — only one deck is cued at a time, and cueing another releases the first.
 
@@ -929,6 +1213,7 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 **Detail**
 
 - Level 0–100 in steps of 20 (`pfl_up` / `pfl_down`); `pfl_on_off` toggles on (100) / off (0); `pfl_reset` zeroes it. Dropping the level to 0 releases the monitor.
+
 - Left channel carries the cued deck at PFL level and drops the main mix; the right always carries the full main mix.
 
 **See also**
@@ -938,8 +1223,12 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 
 # Keymap
 
-[Up](#application)
-[Down](#key-reporting)
+[↑ Deck Player](#deck-player) \
+[Key Reporting](#key-reporting)
+
+```yaml
+id: ji4b
+```
 
 Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
 
@@ -956,7 +1245,11 @@ Most keys are configurable via `config.toml` as action-name → key-string mappi
 
 # Key Reporting
 
-[Up](#keymap)
+[↑ Keymap](#keymap)
+
+```yaml
+id: 269e
+```
 
 Terminals differ in how much they say about a keystroke. On startup deck configures two things: that key events carry their kind — press, repeat or release — and that keys are encoded unambiguously, rather than in the legacy forms that collide with escape sequences.
 
@@ -973,7 +1266,11 @@ The kitty keyboard protocol; support is detected at startup. Where it is absent,
 
 # Track Database
 
-[Up](#application)
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: 2n1b
+```
 
 Per-track memory, keyed by the track's **content identity** — the Blake3 hash of its encoded audio payload with tags excluded, the same identity playlists and the tag editor use. So it follows the music across renaming, retagging, and re-containering, and one identity spans the whole app. Each entry holds the **beat grid** — BPM and phase offset together, present only once the tempo has been established, absent for a track that was played but never tapped — plus grid anchor, cue point, gain trim, last-used mode, and the filename as a human-readable hint.
 
@@ -982,20 +1279,28 @@ Stored at `~/.local/share/deck/track-data.json` (XDG data home) — durable user
 **Detail**
 
 - A JSON file: an `_about` header that explains itself to a stranger, then the `tracks` map of `{identity: entry}`, deterministically sorted. Mutation marks it dirty; a flush runs after ~1 s idle, and quit always flushes, so a crash loses at most the last second of trims. Untouched keys are never rewritten.
+
 - The two copies reconcile whenever a workspace becomes active — at start-up if one is already configured, and when the operator sets or changes it: the workspace copy wins on shared identities, local-only entries are pushed out, and both are written at once. Every later save writes both, so the analysis follows the library between machines.
+
 - A record's grid is `null` until a tempo is recorded; legacy flat `bpm`/`offset_ms` fields read as a grid and rewrite in the nested shape at the next save.
+
 - A track whose content identity can't be computed still loads and plays but persists nothing here — it's unsupported app-wide (no playlist can reference it), and the failure is surfaced as an error event carrying the cause (see [Fault Capture](#fault-capture)).
 
 **See also**
 
 - [Session State](#session-state) — the other persisted store, in the state dir
+
 - [Metadata Editor](#metadata-editor) — defines content identity and its safeguard
 
 
 # Session State
 
-[Up](#application)
-[Down](#session-restore)
+[↑ Deck Player](#deck-player) \
+[Session Restore](#session-restore)
+
+```yaml
+id: ccee
+```
 
 Global player state remembered between runs for [Session Restore](#session-restore): last-visited browser directory, search workspace, browser panel width, audio latency, cover-art brightness, the showing bottom view, the deck count, whether ghost playheads are shown, and the decks as they were.
 
@@ -1012,21 +1317,30 @@ Stored at `~/.local/state/deck/session.json` (XDG state home), alongside the pan
 
 # Session Restore
 
-[Up](#session-state)
+[↑ Session State](#session-state)
+
+```yaml
+id: 955q
+```
 
 Protection against accidental exit: each deck's track, position, attached playlist, speed, and mixer settings (level, pitch, filter, PFL), plus which deck is selected, are kept current in Session State while the player runs. On a startup with nothing loaded, the startup hint offers `Alt+r`, which puts every saved deck back **paused** at its position; a missing file is reported and its deck left empty. The offer withdraws once anything is loaded, and restore is never automatic.
 
 **Detail**
 
 - Position is written on pause, seek, load, and quit, and every 10 s while playing; everything else on change. A restore lands within 10 s of where a playing deck was.
+
 - Mode is not in the snapshot — it is per-track memory in the [Track Database](#track-database) and returns with the load.
 
 
 # Messages
 
-[Up](#application)
-[Down](#history-view)
-[Down](#event-log)
+[↑ Deck Player](#deck-player) \
+[History View](#history-view) \
+[Event Log](#event-log)
+
+```yaml
+id: 1atw
+```
 
 Application messages appear in three places:
 
@@ -1047,12 +1361,17 @@ Three kinds of message pass through them:
 **Detail**
 
 - Bar precedence: prompts outrank events, events outrank hints; Esc dismisses whatever it shows (events stay in the history).
+
 - Severity (info/success/warning/error) colours the bar; display time is per-event — 5 s usual, 30 s for the identity alert.
 
 
 # History View
 
-[Up](#messages)
+[↑ Messages](#messages)
+
+```yaml
+id: nl2y
+```
 
 The look-back over every event, this session and previous ones — the messages view of the [Bottom Pane](#bottom-pane), arriving focused via `message_history`. Each line is clock time plus the event, severity-coloured, long lines wrapping under a hanging indent. `k`/`j` scroll older/newer while it holds the keyboard — the header counts what lies beyond each edge — Tab or Esc hand the keyboard back, and Esc again closes it to art.
 
@@ -1061,6 +1380,7 @@ Sessions read as one continuous scroll: on startup the log file's retained histo
 **Detail**
 
 - The header names the log file's path.
+
 - Copying text out is the terminal's own selection — Shift+drag bypasses the app's mouse capture.
 
 **See also**
@@ -1070,7 +1390,11 @@ Sessions read as one continuous scroll: on startup the log file's retained histo
 
 # Event Log
 
-[Up](#messages)
+[↑ Messages](#messages)
+
+```yaml
+id: ohod
+```
 
 The persistent record: every event appends a line to `messages.log` in the state dir, beside the panic log and error reports. Human-readable — `2026-08-11 14:03 warn deck2 3 tracks unavailable…` — local time, written and flushed as it happens, so a crash loses nothing. This file seeds the History View, and it's the one to read when diagnosing after the fact.
 
@@ -1079,6 +1403,7 @@ The file prunes itself at startup: lines older than the retention window (`[mess
 **Detail**
 
 - Line format: `YYYY-MM-DD HH:MM:SS <severity> <source>  <text>`; sources are `deck1`–`deck3`, `playlist`, `tags`, `files`, `app`. Text is single-line by construction.
+
 - Local time uses the zone offset queried from the system once at startup (`date +%z`), falling back to UTC.
 
 **See also**
@@ -1088,7 +1413,11 @@ The file prunes itself at startup: lines older than the retention window (`[mess
 
 # Fault Capture
 
-[Up](#application)
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: 831n
+```
 
 Three layers, by what a fault needs to leave behind:
 
@@ -1103,13 +1432,19 @@ All three live in `~/.local/state/deck/`. Report folders are named `YYYY-MM-DD_H
 **See also**
 
 - [Metadata Editor](#metadata-editor) — the identity safeguard that writes mismatch reports
+
 - [Event Log](#event-log) — layer one, the chronological record
+
 - [Event Log](#event-log) — the identity-mismatch event names its report, so the log indexes this directory chronologically
 
 
 # Album Art
 
-[Up](#application)
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: dzr5
+```
 
 The [Bottom Pane](#bottom-pane)'s ground state: three cover-art panels, one per deck, drawn from each loaded track's embedded tag art (front cover preferred). It takes no input and never holds focus — the decks keep the keyboard while it shows, and the help and messages views draw over it rather than replacing it.
 
@@ -1118,27 +1453,55 @@ Brightness has three levels — bright, dim, off — cycled by `art_cycle` from 
 **Detail**
 
 - Rendered as half-block cells; re-rasterised only when panel size or brightness changes.
+
 - Levels: full, 35%, off.
 
 **See also**
 
 - [Bottom Pane](#bottom-pane) — the view model it grounds
+
 - [Keymap](#keymap) — actions and their default keys
 
 
 # Audio Latency
 
-[Up](#application)
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: y4jp
+```
 
 A single global calibration (0–250 ms) compensating for the delay between audio leaving the program and reaching the speaker. The visual playback position is shifted back by this amount so the waveform and beat markers line up with what's heard. Applied only during playback — paused, there's no output to compensate for, so the display sits at the true position.
 
 **Detail**
 
 - Adjusted in 10 ms steps (`latency_increase` / `latency_decrease`), clamped 0–250 ms; one global value in the cache, loaded at startup.
+
 - Cue-play adds the latency to its target so the cued point is heard, not just displayed, on the beat.
 
 **See also**
 
 - [Metronome](#metronome) — click timing depends on this calibration
+
 - [Keymap](#keymap) — keys bound to the latency actions
+
 - [Session State](#session-state) — latency persisted as a global value
+
+
+# Performance
+
+[↑ Deck Player](#deck-player)
+
+```yaml
+id: plol
+```
+
+Three constraints keep playback and the interface responsive on slow hardware:
+
+- Never block the audio thread. Its communication uses lock-free atomics; a stall causes audible glitches.
+
+- Do work once and reuse it: decode tracks at load, pre-render waveform buffers and pre-compute overview peaks.
+
+- Recompute only on change, using dirty flags, drift thresholds and adaptive frame timing. Most iterations do nothing.
+
+Decoding runs in the background while the interface shows progress; hashing and grid-cache lookup follow on another pass. Waveform rasterisation and audio playback each have their own thread. Shared state uses lock-free or low-contention primitives without stalling audio. [Wide Buffer](#wide-buffer) describes waveform rendering.
