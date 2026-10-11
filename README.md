@@ -17,27 +17,34 @@ Modern DJ equipment does so much of the work it removes the fun. `deck` blends t
 
 ## Key bindings
 
-Three input layers: plain keys, **Shift** (uppercase), and **Space-chord** (hold Space, press another key). The left block controls the selected deck; the right block addresses each deck's mixer directly.
+Four input layers: plain keys, **Shift**, **Space chords**, and **Alt chords**. Columns 1–4 control the selected deck, columns 5–6 hold mode and shared controls, and columns 7–9 address the three decks’ mixers directly. Alt provides deck selection and browser pane navigation across the keyboard.
 
 ```
-  ╭         ╭         ╭         ╭ +32b    ╭ +64b    ┆   ╭  ╭  ╭ +Slope
-  1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    ┆   7  8  9 HPF
-  ╰ SelD1   ╰ SelD2   ╰ SelD3   ╰         ╰         ┆   ╰  ╰  ╰ Flt=
-    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ┆   ╭  ╭  ╭ -Slope
-    Q -1bt    W -1b     E -4b     R -8b     T -16b    ┆   U  I  O LPF
-    ╰         ╰         ╰         ╰         ╰         ┆   ╰  ╰  ╰ Flt=
-      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ┆   ╭  ╭  ╭ +Gain
-      A +Ptch   S +PFL    D +Ndge   F -BPM    G         ┆   J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰ Brows   ╰ Play    ┆   ╰  ╰  ╰ 100%
-        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ┆   ╭  ╭  ╭ -Gain
-        Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     ┆   M  ,  . -Lvl
-        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰ Metro   ╰ BDtct   ┆   ╰  ╰  ╰ 0%
-───────────────────────────────────────────────────────────────────── ╭ [Shift]
-` vinyl   ¬ nudge   -/= zoom   {/} height   [/] latency   Esc quit   │ [Bare]
-/ art   ~ palette   Spc+= swap1↔2   Spc+- swap2↔3                     ╰ [Space]
+╭ +16b    ╭ +32b    ╭ +64b    ╭ +128b   ╭      ╭      ╭  ╭  ╭ +Slope ╭      ╭ -FPS  ╭ +FPS
+1 +1bt    2 +1b     3 +4b     4 +8b     5 Mode 6      7  8  9 HPF    0      - Zm+   = Zm-
+│ Ghost   │         │         │         │      │      │  │  │ Flt=   │      │ 2↔3   │ 1↔2
+╰ Deck1   ╰ Deck2   ╰ Deck3   ╰         ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰
+
+  ╭ -16b    ╭ -32b    ╭ -64b    ╭ -128b   ╭      ╭      ╭  ╭  ╭ -Slope ╭      ╭ -Ht   ╭ +Ht
+  Q -1bt    W -1b     E -4b     R -8b     T      Y      U  I  O LPF    P      [ -Lat  ] +Lat
+  │         │         │         │         │      │      │  │  │ Flt=   │      │       │
+  ╰         ╰         ╰         ╰ Restore ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰
+
+    ╭ CueJp   ╭         ╭ +Tick   ╭ -BsBPM  ╭      ╭      ╭  ╭  ╭ +Gain  ╭      ╭       ╭
+    A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid H Help J  K  L +Lvl   ;      '       #
+    │         │         │         │ Browse  │ Play │ Art  │  │  │ 100%   │      │       │
+    ╰         ╰         ╰         ╰         ╰      ╰ ←    ╰↓ ╰↑ ╰ →      ╰      ╰       ╰
+
+      ╭ CueSt   ╭         ╭ -Tick   ╭ +BsBPM  ╭ Metro╭      ╭  ╭  ╭ -Gain  ╭ Help
+      Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap  N      M  ,  . -Lvl   / Bright   ╭ [Shift]
+      │ Rst     │ Rst/Tog │ NMode   │ Rst     │      │ Msgs │  │  │ 0%     │          │ [Bare]
+      ╰         ╰         ╰         ╰         ╰      ╰      ╰  ╰  ╰        ╰          │ [Space]
+Browser: ` jump to selected deck's track                                              ╰ [Alt]
 ```
 
-Press `?` in-app for the full overlay. Full action reference: [keybindings.md](keybindings.md).
+Press `?` or `h` with deck focus for the overlay. In the browser, `h` still navigates to the parent directory and `?` opens Help in command mode. The shifted number-row symbols follow a UK keyboard layout.
+
+Full action reference and guidance for updating an existing config: [keybindings.md](keybindings.md).
 
 ## Installation
 

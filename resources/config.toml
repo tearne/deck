@@ -8,14 +8,14 @@ height_decrease   = "{"
 height_increase   = "}"
 latency_decrease  = "["
 latency_increase  = "]"
-mode_cycle        = "`"
+mode_cycle        = "5"
 grid_mode         = "g"
 art_cycle         = "/"
-help              = ["?", "space+h"]
+help              = ["?", "h"]
 message_history   = "space+n"
-nudge_mode_toggle = "¬"
-fps_increase      = "^"
-fps_decrease      = "Y"
+nudge_mode_toggle = "space+c"
+fps_increase      = "+"
+fps_decrease      = "_"
 
 # Deck select — Zellij-style cycling on the fresh Alt layer
 select_next_deck = ["alt+j", "alt+down"]
@@ -38,22 +38,22 @@ panel_narrow = "alt+right"
 # Transport / browse (selected deck)
 play_pause   = "space+g"
 open_browser = "space+f"
-art_view     = "space+v"
+art_view     = "space+h"
 
 # Pitch (selected deck)
 pitch_up    = "a"
 pitch_down  = "z"
-pitch_reset = ["space+a", "space+z"]
+pitch_reset = "space+z"
 
 # BPM (selected deck)
 bpm_tap          = "b"
-metronome_toggle = 'space+\'
+metronome_toggle = "B"
 
 bpm_increase     = "v"
 bpm_decrease     = "f"
 base_bpm_increase = "V"
 base_bpm_decrease = "F"
-speed_reset      = "space+c"
+speed_reset      = "space+v"
 
 # Nudge (selected deck)
 nudge_forward  = "d"
@@ -64,16 +64,16 @@ offset_increase = "D"
 offset_decrease = "C"
 
 # Cue (selected deck)
-cue      = "B"
-cue_play = "G"
+cue      = "Z"
+cue_play = "A"
 
 # PFL (selected deck)
 pfl_up     = "s"
 pfl_down   = "x"
-pfl_reset  = ["space+s", "space+x"]
-pfl_on_off = "space+d"
+pfl_reset  = [] # Optional dedicated reset; Space+X already turns active PFL off
+pfl_on_off = "space+x"
 
-# Beat jumps (selected deck)
+# Beat jumps (selected deck); shifted symbols follow the UK keyboard layout
 jump_forward_1bt  = "1"
 jump_backward_1bt = "q"
 jump_forward_1b   = "2"
@@ -82,14 +82,16 @@ jump_forward_4b   = "3"
 jump_backward_4b  = "e"
 jump_forward_8b   = "4"
 jump_backward_8b  = "r"
-jump_forward_16b  = "5"
-jump_backward_16b = "t"
-jump_forward_32b  = "$"
-jump_backward_32b = "R"
-jump_forward_64b  = "%"
-jump_backward_64b = "T"
+jump_forward_16b  = "!"
+jump_backward_16b = "Q"
+jump_forward_32b  = '"'
+jump_backward_32b = "W"
+jump_forward_64b  = "£"
+jump_backward_64b = "E"
+jump_forward_128b = "$"
+jump_backward_128b = "R"
 # Ghost playheads: key labels at each jump key's landing (Beat mode)
-ghosts_toggle     = "!"
+ghosts_toggle     = "space+1"
 
 # Mixer — Deck 1
 deck1_level_up          = "j"

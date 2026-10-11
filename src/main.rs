@@ -708,6 +708,19 @@ fn beat_mode_needs_bpm_hint(keymap: &HashMap<KeyBinding, Action>) -> String {
     }
 }
 
+/// Resolve the active modifier layer, falling back to the plain binding.
+fn action_for_key(keymap: &HashMap<KeyBinding, Action>, code: KeyCode, space: bool, alt: bool) -> Option<&Action> {
+    let plain = || keymap.get(&KeyBinding::Key(code));
+    if code == KeyCode::Char(' ') { return plain(); }
+    if alt {
+        keymap.get(&KeyBinding::AltChord(code)).or_else(plain)
+    } else if space {
+        keymap.get(&KeyBinding::SpaceChord(code)).or_else(plain)
+    } else {
+        plain()
+    }
+}
+
 /// The display name of a key bound to `action`, chords as `Alt+X`. Prefers a
 /// chord when both layers bind the action.
 fn bound_key_name(keymap: &HashMap<KeyBinding, Action>, action: Action) -> Option<String> {
@@ -2395,8 +2408,10 @@ session.save();
                 if browser_chords_live {
                     // The bare help key (`?` by default) works in command mode
                     // too — bare letters there are commands, and this one isn't
-                    // taken. Search mode keeps it as a typed character.
+                    // taken. Keep h as browser parent-directory navigation even when
+                    // it is a Help alias at the decks. Search mode keeps typed characters.
                     if key.kind == KeyEventKind::Press
+                        && key.code != KeyCode::Char('h')
                         && keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::Help)
                     {
                         if let Some(bs) = browser_state.take() {
@@ -2742,7 +2757,7 @@ session.save();
                 if detached.is_none() {
                 match key.kind {
                     KeyEventKind::Press
-                        if keymap.get(&KeyBinding::Key(key.code)) == Some(&Action::NudgeModeToggle) =>
+                        if action_for_key(&keymap, key.code, space_held, alt) == Some(&Action::NudgeModeToggle) =>
                     {
                         let new_mode = decks.iter().flatten().next()
                             .map(|d| match d.nudge_mode {
@@ -2763,6 +2778,11 @@ session.save();
                                 }
                             }
                         }
+                        if space_held && !alt && keymap.contains_key(&KeyBinding::SpaceChord(key.code)) {
+                            space_held = false;
+                            space_repeat_suppressed = true;
+                        }
+                        continue 'tui;
                     }
                     // Cue play comes before nudge so that chord+nudge-key resolves to
                     // cue (via Chord lookup) rather than nudge.
@@ -3039,20 +3059,12 @@ session.save();
                     }
                     if rename_offer_consumed { continue 'tui; }
 
-                    let action = if alt && key.code != KeyCode::Char(' ') {
-                        keymap.get(&KeyBinding::AltChord(key.code))
-                            .or_else(|| keymap.get(&KeyBinding::Key(key.code)))
-                    } else if space_held && key.code != KeyCode::Char(' ') {
-                        if let Some(a) = keymap.get(&KeyBinding::SpaceChord(key.code)) {
-                            space_held = false;
-                            space_repeat_suppressed = true;
-                            Some(a)
-                        } else {
-                            keymap.get(&KeyBinding::Key(key.code))
-                        }
-                    } else {
-                        keymap.get(&KeyBinding::Key(key.code))
-                    };
+                    let action = action_for_key(&keymap, key.code, space_held, alt);
+                    if space_held && !alt && key.code != KeyCode::Char(' ')
+                        && keymap.contains_key(&KeyBinding::SpaceChord(key.code)) {
+                        space_held = false;
+                        space_repeat_suppressed = true;
+                    }
                     // Alt+N: select an existing deck, summon the next one, or
                     // dismiss the selected one (empty at once; loaded-paused via
                     // `y`; playing refused; the last deck stays).
@@ -3468,7 +3480,8 @@ session.save();
                     Some(&action @ (Action::JumpForward1bt | Action::JumpBackward1bt | Action::JumpForward1b | Action::JumpBackward1b
                        | Action::JumpForward4b | Action::JumpBackward4b | Action::JumpForward8b | Action::JumpBackward8b
                        | Action::JumpForward16b | Action::JumpBackward16b | Action::JumpForward32b | Action::JumpBackward32b
-                       | Action::JumpForward64b | Action::JumpBackward64b)) => {
+                       | Action::JumpForward64b | Action::JumpBackward64b
+                       | Action::JumpForward128b | Action::JumpBackward128b)) => {
                         let beats = deck::jump_beats(action).unwrap_or(0);
                         if let Some(ref d) = decks[selected_deck] {
                             if d.mode == DeckMode::Playback {
@@ -3762,6 +3775,16 @@ fn service_deck_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nudge_mode_resolves_space_chord_without_nudging() {
+        let map = config::parse_keymap(config::DEFAULT_CONFIG, &mut HashMap::new());
+        assert!(action_for_key(&map, KeyCode::Char('c'), true, false) == Some(&Action::NudgeModeToggle));
+        assert!(action_for_key(&map, KeyCode::Char('c'), false, false) == Some(&Action::NudgeBackward));
+        assert!(action_for_key(&map, KeyCode::Char('h'), true, false) == Some(&Action::ArtView));
+        assert!(action_for_key(&map, KeyCode::Char('h'), true, true) == Some(&Action::PaneLeft));
+        assert!(action_for_key(&map, KeyCode::Char('h'), false, false) == Some(&Action::Help));
+    }
 
     #[test]
     fn abnormal_end_detected_from_missing_quit_bracket() {

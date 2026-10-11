@@ -1609,12 +1609,12 @@ pub(crate) fn render_shared_tick_row(
 }
 
 pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-    const TEXT_W: u16 = 89;
-    const TEXT_H: u16 = 16;
+    const TEXT_W: u16 = 95;
+    const TEXT_H: u16 = 20;
     const H_PAD:  u16 = 2;
     const V_PAD:  u16 = 1;
 
-    // The box sits one row below the top of the spacer to clear the deck-2 margin.
+    // The box sits one row below the top of the spacer to clear the deck margin.
     // available_h accounts for that offset so the rect never overflows the buffer.
     let available_h = area.height.saturating_sub(1);
     if available_h == 0 { return; }
@@ -1643,72 +1643,63 @@ pub(crate) fn render_keyboard_help(frame: &mut ratatui::Frame, area: ratatui::la
     let gr = Style::default().fg(Color::Rgb( 80, 140,  70));  // nudge / BPM: muted sage
     let wh = Style::default().fg(Color::White);               // F-key bracket exception
 
-    // Row 7: Shift — F's ╭ bracket stays white
-    let row7 = Line::from(vec![
-        Span::styled("    ╭         ╭         ╭ +Tick   ", sh),
-        Span::styled("╭", wh),
-        Span::styled(" -BsBPM  ╭ CueJp   ╭         ╭  ╭  ╭ +Gain", sh),
-    ]);
-    // Row 8: Bare — F key name stays white; +Ndge / -BPM use muted sage
-    let row8 = Line::from(vec![
-        Span::styled("    A +Ptch   S +PFL    D ", ba),
-        Span::styled("+Ndge", gr),
-        Span::styled("   ", ba),
-        Span::styled("F", wh),
-        Span::styled(" ", ba),
-        Span::styled("-BPM", gr),
-        Span::styled("    G Grid    H         J  K  L +Lvl", ba),
-    ]);
-    // Row 9: Space (chord) — F's ╰ bracket stays white
-    let row9 = Line::from(vec![
-        Span::styled("    ╰ =Ptch   ╰ Rst     ╰ PFLTog  ", sp),
-        Span::styled("╰", wh),
-        Span::styled("         ╰ Play    ╰         ╰  ╰  ╰ 100%", sp),
-    ]);
-    // Row 11: Bare — -Ndge / +BPM use muted sage
-    let row11 = Line::from(vec![
-        Span::styled("      Z -Ptch   X -PFL    C ", ba),
-        Span::styled("-Ndge", gr),
-        Span::styled("   V ", ba),
-        Span::styled("+BPM", gr),
-        Span::styled("    B Tap     N         M  ,  . -Lvl", ba),
-    ]);
-    // Row 13: separator — modifier legend as vertical ╭│╰ box flush-right
-    let row13 = Line::from(vec![
-        Span::styled("─".repeat((TEXT_W - 10) as usize) + " ", ba),
-        Span::styled("╭ [Shift]", sh),
-    ]);
-    // Row 15: second footer line — ╰ [Space] flush-right
-    let row15_text = "/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\\ metro";
-    let row15 = Line::from(vec![
-        Span::styled(format!("{row15_text:<w$}", w = (TEXT_W - 9) as usize), ba),
-        Span::styled("╰ [Space]", sp),
-    ]);
-    // Row 16: the Alt layer — sparse enough for one line of its own.
-    let al = Style::default().fg(Color::Rgb(170, 110, 150));  // Alt layer: muted plum
-    let row16 = Line::from(vec![
-        Span::styled(format!("{:<w$}", "Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   r restore", w = (TEXT_W - 9) as usize), al),
-        Span::styled("  [Alt]  ", al),
-    ]);
+    let al = Style::default().fg(Color::Rgb(170, 110, 150)); // Alt layer: muted plum
 
+    // Accepted keyboard zoning: three decks, four layers, plus browser backtick help.
     let lines: Vec<Line<'static>> = vec![
-        Line::styled("╭ Ghost   ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope", sh),
-        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF", ba),
-        Line::styled("╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=", sp),
-        Line::styled("  ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope", sh),
-        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T -16b    Y         U  I  O LPF", ba),
-        Line::styled("  ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=", sp),
-        row7,
-        row8,
-        row9,
-        Line::styled("      ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain", sh),
-        row11,
-        Line::styled("      ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰         ╰         ╰         ╰  ╰  ╰ 0%", sp),
-        row13,
-        Line::from(Span::styled(
-            format!("{:<w$}│ [Bare] ", "` mode   ¬ nudge  -/= zoom  {/} height  [/] latency  Esc quit", w = (TEXT_W - 9) as usize), ba)),
-        row15,
-        row16,
+        Line::styled("╭ +16b    ╭ +32b    ╭ +64b    ╭ +128b   ╭      ╭      ╭  ╭  ╭ +Slope ╭      ╭ -FPS  ╭ +FPS", sh),
+        Line::styled("1 +1bt    2 +1b     3 +4b     4 +8b     5 Mode 6      7  8  9 HPF    0      - Zm+   = Zm-", ba),
+        Line::styled("│ Ghost   │         │         │         │      │      │  │  │ Flt=   │      │ 2↔3   │ 1↔2", sp),
+        Line::styled("╰ Deck1   ╰ Deck2   ╰ Deck3   ╰         ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰", al),
+        Line::default(),
+        Line::styled("  ╭ -16b    ╭ -32b    ╭ -64b    ╭ -128b   ╭      ╭      ╭  ╭  ╭ -Slope ╭      ╭ -Ht   ╭ +Ht", sh),
+        Line::styled("  Q -1bt    W -1b     E -4b     R -8b     T      Y      U  I  O LPF    P      [ -Lat  ] +Lat", ba),
+        Line::styled("  │         │         │         │         │      │      │  │  │ Flt=   │      │       │", sp),
+        Line::styled("  ╰         ╰         ╰         ╰ Restore ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰", al),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("    ╭ CueJp   ╭         ╭ +Tick   ", sh),
+            Span::styled("╭", wh),
+            Span::styled(" -BsBPM  ╭      ╭      ╭  ╭  ╭ +Gain  ╭      ╭       ╭", sh),
+        ]),
+        Line::from(vec![
+            Span::styled("    A +Ptch   S +PFL    D ", ba),
+            Span::styled("+Ndge", gr),
+            Span::styled("   ", ba),
+            Span::styled("F", wh),
+            Span::styled(" ", ba),
+            Span::styled("-BPM", gr),
+            Span::styled("    G Grid H Help J  K  L +Lvl   ;      '       #", ba),
+        ]),
+        Line::from(vec![
+            Span::styled("    │         │         │         ", sp),
+            Span::styled("│", wh),
+            Span::styled(" Browse  │ Play │ Art  │  │  │ 100%   │      │       │", sp),
+        ]),
+        Line::styled("    ╰         ╰         ╰         ╰         ╰      ╰ ←    ╰↓ ╰↑ ╰ →      ╰      ╰       ╰", al),
+        Line::default(),
+        Line::styled("      ╭ CueSt   ╭         ╭ -Tick   ╭ +BsBPM  ╭ Metro╭      ╭  ╭  ╭ -Gain  ╭ Help", sh),
+        Line::from(vec![
+            Span::styled("      Z -Ptch   X -PFL    C ", ba),
+            Span::styled("-Ndge", gr),
+            Span::styled("   V ", ba),
+            Span::styled("+BPM", gr),
+            Span::styled("    B Tap  N      M  ,  . -Lvl   / Bright   ", ba),
+            Span::styled("╭ [Shift]", sh),
+        ]),
+        Line::from(vec![
+            Span::styled("      │ Rst     │ Rst/Tog │ NMode   │ Rst     │      │ Msgs │  │  │ 0%     │", sp),
+            Span::styled("          │ [Bare]", ba),
+        ]),
+        Line::from(vec![
+            Span::styled("      ╰         ╰         ╰         ╰         ╰      ╰      ╰  ╰  ╰        ╰", al),
+            Span::styled("          ", ba),
+            Span::styled("│ [Space]", sp),
+        ]),
+        Line::from(vec![
+            Span::styled("Browser: ` jump to selected deck's track                                              ", ba),
+            Span::styled("╰ [Alt]", al),
+        ]),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(Color::Rgb(15, 15, 15))),
@@ -2363,6 +2354,43 @@ pub(crate) fn dim_area(frame: &mut ratatui::Frame, area: ratatui::layout::Rect) 
 mod hint_layout_tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn keyboard_help_matches_accepted_preview_text_and_colours() {
+        let mut terminal = Terminal::new(TestBackend::new(99, 23)).unwrap();
+        terminal.draw(|f| render_keyboard_help(f, f.area())).unwrap();
+        let buffer = terminal.backend().buffer();
+        let expected = include_str!("../../tests/fixtures/keyboard-help.txt");
+        let colours = include_str!("../../tests/fixtures/keyboard-help-colours.txt");
+        for (row, (text, styles)) in expected.lines().zip(colours.lines()).enumerate() {
+            let actual: String = (2..97).map(|x| buffer[(x, row as u16 + 2)].symbol()).collect();
+            assert_eq!(actual.trim_end(), text, "keyboard row {row}");
+            for (column, style) in styles.chars().enumerate() {
+                let fg = match style {
+                    's' => Color::Rgb(130, 100, 50),
+                    'b' => Color::Rgb(170, 170, 170),
+                    'p' => Color::Rgb(60, 100, 160),
+                    'g' => Color::Rgb(80, 140, 70),
+                    'w' => Color::White,
+                    'a' => Color::Rgb(170, 110, 150),
+                    ' ' => continue,
+                    _ => panic!("unknown fixture colour"),
+                };
+                let cell = &buffer[(column as u16 + 2, row as u16 + 2)];
+                assert_eq!(cell.fg, fg, "colour at {column},{row}");
+                assert_eq!(cell.bg, Color::Rgb(15, 15, 15));
+            }
+        }
+        assert_eq!(expected.lines().count(), 20);
+    }
+
+    #[test]
+    fn keyboard_help_clips_safely_in_small_areas() {
+        for (width, height) in [(1, 1), (2, 2), (4, 4), (40, 10), (80, 18), (99, 23)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| render_keyboard_help(f, f.area())).unwrap();
+        }
+    }
 
     #[test]
     fn short_tag_pane_keeps_each_active_field_and_toggle_visible() {

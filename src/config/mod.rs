@@ -27,6 +27,7 @@ pub(crate) enum Action {
     JumpForward16b,  JumpBackward16b,
     JumpForward32b,  JumpBackward32b,
     JumpForward64b,  JumpBackward64b,
+    JumpForward128b, JumpBackward128b,
     Cue, CuePlay,
     PflLevelUp, PflLevelDown, PflLevelReset, PflOnOff,
     // Mixer — per-deck (addressed directly regardless of selected deck)
@@ -108,6 +109,8 @@ pub(crate) static ACTION_NAMES: &[(&str, Action)] = &[
     ("jump_backward_32b",   Action::JumpBackward32b),
     ("jump_forward_64b",    Action::JumpForward64b),
     ("jump_backward_64b",   Action::JumpBackward64b),
+    ("jump_forward_128b",   Action::JumpForward128b),
+    ("jump_backward_128b",  Action::JumpBackward128b),
     ("cue",                 Action::Cue),
     ("cue_play",            Action::CuePlay),
     ("pfl_up",              Action::PflLevelUp),
@@ -322,4 +325,56 @@ pub(crate) fn parse_keymap(text: &str, map: &mut std::collections::HashMap<KeyBi
         }
     }
     std::mem::take(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn defaults_have_no_collisions_or_unknown_actions() {
+        let config: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
+        let mut owners = HashMap::new();
+        for (name, value) in config["keys"].as_table().unwrap() {
+            assert!(ACTION_NAMES.iter().any(|(known, _)| *known == name));
+            let keys: Vec<_> = match value.as_str() {
+                Some(key) => vec![key],
+                None => value.as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect(),
+            };
+            for key in keys {
+                let binding = parse_key(key).expect("invalid default binding");
+                assert!(owners.insert(binding, name).is_none(), "duplicate binding: {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn accepted_zoning_actions_and_freed_keys() {
+        let map = parse_keymap(DEFAULT_CONFIG, &mut HashMap::new());
+        for (key, action) in [
+            ("5", Action::ModeCycle), ("space+c", Action::NudgeModeToggle),
+            ("space+1", Action::GhostsToggle), ("A", Action::CuePlay), ("Z", Action::Cue),
+            ("B", Action::MetronomeToggle), ("space+x", Action::PflOnOff),
+            ("space+z", Action::PitchReset), ("space+v", Action::SpeedReset),
+            ("space+h", Action::ArtView), ("h", Action::Help), ("?", Action::Help),
+            ("_", Action::FpsDecrease), ("+", Action::FpsIncrease),
+        ] {
+            assert!(map.get(&parse_key(key).unwrap()) == Some(&action), "wrong action on {key}");
+        }
+        for key in ["`", "¬", "space+a", "space+s", "space+d", "space+\\", "G", "T", "Y", "^", "%"] {
+            assert!(!map.contains_key(&parse_key(key).unwrap()), "{key} should be free");
+        }
+    }
+
+    #[test]
+    fn shifted_jump_columns_cover_sixteen_through_128_bars() {
+        let map = parse_keymap(DEFAULT_CONFIG, &mut HashMap::new());
+        for (forward, backward, beats) in [("!", "Q", 64), ("\"", "W", 128), ("£", "E", 256), ("$", "R", 512)] {
+            for (key, expected) in [(forward, beats), (backward, -beats)] {
+                let action = *map.get(&parse_key(key).unwrap()).unwrap();
+                assert_eq!(crate::deck::jump_beats(action), Some(expected), "jump on {key}");
+            }
+        }
+    }
 }

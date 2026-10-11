@@ -562,19 +562,15 @@ Warp needs the terminal to report key releases; where it can't, the mode toggle 
 id: qn79
 ```
 
-Discrete position jumps in seven sizes — 1 beat, 1 bar, 4 bars, 8 bars, 16 bars, 32 bars, 64 bars — in each direction.
+Jump ±1 beat or ±1, 4, 8, 16, 32, 64 or 128 bars. Beat mode preserves phase: N beats span N × 60 / base_bpm seconds. Playback mode uses the track’s grid tempo, or 120 BPM without a grid.
 
-- **Beat mode** — jump distance is `N × (60 / base_bpm)` audio seconds: exactly N beat periods away, grid phase preserved
+Paused jumps clamp to either edge. While playing, forward jumps past the end are refused to avoid ending playback. Backward jumps past the start are refused in Beat mode to preserve sync, but clamp in Playback mode for navigation.
 
-- **Playback mode** — N beats at the track's tempo when it has a grid, else N × 0.5 s (120 BPM)
+**Ghost playheads** (`ghosts_toggle`) label jump destinations with their keys: large jumps on the overview, small ones on the detail. Beat mode only; omit 1-beat jumps, clamped or refused landings, and the detached grid cursor.
 
-Paused, a jump past an edge clamps to it; playing, an edge-crossing jump is refused — forward even when a further jump wouldn't fit after it.
+*Detail*
 
-**Ghost playheads** (`ghosts_toggle`) mark where each jump key would land, on both waveforms: the overview collects the large jumps and the detail view the small ones. The 1-beat jump is never marked. A mark appears only where the jump lands cleanly — clamped or refused landings draw nothing, and the track edge is its own marker. Beat mode only; the detached grid-refinement cursor is unmarked.
-
-**Detail**
-
-- Ghosts are placed through the shared mapping's playhead-anchored mode — the delta from the playhead rounded once — because rounding the two endpoints independently wobbles at wide zoom.
+Ghost positions round the delta from the playhead once, rather than both endpoints independently, avoiding wobble at wide zoom.
 
 **See also**
 
@@ -1230,13 +1226,13 @@ Unlike the per-deck mixer controls, PFL acts on the **selected** deck. The tap i
 id: ji4b
 ```
 
-Four input layers on a split keyboard: plain keys, Shift-modified, Space-chorded, and Alt-chorded. The left block controls the selected deck — transport, BPM, pitch, nudge, cue, PFL. The right block addresses each deck's mixer directly — level, gain, filter — so the operator can adjust any deck without switching selection.
+The default keymap uses plain, Shift, Space and Alt. Columns 1–4 control the selected deck; 5–6 hold mode, grid, transport and views; 7–9 control each deck’s mixer directly. Alt spans the keyboard for deck selection, pane navigation, resizing and restore.
 
-Space chords fire **one-time actions**: set cue, play/pause, the resets, and the Bottom Pane's view actions, which keep their meaning whichever side holds the keyboard. Nothing on the Space layer expects the modifier to be held, which Space doesn't reliably support; continuous adjustment stays on the plain and Shift layers. Alt is a second, deliberately sparse chord layer (deck selection and count, panel width, session restore) and arrives as a reliable per-keypress modifier bit. Ctrl-C always quits unconditionally.
+Space chords trigger one-time actions; continuous controls use plain or Shift. Space cannot reliably support held controls. Alt arrives as a per-keypress modifier. Help shows the default layout with four coloured layers and gaps between keyboard rows; contextual hints use live bindings.
 
-Esc steps up one level per press: dismiss a prompt, back out a browser mode, hand the keyboard to the decks, close the view to art. Repeats and releases are ignored, so holding it doesn't race through the levels.
+Most keys are configurable in `config.toml`; user config overrides defaults. Tab, browser commands, text input and confirmations are fixed.
 
-Most keys are configurable via `config.toml` as action-name → key-string mappings. A small set are fixed: Tab (the focus flip), browser command-mode and search keys, tag editor input, and confirmation prompts.
+Esc backs out one level: prompt, browser mode, focus, then view to art. Only presses count. Ctrl-C always quits.
 
 **See also**
 

@@ -1,0 +1,20 @@
+s ssss    s ssss    s ssss    s sssss   s      s      s  s  s ssssss s      s ssss  s ssss
+b bbbb    b bbb     b bbb     b bbb     b bbbb b      b  b  b bbb    b      b bbb   b bbb
+p ppppp   p         p         p         p      p      p  p  p pppp   p      p ppp   p ppp
+a aaaaa   a aaaaa   a aaaaa   a         a      a      a  a  a        a      a       a
+
+  s ssss    s ssss    s ssss    s sssss   s      s      s  s  s ssssss s      s sss   s sss
+  b bbbb    b bbb     b bbb     b bbb     b      b      b  b  b bbb    b      b bbbb  b bbbb
+  p         p         p         p         p      p      p  p  p pppp   p      p       p
+  a         a         a         a aaaaaaa a      a      a  a  a        a      a       a
+
+    s sssss   s         s sssss   w ssssss  s      s      s  s  s sssss  s      s       s
+    b bbbbb   b bbbb    b ggggg   w gggg    b bbbb b bbbb b  b  b bbbb   b      b       b
+    p         p         p         w pppppp  p pppp p ppp  p  p  p pppp   p      p       p
+    a         a         a         a         a      a a    aa aa a a      a      a       a
+
+      s sssss   s         s sssss   s ssssss  s ssssss      s  s  s sssss  s ssss
+      b bbbbb   b bbbb    b ggggg   b gggg    b bbb  b      b  b  b bbbb   b bbbbbb   s sssssss
+      p ppp     p ppppppp p ppppp   p ppp     p      p pppp p  p  p pp     p          b bbbbbb
+      a         a         a         a         a      a      a  a  a        a          p ppppppp
+bbbbbbbb b bbbb bb bbbbbbbb bbbbbb bbbbb                                              a aaaaa

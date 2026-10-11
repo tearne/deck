@@ -598,7 +598,8 @@ pub(crate) fn apply_restore_transport(d: &mut Deck, t: RestoreTransport) {
 /// The beat-jump sizes, largest first: the forward and backward actions and the
 /// distance in beats. Playback mode reads the same table as fixed time, half a
 /// second per beat. Shared by the jump keys, the detached cursor, and ghosts.
-pub(crate) const JUMP_SIZES: [(Action, Action, i32); 7] = [
+pub(crate) const JUMP_SIZES: [(Action, Action, i32); 8] = [
+    (Action::JumpForward128b, Action::JumpBackward128b, 512),
     (Action::JumpForward64b, Action::JumpBackward64b, 256),
     (Action::JumpForward32b, Action::JumpBackward32b, 128),
     (Action::JumpForward16b, Action::JumpBackward16b, 64),
@@ -623,8 +624,8 @@ pub(crate) fn playback_jump_beat_secs(d: &Deck) -> f64 {
 
 /// Where a jump of `jump` seconds from `current` lands, or None where the key
 /// refuses. Backward clamps to the start (refused while playing if it would
-/// clamp); forward while playing is refused if a further jump would overrun
-/// the end, so a landing always leaves room to jump on.
+/// clamp); forward while playing is refused only if its destination is past
+/// the end. Paused jumps clamp to the track boundaries.
 pub(crate) fn jump_landing(current: f64, jump: f64, playing: bool, track_end: f64) -> Option<f64> {
     if jump < 0.0 {
         let target = current + jump;
@@ -632,7 +633,7 @@ pub(crate) fn jump_landing(current: f64, jump: f64, playing: bool, track_end: f6
         Some(target.max(0.0))
     } else {
         let target = current + jump;
-        if playing && target + jump > track_end { return None; }
+        if playing && target > track_end { return None; }
         Some(target.min(track_end))
     }
 }
@@ -699,11 +700,8 @@ pub(crate) fn do_time_jump(seek_handle: &SeekHandle, player: &Player, track_end:
     if secs < 0.0 {
         let target = (current + secs).max(0.0);
         if playing { seek_handle.seek_to(target); } else { seek_handle.seek_direct(target); }
-    } else {
-        let target = current + secs;
-        if playing && target + secs > track_end { return; }
-        let clamped = target.min(track_end);
-        if playing { seek_handle.seek_to(clamped); } else { seek_handle.seek_direct(clamped); }
+    } else if let Some(target) = jump_landing(current, secs, playing, track_end) {
+        if playing { seek_handle.seek_to(target); } else { seek_handle.seek_direct(target); }
     }
 }
 
@@ -726,6 +724,34 @@ pub(crate) use crate::audio::FilterSource as _FilterSourceReexport;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn largest_jump_only_needs_room_for_its_destination() {
+        use super::*;
+        let jump = jump_beats(Action::JumpForward128b).unwrap() as f64 * 60.0 / 120.0;
+        assert_eq!(jump, 256.0);
+        assert_eq!(jump_landing(100.25, jump, true, 700.0), Some(356.25));
+        assert_eq!(jump_landing(100.25, jump, true, 600.0), Some(356.25));
+        assert_eq!(jump_landing(100.25, jump, true, 356.25), Some(356.25));
+        assert_eq!(jump_landing(100.25, jump, true, 356.0), None);
+        assert_eq!(jump_landing(100.25, jump, false, 300.0), Some(300.0));
+        assert_eq!(jump_landing(100.25, -jump, true, 700.0), None);
+        assert_eq!(jump_landing(100.25, -jump, false, 700.0), Some(0.0));
+    }
+
+    #[test]
+    fn every_forward_jump_can_land_in_the_final_jump_length() {
+        use super::*;
+        for (_, _, beats) in JUMP_SIZES {
+            let jump = beats as f64 * 0.5;
+            let current = 100.0;
+            let end = current + jump * 1.5;
+            assert_eq!(jump_landing(current, jump, true, end), Some(current + jump));
+            assert_eq!(jump_landing(end - jump, jump, true, end), Some(end));
+            assert_eq!(jump_landing(end - jump + 0.25, jump, true, end), None);
+            assert_eq!(jump_landing(end - jump + 0.25, jump, false, end), Some(end));
+        }
+    }
+
     #[test]
     fn grid_phase_derivation_maths() {
         // Anchor at 10.5 s, 120 BPM (500 ms period) → offset 10500 % 500 = 0.

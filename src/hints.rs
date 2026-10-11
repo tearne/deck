@@ -86,7 +86,8 @@ fn action_key(
                 }
                 KeyBinding::Key(code)
                     if matches!(scope, Bindings::Any)
-                        || (matches!(scope, Bindings::Views) && action == Action::Help) =>
+                        || (matches!(scope, Bindings::Views) && action == Action::Help
+                            && *code != KeyCode::Char('h')) =>
                 {
                     Some(key_name(code))
                 }
@@ -223,7 +224,7 @@ impl Hints {
                         "e edit tags",
                         "m move file",
                         "n new playlist",
-                        "` loaded locations",
+                        "` selected deck's track",
                         "T tag warnings",
                         "@ set workspace",
                     ],
@@ -502,6 +503,16 @@ mod tests {
         assert!(!t.contains("pane left"));
         assert!(!t.contains("pane right")); // plain binding not handled inside browser
         assert!(t.contains("Space+K keyboard reference"));
+    }
+
+    #[test]
+    fn h_help_alias_does_not_replace_browser_parent_navigation() {
+        let mut map = HashMap::new();
+        map.insert(KeyBinding::Key(KeyCode::Char('h')), Action::Help);
+        assert_eq!(action_key(&map, Action::Help, Bindings::Any), Some("h".into()));
+        assert_eq!(action_key(&map, Action::Help, Bindings::Views), None);
+        map.insert(KeyBinding::Key(KeyCode::Char('?')), Action::Help);
+        assert_eq!(action_key(&map, Action::Help, Bindings::Views), Some("?".into()));
     }
 
     #[test]

@@ -651,7 +651,7 @@ fn command_key(state: &mut BrowserState, key: crossterm::event::KeyEvent) -> io:
         }
         // `n` starts a new playlist (name prompt), which opens in the editor.
         KeyCode::Char('n') => { state.name_prompt = Some(String::new()); Ok(None) }
-        // Rotate through loaded-track locations.
+        // Jump to the selected deck's loaded track.
         KeyCode::Char('`') => Ok(Some(BrowserResult::JumpToSelected)),
         // Tag-compliance cleanup mode. Editing a flagged file auto-advances to the
         // next one, so no explicit jump key is needed.

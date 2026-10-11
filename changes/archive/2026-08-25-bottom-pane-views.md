@@ -93,4 +93,4 @@ Focus must be unmistakable without looking ugly. The context panel's focus-by-li
 
 ## Conclusion
 
-Shipped as 0.32.4 (minor bump confirmed; patch iterations covered the hand-back tweaks). Beyond the Log: keybindings.md and layout.md were caught up in-build; the help overlay grew the middle key columns and lost its block divider — the follow-on zoning idea is parked as [keyboard-zoning](../open/keyboard-zoning.md). Esc-quit persists the art view by design of the Esc ladder; accepted as built. Map catch-up (Browser, Keymap, Album Art, Messages, Session State) follows as per-node negotiation.
+Shipped as 0.32.4 (minor bump confirmed; patch iterations covered the hand-back tweaks). Beyond the Log: keybindings.md and layout.md were caught up in-build; the help overlay grew the middle key columns and lost its block divider — the follow-on zoning idea is parked as [keyboard-zoning](2026-09-21-keyboard-zoning.md). Esc-quit persists the art view by design of the Esc ladder; accepted as built. Map catch-up (Browser, Keymap, Album Art, Messages, Session State) follows as per-node negotiation.

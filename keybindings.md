@@ -5,30 +5,34 @@ Action-to-key reference for deck. Map nodes reference actions by their config na
 
 ## Keyboard Layout
 
-The spatial layout below matches the in-app help overlay (`?`). Keys up to the middle columns are selected-deck controls; the rightmost three columns (7/8/9, U/I/O, J/K/L, M/,/.) are the per-deck mixer, one key per deck.
+The spatial layout below matches the default in-app help overlay (`?` or `h` with deck focus). Columns 1–4 hold selected-deck playing controls; columns 5–6 hold mode, grid, transport, and view controls. Columns 7–9 (U/I/O, J/K/L, M/,/.) address the three decks’ mixers directly. The extended keys show zoom, FPS, height, latency, and deck swaps. Alt is a global layer across the keyboard; its left/right pane actions apply only in the browser.
 
 ```
-  ╭ Ghost   ╭         ╭         ╭ +32b    ╭ +64b    ╭ +FPS    ╭  ╭  ╭ +Slope
-  1 +1bt    2 +1b     3 +4b     4 +8b     5 +16b    6         7  8  9 HPF
-  ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
-    ╭         ╭         ╭         ╭ -32b    ╭ -64b    ╭ -FPS    ╭  ╭  ╭ -Slope
-    Q -1bt    W -1b     E -4b     R -8b     T -16b    Y         U  I  O LPF
-    ╰         ╰         ╰         ╰         ╰         ╰         ╰  ╰  ╰ Flt=
-      ╭         ╭         ╭ +Tick   ╭ -BsBPM  ╭ CueJp   ╭         ╭  ╭  ╭ +Gain
-      A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid    H         J  K  L +Lvl
-      ╰ =Ptch   ╰ Rst     ╰ PFLTog  ╰         ╰ Play    ╰         ╰  ╰  ╰ 100%
-        ╭         ╭         ╭ -Tick   ╭ +BsBPM  ╭ CueSt   ╭         ╭  ╭  ╭ -Gain
-        Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap     N         M  ,  . -Lvl
-        ╰ =Ptch   ╰ Rst     ╰ SpRst   ╰         ╰         ╰         ╰  ╰  ╰ 0%
-──────────────────────────────────────────────────────────────────────────────── ╭ [Shift]
-` mode   ¬ nudge  -/= zoom  {/} height  [/] latency             Esc quit         │ [Bare]
-/ art   Sp+= swap1↔2   Sp+- swap2↔3   Sp+\ metro                             ╰ [Space]
-Alt:  j/k/↑↓ cycle deck   1/2/3 select/summon/destroy   r restore   [Alt]
+╭ +16b    ╭ +32b    ╭ +64b    ╭ +128b   ╭      ╭      ╭  ╭  ╭ +Slope ╭      ╭ -FPS  ╭ +FPS
+1 +1bt    2 +1b     3 +4b     4 +8b     5 Mode 6      7  8  9 HPF    0      - Zm+   = Zm-
+│ Ghost   │         │         │         │      │      │  │  │ Flt=   │      │ 2↔3   │ 1↔2
+╰ Deck1   ╰ Deck2   ╰ Deck3   ╰         ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰
+
+  ╭ -16b    ╭ -32b    ╭ -64b    ╭ -128b   ╭      ╭      ╭  ╭  ╭ -Slope ╭      ╭ -Ht   ╭ +Ht
+  Q -1bt    W -1b     E -4b     R -8b     T      Y      U  I  O LPF    P      [ -Lat  ] +Lat
+  │         │         │         │         │      │      │  │  │ Flt=   │      │       │
+  ╰         ╰         ╰         ╰ Restore ╰      ╰      ╰  ╰  ╰        ╰      ╰       ╰
+
+    ╭ CueJp   ╭         ╭ +Tick   ╭ -BsBPM  ╭      ╭      ╭  ╭  ╭ +Gain  ╭      ╭       ╭
+    A +Ptch   S +PFL    D +Ndge   F -BPM    G Grid H Help J  K  L +Lvl   ;      '       #
+    │         │         │         │ Browse  │ Play │ Art  │  │  │ 100%   │      │       │
+    ╰         ╰         ╰         ╰         ╰      ╰ ←    ╰↓ ╰↑ ╰ →      ╰      ╰       ╰
+
+      ╭ CueSt   ╭         ╭ -Tick   ╭ +BsBPM  ╭ Metro╭      ╭  ╭  ╭ -Gain  ╭ Help
+      Z -Ptch   X -PFL    C -Ndge   V +BPM    B Tap  N      M  ,  . -Lvl   / Bright   ╭ [Shift]
+      │ Rst     │ Rst/Tog │ NMode   │ Rst     │      │ Msgs │  │  │ 0%     │          │ [Bare]
+      ╰         ╰         ╰         ╰         ╰      ╰      ╰  ╰  ╰        ╰          │ [Space]
+Browser: ` jump to selected deck's track                                              ╰ [Alt]
 ```
 
-Per-cell format: `╭ Shift-action` / `Key plain-action` / `╰ Space-action`. Unlabelled cells either have no binding or belong to the contextual hints.
+Per-cell format: `╭ Shift-action` / `Key plain-action` / `│ Space-action` / `╰ Alt-action`. A blank line separates physical keyboard rows. The white F accent remains; Shift is amber, plain gray, Space blue, Alt plum, and nudge/tempo labels sage. Unlabelled cells have no default binding in this context. `b` means bars; `bt` means beats. `Rst` resets pitch on Space+Z and playback speed on Space+V. `Rst/Tog` on Space+X turns active PFL off at any level, or turns it on at 100%.
 
-View shortcuts (`space+f/h/v/n`, with `?` as a help alias), Tab focus, pane switching and pane width controls are shown in contextual hints or pane headers rather than repeated in this layout.
+View shortcuts and Alt pane navigation also appear in contextual hints. Alt+Up/Down are deck-cycling alternatives; Alt+Left/Right resize browser panes. Tab focus, these arrow alternatives, and Esc are omitted from the map. With browser focus, `h` retains parent-directory navigation, `/` starts search, and `?` opens Help in command mode. The bottom-left note shows backtick: in browser command mode it jumps to and highlights the selected deck’s loaded track. Search and text-entry modes keep printable keys as text.
 
 `Tab` is fixed (not configurable): it flips the keyboard between the decks and the showing bottom view (browser or messages; help and art take no input).
 
@@ -44,27 +48,29 @@ With deck focus, the hints show view/focus controls and the key for the full key
 
 ## Config Actions
 
-Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or `action_name = ["key1", "key2"]`.
+Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or `action_name = ["key1", "key2"]`. Shifted symbols use the UK layout: Shift+2 is `"`, Shift+3 is `£`. Bind the characters your keyboard emits if it differs.
+
+Existing config files override the new defaults and are not rewritten. To adopt this layout, update their `[keys]` entries from [resources/config.toml](resources/config.toml), or back up the old config and let Deck create a fresh one. The help map shows defaults; contextual hints use live bindings.
 
 ### Global
 
 | Action | Default | Description |
 |--------|---------|-------------|
 | `quit` | `esc` | Quit (confirmation only while a deck is playing) |
-| `help` | `?`, `space+h` | Show/hide the help view |
+| `help` | `?`, `h` | Show/hide the help view |
 | `message_history` | `space+n` | Show/hide the messages view (takes focus; k/j scroll, Esc unfocus) |
-| `mode_cycle` | `` ` `` | Cycle the selected deck's mode (Playback/Beat); `vinyl_mode_toggle` still parses as an alias |
-| `nudge_mode_toggle` | `¬` | Toggle nudge jump/warp |
+| `mode_cycle` | `5` | Cycle the selected deck's mode (Playback/Beat); `vinyl_mode_toggle` still parses as an alias |
+| `nudge_mode_toggle` | `space+c` | Toggle nudge jump/warp |
 | `zoom_in` | `-` | Zoom in |
 | `zoom_out` | `=` | Zoom out |
 | `height_increase` | `}` | Increase detail waveform height |
 | `height_decrease` | `{` | Decrease detail waveform height |
 | `latency_increase` | `]` | Audio latency +10 ms |
 | `latency_decrease` | `[` | Audio latency −10 ms |
-| `fps_increase` | `^` | Increase FPS cap |
-| `fps_decrease` | `Y` | Decrease FPS cap |
+| `fps_increase` | `+` | Increase FPS cap |
+| `fps_decrease` | `_` | Decrease FPS cap |
 | `art_cycle` | `/` | Cycle album art brightness |
-| `art_view` | `space+v` | Show the art view; further presses cycle its brightness |
+| `art_view` | `space+h` | Show the art view; further presses cycle its brightness |
 | `grid_mode` | `g` | Open a Grid session on the selected deck (see Grid mode keys) |
 
 ### Deck Selection & Swap
@@ -98,10 +104,10 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `bpm_decrease` | `f` | Playback BPM −0.1 |
 | `base_bpm_increase` | `V` | Native BPM +0.01 |
 | `base_bpm_decrease` | `F` | Native BPM −0.01 |
-| `speed_reset` | `space+c` | Reset playback speed to nominal |
+| `speed_reset` | `space+v` | Reset playback speed to nominal |
 | `offset_increase` | `D` | Phase offset +10 ms |
 | `offset_decrease` | `C` | Phase offset −10 ms |
-| `metronome_toggle` | `space+\` | Toggle metronome |
+| `metronome_toggle` | `B` | Toggle metronome |
 
 ### Nudge
 
@@ -114,8 +120,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 
 | Action | Default | Description |
 |--------|---------|-------------|
-| `cue` | `B` | Set cue point (paused only) |
-| `cue_play` | `G` | Jump to cue point |
+| `cue` | `Z` | Set cue point (paused only) |
+| `cue_play` | `A` | Jump to cue point |
 
 ### Pitch
 
@@ -123,7 +129,7 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `pitch_up` | `a` | Pitch +1 semitone |
 | `pitch_down` | `z` | Pitch −1 semitone |
-| `pitch_reset` | `space+a`, `space+z` | Reset pitch to 0 |
+| `pitch_reset` | `space+z` | Reset pitch to 0 |
 
 ### PFL
 
@@ -131,8 +137,8 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 |--------|---------|-------------|
 | `pfl_up` | `s` | PFL level +20 |
 | `pfl_down` | `x` | PFL level −20 |
-| `pfl_reset` | `space+s`, `space+x` | PFL level to 0 |
-| `pfl_on_off` | `space+d` | Toggle PFL on (100) / off (0) |
+| `pfl_reset` | Unbound | PFL level to 0 |
+| `pfl_on_off` | `space+x` | Reset any active PFL level to off (0); when off, enable at 100 |
 
 ### Beat Jump
 
@@ -146,13 +152,15 @@ Configurable via `config.toml` under `[keys]`. Format: `action_name = "key"` or 
 | `jump_backward_4b` | `e` | Jump −4 bars |
 | `jump_forward_8b` | `4` | Jump +8 bars |
 | `jump_backward_8b` | `r` | Jump −8 bars |
-| `jump_forward_16b` | `5` | Jump +16 bars |
-| `jump_backward_16b` | `t` | Jump −16 bars |
-| `jump_forward_32b` | `$` | Jump +32 bars |
-| `jump_backward_32b` | `R` | Jump −32 bars |
-| `jump_forward_64b` | `%` | Jump +64 bars |
-| `jump_backward_64b` | `T` | Jump −64 bars |
-| `ghosts_toggle` | `!` | Toggle ghost playheads (jump key labels at each landing, Beat mode) |
+| `jump_forward_16b` | `!` | Jump +16 bars |
+| `jump_backward_16b` | `Q` | Jump −16 bars |
+| `jump_forward_32b` | `"` | Jump +32 bars |
+| `jump_backward_32b` | `W` | Jump −32 bars |
+| `jump_forward_64b` | `£` | Jump +64 bars |
+| `jump_backward_64b` | `E` | Jump −64 bars |
+| `jump_forward_128b` | `$` | Jump +128 bars |
+| `jump_backward_128b` | `R` | Jump −128 bars |
+| `ghosts_toggle` | `space+1` | Toggle ghost playheads (jump key labels at each landing, Beat mode) |
 
 ### Mixer (per deck)
 
